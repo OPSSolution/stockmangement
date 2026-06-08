@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: stockmanagement
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npx tsx server/index.ts
+    preDeployCommand: npx tsx database/migrate.ts
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: stockmanagement-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+
+databases:
+  - name: stockmanagement-db
+    databaseName: StockManagement
+    user: postgres
+    plan: free
