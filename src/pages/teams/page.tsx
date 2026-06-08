@@ -176,7 +176,7 @@ export default function TeamsPage() {
     new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return (
-    <DashboardLayout>
+    <DashboardLayout title="Teams">
       <div className="max-w-5xl mx-auto space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">

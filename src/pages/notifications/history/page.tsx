@@ -132,7 +132,7 @@ export default function NotificationHistoryPage() {
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
 
   return (
-    <DashboardLayout>
+    <DashboardLayout title="Notification History">
       <div className="max-w-5xl mx-auto space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">

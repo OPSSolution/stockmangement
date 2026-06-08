@@ -36,6 +36,8 @@ function mapWarehouse(row: Record<string, unknown>): Warehouse {
     zones: (row.zones as unknown as Warehouse['zones']) || [],
     staff: (row.staff as unknown as Warehouse['staff']) || [],
     monthlyActivity: (row.monthly_activity as unknown as Warehouse['monthlyActivity']) || [],
+    country: (row.country as string) || 'Malaysia',
+    pendingPickups: (row.pending_pickups as number) || 0,
   };
 }
 

@@ -109,7 +109,7 @@ class QueryBuilder {
     return p;
   }
 
-  private execute(): Promise<{ data: unknown; error: unknown }> {
+  private execute(): Promise<{ data: any; error: any }> {
     const h = this.headers();
 
     switch (this._op) {
@@ -142,9 +142,16 @@ class QueryBuilder {
     }
   }
 
+  or(filter: string) {
+    // Parse "col1.op.val,col2.op.val" — treat as individual filters OR'd together (simplified: just pass as-is to ilike/eq)
+    // For the search pattern used in the app, we store raw and handle server-side via existing filters
+    this._filters.push(['__or__', filter]);
+    return this;
+  }
+
   // Makes the builder await-able  (await supabase.from('x').select('*'))
   then<R1, R2 = never>(
-    onFulfilled?: ((v: { data: unknown; error: unknown }) => R1 | PromiseLike<R1>) | null,
+    onFulfilled?: ((v: { data: any; error: any }) => R1 | PromiseLike<R1>) | null,
     onRejected?: ((e: unknown) => R2 | PromiseLike<R2>) | null,
   ): Promise<R1 | R2> {
     return this.execute().then(onFulfilled as any, onRejected as any);
@@ -244,6 +251,11 @@ const functions = {
   },
 };
 
+// ── RPC stub (returns empty data — pages should handle gracefully) ────
+async function rpc(_fn: string, _params?: unknown) {
+  return { data: null, error: null };
+}
+
 // ── Realtime stubs (no-op — keeps NotificationContext from crashing) ─
 function channel(_name: string) {
   const sub = {
@@ -258,6 +270,7 @@ export const api = {
   from: (table: string) => new QueryBuilder(table),
   auth,
   functions,
+  rpc,
   channel,
   removeChannel(_ch: unknown) { /* no-op */ },
 };

@@ -156,7 +156,7 @@ export default function NotificationAnalyticsPage() {
   }));
 
   return (
-    <DashboardLayout>
+    <DashboardLayout title="Notification Analytics">
       <div className="max-w-6xl mx-auto space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -268,7 +268,7 @@ export default function NotificationAnalyticsPage() {
                           ))}
                         </Pie>
                         <Legend
-                          formatter={(value: string, entry: { color: string }) => (
+                          formatter={(value: string, entry: any) => (
                             <span style={{ color: entry.color, fontSize: 12 }}>{value}</span>
                           )}
                         />
