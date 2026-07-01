@@ -3,7 +3,7 @@ services:
     name: stockmanagement
     runtime: node
     plan: free
-    buildCommand: npm install && rm -rf node_modules/.vite .vite out && NODE_ENV=production npm run build
+    buildCommand: npm install --omit=dev
     startCommand: NODE_ENV=production npx tsx server/index.ts
     envVars:
       - key: NODE_VERSION
