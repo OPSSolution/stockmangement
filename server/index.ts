@@ -32,8 +32,8 @@ app.use(cors({
 app.use(express.json());
 
 app.use('/auth', authRouter);
-app.use('/api', apiRouter);
 app.use('/api/roles', rolesRouter);
+app.use('/api', apiRouter);
 app.use('/functions/v1', functionsRouter);
 
 app.get('/health', async (_req, res) => {
