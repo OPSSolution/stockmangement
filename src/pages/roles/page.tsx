@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/feature/DashboardLayout';
+import { useAuth, normalizePerm, type PagePermission } from '@/contexts/AuthContext';
 
 function getToken() {
   return localStorage.getItem('sm_access_token');
@@ -17,67 +18,88 @@ async function rolesApi(path: string, method = 'GET', body?: unknown) {
   return res.json();
 }
 
-const PAGE_GROUPS = [
+type PageAction = 'edit' | 'delete';
+
+interface PageDef {
+  key: string;
+  label: string;
+  icon: string;
+  /** Which extra actions this page actually has UI for, beyond view. */
+  actions: PageAction[];
+}
+
+const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
   {
     group: 'Main Menu',
     pages: [
-      { key: 'dashboard',  label: 'Dashboard',  icon: 'ri-dashboard-3-line' },
-      { key: 'inventory',  label: 'Inventory',  icon: 'ri-archive-stack-line' },
-      { key: 'orders',     label: 'Orders',     icon: 'ri-shopping-bag-3-line' },
-      { key: 'deliveries', label: 'Deliveries', icon: 'ri-truck-line' },
-      { key: 'warehouses', label: 'Warehouses', icon: 'ri-building-2-line' },
-      { key: 'transfers',  label: 'Transfers',  icon: 'ri-swap-box-line' },
-      { key: 'returns',    label: 'Returns',    icon: 'ri-arrow-go-back-line' },
-      { key: 'purchases',  label: 'Purchases',  icon: 'ri-shopping-cart-2-line' },
-      { key: 'promotions', label: 'Promotions', icon: 'ri-price-tag-3-line' },
-      { key: 'vendors',    label: 'Vendors',    icon: 'ri-store-2-line' },
+      { key: 'dashboard',  label: 'Dashboard',  icon: 'ri-dashboard-3-line',     actions: [] },
+      { key: 'inventory',  label: 'Inventory',  icon: 'ri-archive-stack-line',   actions: ['edit', 'delete'] },
+      { key: 'orders',     label: 'Orders',     icon: 'ri-shopping-bag-3-line',  actions: ['edit', 'delete'] },
+      { key: 'deliveries', label: 'Deliveries', icon: 'ri-truck-line',           actions: ['edit', 'delete'] },
+      { key: 'warehouses', label: 'Warehouses', icon: 'ri-building-2-line',      actions: [] },
+      { key: 'transfers',  label: 'Transfers',  icon: 'ri-swap-box-line',        actions: [] },
+      { key: 'returns',    label: 'Returns',    icon: 'ri-arrow-go-back-line',   actions: ['edit', 'delete'] },
+      { key: 'purchases',  label: 'Purchases',  icon: 'ri-shopping-cart-2-line', actions: [] },
+      { key: 'promotions', label: 'Promotions', icon: 'ri-price-tag-3-line',     actions: [] },
+      { key: 'vendors',    label: 'Vendors',    icon: 'ri-store-2-line',         actions: [] },
     ],
   },
   {
     group: 'Management',
     pages: [
-      { key: 'reports',      label: 'Reports',      icon: 'ri-bar-chart-2-line' },
-      { key: 'teams',        label: 'Teams',        icon: 'ri-team-line' },
-      { key: 'requirements', label: 'Requirements', icon: 'ri-list-check-2' },
-      { key: 'roles',        label: 'Roles',        icon: 'ri-shield-user-line' },
+      { key: 'reports',      label: 'Reports',      icon: 'ri-bar-chart-2-line', actions: [] },
+      { key: 'teams',        label: 'Teams',        icon: 'ri-team-line',        actions: ['edit'] },
+      { key: 'requirements', label: 'Requirements', icon: 'ri-list-check-2',     actions: ['edit', 'delete'] },
+      { key: 'roles',        label: 'Roles',        icon: 'ri-shield-user-line', actions: ['edit', 'delete'] },
     ],
   },
   {
     group: 'Notifications',
     pages: [
-      { key: 'notifications_history',   label: 'History',   icon: 'ri-history-line' },
-      { key: 'notifications_analytics', label: 'Analytics', icon: 'ri-bar-chart-box-line' },
-      { key: 'notifications_settings',  label: 'Settings',  icon: 'ri-notification-3-line' },
+      { key: 'notifications_history',   label: 'History',   icon: 'ri-history-line',       actions: ['delete'] },
+      { key: 'notifications_analytics', label: 'Analytics', icon: 'ri-bar-chart-box-line', actions: [] },
+      { key: 'notifications_settings',  label: 'Settings',  icon: 'ri-notification-3-line', actions: ['edit', 'delete'] },
     ],
   },
   {
     group: 'Admin',
     pages: [
-      { key: 'categories', label: 'Categories', icon: 'ri-price-tag-2-line' },
+      { key: 'categories', label: 'Categories', icon: 'ri-price-tag-2-line', actions: ['edit', 'delete'] },
     ],
   },
 ];
 
-type Permissions = Record<string, boolean>;
+const ALL_PAGES = PAGE_GROUPS.flatMap(g => g.pages);
+
+type Permissions = Record<string, PagePermission>;
 
 interface Role {
   id: string;
   name: string;
   description: string | null;
-  permissions: Permissions;
+  permissions: Record<string, boolean | Partial<PagePermission>>;
   is_system: boolean;
   created_at: string;
 }
 
 const defaultPermissions = (): Permissions => {
   const perms: Permissions = {};
-  PAGE_GROUPS.forEach(g => g.pages.forEach(p => { perms[p.key] = false; }));
+  ALL_PAGES.forEach(p => { perms[p.key] = { view: false, edit: false, delete: false }; });
   return perms;
 };
 
-const TOTAL_PAGES = PAGE_GROUPS.reduce((s, g) => s + g.pages.length, 0);
+const normalizeAll = (perms: Record<string, boolean | Partial<PagePermission>>): Permissions => {
+  const out: Permissions = {};
+  ALL_PAGES.forEach(p => { out[p.key] = normalizePerm(perms[p.key]); });
+  return out;
+};
+
+const TOTAL_PAGES = ALL_PAGES.length;
 
 export default function RolesPage() {
+  const { canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('roles');
+  const showDelete = canDelete('roles');
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -106,19 +128,45 @@ export default function RolesPage() {
     setForm({
       name: role.name,
       description: role.description ?? '',
-      permissions: { ...defaultPermissions(), ...role.permissions },
+      permissions: normalizeAll(role.permissions),
     });
     setModalOpen(true);
   };
 
-  const togglePerm = (key: string) =>
-    setForm(f => ({ ...f, permissions: { ...f.permissions, [key]: !f.permissions[key] } }));
+  // Toggling view off also clears edit/delete for that page; toggling it on doesn't grant anything else.
+  const toggleView = (key: string) =>
+    setForm(f => {
+      const current = f.permissions[key];
+      const nextView = !current.view;
+      return {
+        ...f,
+        permissions: {
+          ...f.permissions,
+          [key]: nextView ? { ...current, view: true } : { view: false, edit: false, delete: false },
+        },
+      };
+    });
 
-  const toggleGroup = (group: typeof PAGE_GROUPS[0]) => {
-    const allOn = group.pages.every(p => form.permissions[p.key]);
+  // Turning on an edit/delete action implies view access.
+  const toggleAction = (key: string, action: PageAction) =>
+    setForm(f => {
+      const current = f.permissions[key];
+      return {
+        ...f,
+        permissions: {
+          ...f.permissions,
+          [key]: { ...current, view: true, [action]: !current[action] },
+        },
+      };
+    });
+
+  const toggleGroup = (group: { pages: PageDef[] }) => {
+    const allOn = group.pages.every(p => form.permissions[p.key].view);
     setForm(f => {
       const perms = { ...f.permissions };
-      group.pages.forEach(p => { perms[p.key] = !allOn; });
+      group.pages.forEach(p => {
+        perms[p.key] = allOn ? { view: false, edit: false, delete: false } : { view: true, edit: false, delete: false };
+      });
       return { ...f, permissions: perms };
     });
   };
@@ -150,7 +198,8 @@ export default function RolesPage() {
     loadRoles();
   };
 
-  const permCount = (perms: Permissions) => Object.values(perms).filter(Boolean).length;
+  const permCount = (perms: Record<string, boolean | Partial<PagePermission>>) =>
+    ALL_PAGES.filter(p => normalizePerm(perms[p.key]).view).length;
 
   return (
     <DashboardLayout title="Roles" subtitle="Manage roles and page access permissions">
@@ -160,7 +209,7 @@ export default function RolesPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Roles</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Control which pages each role can access</p>
+            <p className="text-sm text-gray-500 mt-0.5">Control which pages each role can view, edit, and delete</p>
           </div>
           <button
             onClick={openCreate}
@@ -197,14 +246,16 @@ export default function RolesPage() {
                     </div>
                   </div>
                   <div className="flex gap-1 flex-shrink-0">
-                    <button
-                      onClick={() => openEdit(role)}
-                      className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors cursor-pointer"
-                      title="Edit"
-                    >
-                      <i className="ri-edit-line text-sm"></i>
-                    </button>
-                    {!role.is_system && (
+                    {showEdit && (
+                      <button
+                        onClick={() => openEdit(role)}
+                        className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors cursor-pointer"
+                        title="Edit"
+                      >
+                        <i className="ri-edit-line text-sm"></i>
+                      </button>
+                    )}
+                    {showDelete && !role.is_system && (
                       <button
                         onClick={() => setDeleteConfirm(role.id)}
                         className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
@@ -235,14 +286,19 @@ export default function RolesPage() {
                   </div>
                   {/* Page chips */}
                   <div className="flex flex-wrap gap-1 pt-1">
-                    {PAGE_GROUPS.flatMap(g => g.pages)
-                      .filter(p => role.permissions[p.key])
+                    {ALL_PAGES
+                      .filter(p => normalizePerm(role.permissions[p.key]).view)
                       .slice(0, 6)
-                      .map(p => (
-                        <span key={p.key} className="text-xs px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded">
-                          {p.label}
-                        </span>
-                      ))}
+                      .map(p => {
+                        const perm = normalizePerm(role.permissions[p.key]);
+                        return (
+                          <span key={p.key} className="text-xs px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded flex items-center gap-1">
+                            {p.label}
+                            {perm.edit && <i className="ri-edit-line text-[10px]" title="Can edit"></i>}
+                            {perm.delete && <i className="ri-delete-bin-line text-[10px]" title="Can delete"></i>}
+                          </span>
+                        );
+                      })}
                     {permCount(role.permissions) > 6 && (
                       <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">
                         +{permCount(role.permissions) - 6} more
@@ -305,11 +361,12 @@ export default function RolesPage() {
 
               {/* Page permissions */}
               <div>
-                <p className="text-sm font-medium text-gray-700 mb-3">Page Access</p>
+                <p className="text-sm font-medium text-gray-700 mb-1">Page Access</p>
+                <p className="text-xs text-gray-400 mb-3">Toggle a page on to grant view access. Edit / Delete only apply to pages that support them, and require view to be on.</p>
                 <div className="space-y-3">
                   {PAGE_GROUPS.map(group => {
-                    const allOn = group.pages.every(p => form.permissions[p.key]);
-                    const someOn = group.pages.some(p => form.permissions[p.key]);
+                    const allOn = group.pages.every(p => form.permissions[p.key].view);
+                    const someOn = group.pages.some(p => form.permissions[p.key].view);
                     return (
                       <div key={group.group} className="border border-gray-100 rounded-xl overflow-hidden">
                         {/* Group header */}
@@ -331,26 +388,63 @@ export default function RolesPage() {
                           </button>
                         </div>
 
-                        {/* Page toggles */}
-                        <div className="grid grid-cols-2 divide-x divide-y divide-gray-100">
-                          {group.pages.map(page => (
-                            <div
-                              key={page.key}
-                              onClick={() => togglePerm(page.key)}
-                              className="flex items-center gap-3 px-4 py-3 bg-white hover:bg-gray-50 transition-colors cursor-pointer select-none"
-                            >
-                              {/* Toggle switch */}
-                              <div className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 relative ${form.permissions[page.key] ? 'bg-emerald-500' : 'bg-gray-200'}`}>
-                                <div className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 shadow-sm transition-transform ${form.permissions[page.key] ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                        {/* Page rows */}
+                        <div className="divide-y divide-gray-100">
+                          {group.pages.map(page => {
+                            const perm = form.permissions[page.key];
+                            return (
+                              <div
+                                key={page.key}
+                                className="flex items-center justify-between gap-3 px-4 py-2.5 bg-white hover:bg-gray-50 transition-colors"
+                              >
+                                {/* View toggle */}
+                                <div
+                                  onClick={() => toggleView(page.key)}
+                                  className="flex items-center gap-3 cursor-pointer select-none min-w-0 flex-1"
+                                >
+                                  <div className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 relative ${perm.view ? 'bg-emerald-500' : 'bg-gray-200'}`}>
+                                    <div className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 shadow-sm transition-transform ${perm.view ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                  </div>
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <i className={`${page.icon} text-sm flex-shrink-0 ${perm.view ? 'text-emerald-600' : 'text-gray-400'}`}></i>
+                                    <span className={`text-sm truncate ${perm.view ? 'text-gray-800' : 'text-gray-400'}`}>
+                                      {page.label}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Edit / Delete action pills */}
+                                {page.actions.length > 0 && (
+                                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                                    {page.actions.includes('edit') && (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleAction(page.key, 'edit')}
+                                        disabled={!perm.view}
+                                        className={`text-xs font-medium px-2 py-1 rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                                          perm.edit ? 'bg-sky-100 text-sky-700 hover:bg-sky-200' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                                        }`}
+                                      >
+                                        <i className="ri-edit-line mr-1"></i>Edit
+                                      </button>
+                                    )}
+                                    {page.actions.includes('delete') && (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleAction(page.key, 'delete')}
+                                        disabled={!perm.view}
+                                        className={`text-xs font-medium px-2 py-1 rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                                          perm.delete ? 'bg-red-100 text-red-700 hover:bg-red-200' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                                        }`}
+                                      >
+                                        <i className="ri-delete-bin-line mr-1"></i>Delete
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </div>
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <i className={`${page.icon} text-sm flex-shrink-0 ${form.permissions[page.key] ? 'text-emerald-600' : 'text-gray-400'}`}></i>
-                                <span className={`text-sm truncate ${form.permissions[page.key] ? 'text-gray-800' : 'text-gray-400'}`}>
-                                  {page.label}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -362,7 +456,7 @@ export default function RolesPage() {
             {/* Footer */}
             <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 flex-shrink-0">
               <span className="text-sm text-gray-400">
-                {Object.values(form.permissions).filter(Boolean).length}/{TOTAL_PAGES} pages selected
+                {ALL_PAGES.filter(p => form.permissions[p.key].view).length}/{TOTAL_PAGES} pages selected
               </span>
               <div className="flex gap-3">
                 <button

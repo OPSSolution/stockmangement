@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useNotifications } from '@/contexts/NotificationContext';
+import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 
 const TYPE_OPTIONS = [
@@ -49,6 +50,8 @@ interface ToastState {
 
 export default function NotificationHistoryPage() {
   const { notifications: liveNotifications, markAsRead, markAllAsRead, deleteNotification } = useNotifications();
+  const { canDelete } = useAuth();
+  const showDelete = canDelete('notifications_history');
   const navigate = useNavigate();
 
   const [typeFilter, setTypeFilter] = useState('all');
@@ -156,12 +159,14 @@ export default function NotificationHistoryPage() {
             >
               Mark All Read
             </button>
-            <button
-              onClick={handleDeleteAllRead}
-              className="px-4 py-2 border border-red-200 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap cursor-pointer"
-            >
-              Clear Read
-            </button>
+            {showDelete && (
+              <button
+                onClick={handleDeleteAllRead}
+                className="px-4 py-2 border border-red-200 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap cursor-pointer"
+              >
+                Clear Read
+              </button>
+            )}
           </div>
         </div>
 
@@ -289,13 +294,15 @@ export default function NotificationHistoryPage() {
                             <i className="ri-check-line text-sm"></i>
                           </button>
                         )}
-                        <button
-                          onClick={() => deleteNotification(n.id)}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
-                          title="Delete"
-                        >
-                          <i className="ri-delete-bin-line text-sm"></i>
-                        </button>
+                        {showDelete && (
+                          <button
+                            onClick={() => deleteNotification(n.id)}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                            title="Delete"
+                          >
+                            <i className="ri-delete-bin-line text-sm"></i>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

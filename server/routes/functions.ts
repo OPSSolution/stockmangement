@@ -62,7 +62,7 @@ router.post('/alert-rules-evaluator', async (_req, res) => {
 });
 
 // POST /functions/v1/report-summary
-router.post('/report-summary', authenticate, async (req: AuthRequest, res) => {
+router.post('/report-summary', async (req: AuthRequest, res) => {
   const { period, date, month, year, warehouse } = req.body as {
     period: 'daily' | 'monthly' | 'yearly';
     date?: string;

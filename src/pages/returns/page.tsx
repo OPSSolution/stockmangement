@@ -6,6 +6,7 @@ import ReturnDetailModal from './components/ReturnDetailModal';
 import ReturnFormModal from './components/ReturnFormModal';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 type FilterTab = 'all' | ReturnStatus;
 
@@ -85,6 +86,9 @@ function toDbReturn(ret: ReturnRequest): Record<string, unknown> {
 
 export default function ReturnsPage() {
   const { formatAmount } = useCurrency();
+  const { canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('returns');
+  const showDelete = canDelete('returns');
   const [returns, setReturns] = useState<ReturnRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
@@ -344,20 +348,24 @@ export default function ReturnsPage() {
                             >
                               <i className={['pending', 'inspecting', 'approved'].includes(r.status) ? 'ri-play-circle-line' : 'ri-eye-line'}></i>
                             </button>
-                            <button
-                              onClick={() => setEditReturn(r)}
-                              className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 cursor-pointer"
-                              title="Edit return"
-                            >
-                              <i className="ri-edit-line"></i>
-                            </button>
-                            <button
-                              onClick={() => setDeleteReturn(r)}
-                              className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 cursor-pointer"
-                              title="Delete return"
-                            >
-                              <i className="ri-delete-bin-line"></i>
-                            </button>
+                            {showEdit && (
+                              <button
+                                onClick={() => setEditReturn(r)}
+                                className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 cursor-pointer"
+                                title="Edit return"
+                              >
+                                <i className="ri-edit-line"></i>
+                              </button>
+                            )}
+                            {showDelete && (
+                              <button
+                                onClick={() => setDeleteReturn(r)}
+                                className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 cursor-pointer"
+                                title="Delete return"
+                              >
+                                <i className="ri-delete-bin-line"></i>
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

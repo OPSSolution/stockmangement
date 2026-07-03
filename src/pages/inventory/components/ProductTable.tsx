@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Product } from '@/mocks/inventory';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface ProductTableProps {
   products: Product[];
@@ -27,6 +28,9 @@ const statusConfig = {
 export default function ProductTable({ products, onEdit, onDelete, onAdjust, onViewHistory }: ProductTableProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const { formatAmount } = useCurrency();
+  const { canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('inventory');
+  const showDelete = canDelete('inventory');
 
   return (
     <div className="overflow-x-auto">
@@ -109,30 +113,36 @@ export default function ProductTable({ products, onEdit, onDelete, onAdjust, onV
                     >
                       <i className="ri-history-line text-sm"></i>
                     </button>
-                    <button
-                      onClick={() => setOpenMenu(openMenu === p.id ? null : p.id)}
-                      className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 transition-colors cursor-pointer"
-                    >
-                      <i className="ri-more-2-line text-sm"></i>
-                    </button>
+                    {(showEdit || showDelete) && (
+                      <button
+                        onClick={() => setOpenMenu(openMenu === p.id ? null : p.id)}
+                        className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 transition-colors cursor-pointer"
+                      >
+                        <i className="ri-more-2-line text-sm"></i>
+                      </button>
+                    )}
                   </div>
-                  {openMenu === p.id && (
+                  {openMenu === p.id && (showEdit || showDelete) && (
                     <div
                       className="absolute right-4 top-10 w-36 bg-white border border-gray-100 rounded-xl z-30 py-1 shadow-md"
                       onMouseLeave={() => setOpenMenu(null)}
                     >
-                      <button
-                        onClick={() => { onEdit(p); setOpenMenu(null); }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
-                      >
-                        <i className="ri-edit-line text-gray-400"></i> Edit
-                      </button>
-                      <button
-                        onClick={() => { onDelete(p); setOpenMenu(null); }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
-                      >
-                        <i className="ri-delete-bin-line text-red-400"></i> Delete
-                      </button>
+                      {showEdit && (
+                        <button
+                          onClick={() => { onEdit(p); setOpenMenu(null); }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                        >
+                          <i className="ri-edit-line text-gray-400"></i> Edit
+                        </button>
+                      )}
+                      {showDelete && (
+                        <button
+                          onClick={() => { onDelete(p); setOpenMenu(null); }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                        >
+                          <i className="ri-delete-bin-line text-red-400"></i> Delete
+                        </button>
+                      )}
                     </div>
                   )}
                 </td>

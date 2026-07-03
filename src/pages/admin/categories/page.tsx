@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface Category {
   id: string;
@@ -40,6 +41,9 @@ function genId(prefix: string, existing: string[]): string {
 }
 
 export default function AdminCategoriesPage() {
+  const { canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('categories');
+  const showDelete = canDelete('categories');
   const [categories, setCategories] = useState<Category[]>([]);
   const [subCategories, setSubCategories] = useState<SubCategory[]>([]);
   const [selectedCat, setSelectedCat] = useState<Category | null>(null);
@@ -209,18 +213,22 @@ export default function AdminCategoriesPage() {
                       <p className="text-xs text-gray-400">{subCategories.filter(s => s.category_id === cat.id).length} sub-categories</p>
                     </div>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={e => { e.stopPropagation(); openEditCat(cat); }}
-                        className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-sky-500 hover:bg-sky-50 transition-colors"
-                      >
-                        <i className="ri-edit-line text-xs"></i>
-                      </button>
-                      <button
-                        onClick={e => { e.stopPropagation(); deleteCat(cat); }}
-                        className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                      >
-                        <i className="ri-delete-bin-line text-xs"></i>
-                      </button>
+                      {showEdit && (
+                        <button
+                          onClick={e => { e.stopPropagation(); openEditCat(cat); }}
+                          className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-sky-500 hover:bg-sky-50 transition-colors"
+                        >
+                          <i className="ri-edit-line text-xs"></i>
+                        </button>
+                      )}
+                      {showDelete && (
+                        <button
+                          onClick={e => { e.stopPropagation(); deleteCat(cat); }}
+                          className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        >
+                          <i className="ri-delete-bin-line text-xs"></i>
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -263,18 +271,22 @@ export default function AdminCategoriesPage() {
                           <p className="text-xs text-gray-300 mt-1 font-mono">{sub.id}</p>
                         </div>
                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2 flex-shrink-0">
-                          <button
-                            onClick={() => openEditSub(sub)}
-                            className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-sky-500 hover:bg-sky-50 transition-colors"
-                          >
-                            <i className="ri-edit-line text-sm"></i>
-                          </button>
-                          <button
-                            onClick={() => deleteSub(sub)}
-                            className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                          >
-                            <i className="ri-delete-bin-line text-sm"></i>
-                          </button>
+                          {showEdit && (
+                            <button
+                              onClick={() => openEditSub(sub)}
+                              className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-sky-500 hover:bg-sky-50 transition-colors"
+                            >
+                              <i className="ri-edit-line text-sm"></i>
+                            </button>
+                          )}
+                          {showDelete && (
+                            <button
+                              onClick={() => deleteSub(sub)}
+                              className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                            >
+                              <i className="ri-delete-bin-line text-sm"></i>
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>

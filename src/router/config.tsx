@@ -22,6 +22,8 @@ import NotificationHistoryPage from "../pages/notifications/history/page";
 import ReportsPage from "../pages/reports/page";
 import RequirementsPage from "../pages/requirements/page";
 import RolesPage from "../pages/roles/page";
+import CategoriesPage from "../pages/categories/page";
+import AdminCategoriesPage from "../pages/admin/categories/page";
 
 const routes: RouteObject[] = [
   {
@@ -33,72 +35,84 @@ const routes: RouteObject[] = [
     element: <SignupPage />,
   },
   {
+    path: "/unauthorized",
+    element: <UnauthorizedPage />,
+  },
+  {
     path: "/",
-    element: <Home />,
+    element: <ProtectedRoute permKey="dashboard"><Home /></ProtectedRoute>,
   },
   {
     path: "/inventory",
-    element: <InventoryPage />,
+    element: <ProtectedRoute permKey="inventory"><InventoryPage /></ProtectedRoute>,
   },
   {
     path: "/orders",
-    element: <OrdersPage />,
+    element: <ProtectedRoute permKey="orders"><OrdersPage /></ProtectedRoute>,
   },
   {
     path: "/deliveries",
-    element: <DeliveriesPage />,
+    element: <ProtectedRoute permKey="deliveries"><DeliveriesPage /></ProtectedRoute>,
   },
   {
     path: "/transfers",
-    element: <TransfersPage />,
+    element: <ProtectedRoute permKey="transfers"><TransfersPage /></ProtectedRoute>,
   },
   {
     path: "/purchases",
-    element: <PurchasesPage />,
+    element: <ProtectedRoute permKey="purchases"><PurchasesPage /></ProtectedRoute>,
   },
   {
     path: "/vendors",
-    element: <VendorsPage />,
+    element: <ProtectedRoute permKey="vendors"><VendorsPage /></ProtectedRoute>,
   },
   {
     path: "/returns",
-    element: <ReturnsPage />,
+    element: <ProtectedRoute permKey="returns"><ReturnsPage /></ProtectedRoute>,
   },
   {
     path: "/warehouses",
-    element: <WarehousesPage />,
+    element: <ProtectedRoute permKey="warehouses"><WarehousesPage /></ProtectedRoute>,
   },
   {
     path: "/promotions",
-    element: <PromotionsPage />,
+    element: <ProtectedRoute permKey="promotions"><PromotionsPage /></ProtectedRoute>,
   },
   {
     path: "/notifications/settings",
-    element: <NotificationSettingsPage />,
+    element: <ProtectedRoute permKey="notifications_settings"><NotificationSettingsPage /></ProtectedRoute>,
   },
   {
     path: "/notifications/history",
-    element: <NotificationHistoryPage />,
+    element: <ProtectedRoute permKey="notifications_history"><NotificationHistoryPage /></ProtectedRoute>,
   },
   {
     path: "/notifications/analytics",
-    element: <NotificationAnalyticsPage />,
+    element: <ProtectedRoute permKey="notifications_analytics"><NotificationAnalyticsPage /></ProtectedRoute>,
   },
   {
     path: "/reports",
-    element: <ReportsPage />,
+    element: <ProtectedRoute permKey="reports"><ReportsPage /></ProtectedRoute>,
   },
   {
     path: "/teams",
-    element: <TeamsPage />,
+    element: <ProtectedRoute permKey="teams"><TeamsPage /></ProtectedRoute>,
   },
   {
     path: "/requirements",
-    element: <RequirementsPage />,
+    element: <ProtectedRoute permKey="requirements"><RequirementsPage /></ProtectedRoute>,
   },
   {
     path: "/admin/roles",
-    element: <RolesPage />,
+    element: <ProtectedRoute permKey="roles"><RolesPage /></ProtectedRoute>,
+  },
+  {
+    path: "/categories",
+    element: <ProtectedRoute permKey="categories"><CategoriesPage /></ProtectedRoute>,
+  },
+  {
+    path: "/admin/categories",
+    element: <ProtectedRoute permKey="categories"><AdminCategoriesPage /></ProtectedRoute>,
   },
   {
     path: "*",

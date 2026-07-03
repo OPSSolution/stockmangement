@@ -7,6 +7,7 @@ import { Order, OrderStatus } from '@/mocks/orders';
 import type { Product } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { buildOrderInsert, buildOrderUpdate, mapOrderToDraft, mapProductRow, type OrderCreateDraft } from './orderCreateUtils';
 
 type FilterStatus = 'all' | OrderStatus;
@@ -32,6 +33,9 @@ function mapOrder(row: Record<string, unknown>): Order {
 
 export default function OrdersPage() {
   const { formatAmount } = useCurrency();
+  const { canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('orders');
+  const showDelete = canDelete('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -376,14 +380,16 @@ export default function OrdersPage() {
                             >
                               {order.status === 'pending' ? 'Review' : 'View'}
                             </button>
-                            <button
-                              onClick={(event) => handleToggleMenu(order.id, event)}
-                              className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 transition-colors cursor-pointer"
-                              title="More actions"
-                            >
-                              <i className="ri-more-2-line text-sm"></i>
-                            </button>
-                            {openMenuId === order.id && menuPosition && (
+                            {(showEdit || showDelete) && (
+                              <button
+                                onClick={(event) => handleToggleMenu(order.id, event)}
+                                className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 transition-colors cursor-pointer"
+                                title="More actions"
+                              >
+                                <i className="ri-more-2-line text-sm"></i>
+                              </button>
+                            )}
+                            {openMenuId === order.id && menuPosition && (showEdit || showDelete) && (
                               <div
                                 className="fixed w-36 bg-white border border-gray-100 rounded-xl z-[60] py-1 shadow-md"
                                 style={{ left: menuPosition.left, top: menuPosition.top }}
@@ -393,26 +399,30 @@ export default function OrdersPage() {
                                   setMenuPosition(null);
                                 }}
                               >
-                                <button
-                                  onClick={() => {
-                                    setEditingOrder(order);
-                                    setOpenMenuId(null);
-                                    setMenuPosition(null);
-                                  }}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
-                                >
-                                  <i className="ri-edit-line text-gray-400"></i> Edit
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    handleDeleteOrder(order);
-                                    setOpenMenuId(null);
-                                    setMenuPosition(null);
-                                  }}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
-                                >
-                                  <i className="ri-delete-bin-line text-red-400"></i> Delete
-                                </button>
+                                {showEdit && (
+                                  <button
+                                    onClick={() => {
+                                      setEditingOrder(order);
+                                      setOpenMenuId(null);
+                                      setMenuPosition(null);
+                                    }}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                                  >
+                                    <i className="ri-edit-line text-gray-400"></i> Edit
+                                  </button>
+                                )}
+                                {showDelete && (
+                                  <button
+                                    onClick={() => {
+                                      handleDeleteOrder(order);
+                                      setOpenMenuId(null);
+                                      setMenuPosition(null);
+                                    }}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                                  >
+                                    <i className="ri-delete-bin-line text-red-400"></i> Delete
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>

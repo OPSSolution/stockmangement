@@ -6,10 +6,12 @@ interface ProtectedRouteProps {
   children: React.ReactNode;
   /** Roles allowed to access this route. Omit to allow any authenticated user. */
   roles?: UserRole[];
+  /** Page permission key that must be viewable to access this route. */
+  permKey?: string;
 }
 
-export default function ProtectedRoute({ children, roles }: ProtectedRouteProps) {
-  const { profile, loading } = useAuth();
+export default function ProtectedRoute({ children, roles, permKey }: ProtectedRouteProps) {
+  const { profile, loading, canAccess } = useAuth();
 
   if (loading) {
     return (
@@ -27,6 +29,10 @@ export default function ProtectedRoute({ children, roles }: ProtectedRouteProps)
   }
 
   if (roles && !roles.includes(profile.role)) {
+    return <Navigate to="/unauthorized" replace />;
+  }
+
+  if (permKey && !canAccess(permKey)) {
     return <Navigate to="/unauthorized" replace />;
   }
 

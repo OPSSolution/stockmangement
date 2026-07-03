@@ -5,6 +5,7 @@ import DeliveryDetailModal from './components/DeliveryDetailModal';
 import DeliveryFormModal from './components/DeliveryFormModal';
 import { deliveryRecords as initialDeliveries, type DeliveryRecord, type DeliveryStep, type DeliveryItem } from '@/mocks/deliveries';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 
 const stepIndex: Record<DeliveryStep, number> = { prepare: 0, ready: 1, in_transit: 2, delivered: 3 };
 
@@ -85,6 +86,9 @@ function recordToRow(record: DeliveryRecord) {
 }
 
 export default function DeliveriesPage() {
+  const { canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('deliveries');
+  const showDelete = canDelete('deliveries');
   const [deliveries, setDeliveries] = useState<DeliveryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
@@ -337,16 +341,18 @@ export default function DeliveriesPage() {
                           <i className="ri-check-double-line text-emerald-500 text-lg"></i>
                         </div>
                       )}
-                      <button
-                        onClick={(e) => handleToggleMenu(delivery.id, e)}
-                        className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 transition-colors cursor-pointer"
-                      >
-                        <i className="ri-more-2-line text-sm"></i>
-                      </button>
+                      {(showEdit || showDelete) && (
+                        <button
+                          onClick={(e) => handleToggleMenu(delivery.id, e)}
+                          className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 transition-colors cursor-pointer"
+                        >
+                          <i className="ri-more-2-line text-sm"></i>
+                        </button>
+                      )}
                     </div>
                   </div>
 
-                  {openMenuId === delivery.id && menuPosition && (
+                  {openMenuId === delivery.id && menuPosition && (showEdit || showDelete) && (
                     <div
                       className="fixed w-36 bg-white border border-gray-100 rounded-xl z-[60] py-1 shadow-md"
                       style={{ left: menuPosition.left, top: menuPosition.top }}
@@ -356,26 +362,30 @@ export default function DeliveriesPage() {
                       }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <button
-                        onClick={() => {
-                          setEditingDelivery(delivery);
-                          setOpenMenuId(null);
-                          setMenuPosition(null);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
-                      >
-                        <i className="ri-edit-line text-gray-400"></i> Edit
-                      </button>
-                      <button
-                        onClick={() => {
-                          handleDeleteDelivery(delivery);
-                          setOpenMenuId(null);
-                          setMenuPosition(null);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
-                      >
-                        <i className="ri-delete-bin-line text-red-400"></i> Delete
-                      </button>
+                      {showEdit && (
+                        <button
+                          onClick={() => {
+                            setEditingDelivery(delivery);
+                            setOpenMenuId(null);
+                            setMenuPosition(null);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                        >
+                          <i className="ri-edit-line text-gray-400"></i> Edit
+                        </button>
+                      )}
+                      {showDelete && (
+                        <button
+                          onClick={() => {
+                            handleDeleteDelivery(delivery);
+                            setOpenMenuId(null);
+                            setMenuPosition(null);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                        >
+                          <i className="ri-delete-bin-line text-red-400"></i> Delete
+                        </button>
+                      )}
                     </div>
                   )}
 

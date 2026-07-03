@@ -37,7 +37,9 @@ interface ToastState {
 }
 
 export default function RequirementsPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('requirements');
+  const showDelete = canDelete('requirements');
   const navigate = useNavigate();
 
   const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -444,20 +446,24 @@ export default function RequirementsPage() {
                         </td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={() => openEdit(req)}
-                              className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
-                              title="Edit"
-                            >
-                              <i className="ri-edit-line text-sm"></i>
-                            </button>
-                            <button
-                              onClick={() => handleDelete(req.id)}
-                              className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
-                              title="Delete"
-                            >
-                              <i className="ri-delete-bin-line text-sm"></i>
-                            </button>
+                            {showEdit && (
+                              <button
+                                onClick={() => openEdit(req)}
+                                className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+                                title="Edit"
+                              >
+                                <i className="ri-edit-line text-sm"></i>
+                              </button>
+                            )}
+                            {showDelete && (
+                              <button
+                                onClick={() => handleDelete(req.id)}
+                                className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                                title="Delete"
+                              >
+                                <i className="ri-delete-bin-line text-sm"></i>
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

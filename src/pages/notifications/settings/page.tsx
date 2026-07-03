@@ -66,7 +66,9 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 export default function NotificationSettingsPage() {
   const { settings, refresh, requestBrowserPush, browserPushPermission, browserPushSupported, subscribeBrowserPush, unsubscribeBrowserPush, browserPushSubscribed } = useNotifications();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('notifications_settings');
+  const showDelete = canDelete('notifications_settings');
   const navigate = useNavigate();
 
   // Settings state
@@ -893,20 +895,24 @@ export default function NotificationSettingsPage() {
                         >
                           <i className={`${rule.is_active ? 'ri-pause-circle-line' : 'ri-play-circle-line'} text-lg`}></i>
                         </button>
-                        <button
-                          onClick={() => openEditRule(rule)}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
-                          title="Edit"
-                        >
-                          <i className="ri-edit-line text-sm"></i>
-                        </button>
-                        <button
-                          onClick={() => handleDeleteRule(rule.id)}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
-                          title="Delete"
-                        >
-                          <i className="ri-delete-bin-line text-sm"></i>
-                        </button>
+                        {showEdit && (
+                          <button
+                            onClick={() => openEditRule(rule)}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+                            title="Edit"
+                          >
+                            <i className="ri-edit-line text-sm"></i>
+                          </button>
+                        )}
+                        {showDelete && (
+                          <button
+                            onClick={() => handleDeleteRule(rule.id)}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                            title="Delete"
+                          >
+                            <i className="ri-delete-bin-line text-sm"></i>
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1130,20 +1136,24 @@ export default function NotificationSettingsPage() {
                         >
                           <i className={`${wh.is_active ? 'ri-pause-circle-line' : 'ri-play-circle-line'} text-lg`}></i>
                         </button>
-                        <button
-                          onClick={() => openEditWebhook(wh)}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
-                          title="Edit"
-                        >
-                          <i className="ri-edit-line text-sm"></i>
-                        </button>
-                        <button
-                          onClick={() => handleDeleteWebhook(wh.id)}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
-                          title="Delete"
-                        >
-                          <i className="ri-delete-bin-line text-sm"></i>
-                        </button>
+                        {showEdit && (
+                          <button
+                            onClick={() => openEditWebhook(wh)}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+                            title="Edit"
+                          >
+                            <i className="ri-edit-line text-sm"></i>
+                          </button>
+                        )}
+                        {showDelete && (
+                          <button
+                            onClick={() => handleDeleteWebhook(wh.id)}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                            title="Delete"
+                          >
+                            <i className="ri-delete-bin-line text-sm"></i>
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}

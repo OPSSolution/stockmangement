@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 import CategoriesFormModal from '../inventory/components/CategoriesFormModal';
 
 interface CategoryItem {
@@ -11,6 +12,9 @@ interface CategoryItem {
 
 export default function CategoriesPage() {
   const navigate = useNavigate();
+  const { canEdit, canDelete } = useAuth();
+  const showEdit = canEdit('categories');
+  const showDelete = canDelete('categories');
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<CategoryItem | null>(null);
@@ -114,18 +118,22 @@ export default function CategoriesPage() {
                 <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-semibold">Active</span>
               </div>
               <div className="flex items-center gap-2 mt-4">
-                <button
-                  onClick={() => { setEditingCategory(item); setIsModalOpen(true); }}
-                  className="px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-white cursor-pointer"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleDelete(item)}
-                  className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-100 rounded-lg hover:bg-red-50 cursor-pointer"
-                >
-                  Delete
-                </button>
+                {showEdit && (
+                  <button
+                    onClick={() => { setEditingCategory(item); setIsModalOpen(true); }}
+                    className="px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-white cursor-pointer"
+                  >
+                    Edit
+                  </button>
+                )}
+                {showDelete && (
+                  <button
+                    onClick={() => handleDelete(item)}
+                    className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-100 rounded-lg hover:bg-red-50 cursor-pointer"
+                  >
+                    Delete
+                  </button>
+                )}
               </div>
             </article>
           ))}

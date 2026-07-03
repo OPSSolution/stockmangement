@@ -4,47 +4,90 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+type PagePermission = { view: boolean; edit: boolean; delete: boolean };
+
+const PAGE_KEYS = [
+  'dashboard', 'inventory', 'orders', 'deliveries', 'warehouses', 'transfers',
+  'returns', 'purchases', 'promotions', 'vendors', 'reports', 'teams',
+  'requirements', 'roles', 'categories',
+  'notifications_history', 'notifications_analytics', 'notifications_settings',
+] as const;
+
+// Builds a full permission map from a subset of pages a role can view,
+// applying the given edit/delete defaults to every page it can view.
+function buildPermissions(
+  viewablePages: readonly string[],
+  { edit = false, del = false }: { edit?: boolean; del?: boolean } = {}
+): Record<string, PagePermission> {
+  const perms: Record<string, PagePermission> = {};
+  for (const key of PAGE_KEYS) {
+    const view = viewablePages.includes(key);
+    perms[key] = { view, edit: view && edit, delete: view && del };
+  }
+  return perms;
+}
+
 const DEFAULT_ROLES = [
   {
     id: 'admin',
     name: 'Admin',
     description: 'Full access to all pages',
-    permissions: {
-      dashboard: true, inventory: true, orders: true, deliveries: true,
-      warehouses: true, transfers: true, returns: true, purchases: true,
-      promotions: true, vendors: true, reports: true, teams: true,
-      requirements: true, roles: true, categories: true,
-      notifications_history: true, notifications_analytics: true, notifications_settings: true,
-    },
+    permissions: buildPermissions(PAGE_KEYS, { edit: true, del: true }),
     is_system: true,
   },
   {
     id: 'staff',
     name: 'Staff',
     description: 'Access to operational pages',
-    permissions: {
-      dashboard: true, inventory: true, orders: true, deliveries: true,
-      warehouses: true, transfers: true, returns: true, purchases: true,
-      promotions: true, vendors: true, reports: true, teams: false,
-      requirements: false, roles: false, categories: false,
-      notifications_history: true, notifications_analytics: false, notifications_settings: true,
-    },
+    permissions: buildPermissions(
+      ['dashboard', 'inventory', 'orders', 'deliveries', 'warehouses', 'transfers',
+       'returns', 'purchases', 'promotions', 'vendors', 'reports',
+       'notifications_history', 'notifications_settings'],
+      { edit: true, del: false }
+    ),
     is_system: true,
   },
   {
     id: 'viewer',
     name: 'Viewer',
     description: 'Read-only access to basic pages',
-    permissions: {
-      dashboard: true, inventory: true, orders: true, deliveries: true,
-      warehouses: true, transfers: false, returns: false, purchases: false,
-      promotions: false, vendors: false, reports: true, teams: false,
-      requirements: false, roles: false, categories: false,
-      notifications_history: false, notifications_analytics: false, notifications_settings: false,
-    },
+    permissions: buildPermissions(
+      ['dashboard', 'inventory', 'orders', 'deliveries', 'warehouses', 'reports'],
+      { edit: false, del: false }
+    ),
     is_system: true,
   },
 ];
+
+// Upgrades roles still storing legacy `{ page: boolean }` permissions (pre per-action
+// permissions) to the `{ page: { view, edit, delete } }` shape. Idempotent — once a
+// role's permissions are all objects, this is a no-op for it.
+async function migrateLegacyPermissions() {
+  const { rows } = await pool.query('SELECT id, permissions FROM roles');
+  for (const row of rows) {
+    const perms = row.permissions as Record<string, unknown>;
+    let changed = false;
+    const upgraded: Record<string, PagePermission> = {};
+
+    for (const [key, value] of Object.entries(perms)) {
+      if (typeof value === 'boolean') {
+        changed = true;
+        upgraded[key] = {
+          view: value,
+          edit: value && row.id !== 'viewer',
+          delete: value && row.id === 'admin',
+        };
+      } else if (value && typeof value === 'object') {
+        const v = value as Partial<PagePermission>;
+        upgraded[key] = { view: !!v.view, edit: !!v.edit, delete: !!v.delete };
+      }
+    }
+
+    if (changed) {
+      await pool.query('UPDATE roles SET permissions = $1 WHERE id = $2', [JSON.stringify(upgraded), row.id]);
+    }
+  }
+}
 
 export async function ensureRolesTable() {
   await pool.query(`
@@ -67,6 +110,8 @@ export async function ensureRolesTable() {
       [role.id, role.name, role.description, JSON.stringify(role.permissions), role.is_system]
     );
   }
+
+  await migrateLegacyPermissions();
 }
 
 // GET /roles — list all roles

@@ -17,7 +17,18 @@ export interface AppSession {
 
 export type { UserRole };
 
-export type Permissions = Record<string, boolean>;
+export interface PagePermission {
+  view: boolean;
+  edit: boolean;
+  delete: boolean;
+}
+
+export type Permissions = Record<string, boolean | Partial<PagePermission>>;
+
+export const normalizePerm = (value: boolean | Partial<PagePermission> | undefined): PagePermission => {
+  if (typeof value === 'boolean') return { view: value, edit: value, delete: value };
+  return { view: value?.view ?? false, edit: value?.edit ?? false, delete: value?.delete ?? false };
+};
 
 interface AuthContextType {
   user: AppUser | null;
@@ -29,6 +40,8 @@ interface AuthContextType {
   isStaff: boolean;
   isViewer: boolean;
   canAccess: (key: string) => boolean;
+  canEdit: (key: string) => boolean;
+  canDelete: (key: string) => boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string, role?: UserRole, phone?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
@@ -73,7 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loadPermissions = async (roleId: string) => {
     try {
       const token = localStorage.getItem('sm_access_token');
-      const res = await fetch(`/roles/${roleId}`, {
+      const res = await fetch(`/api/roles/${roleId}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const { data } = await res.json();
@@ -89,6 +102,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const appSession = s as AppSession | null;
       setSession(appSession);
       setUser(appSession?.user ?? null);
+      // Keep the Express API's auth token in sync with the Supabase session —
+      // server/middleware/auth.ts verifies this token against Supabase.
+      if (appSession?.access_token) {
+        localStorage.setItem('sm_access_token', appSession.access_token);
+      } else {
+        localStorage.removeItem('sm_access_token');
+      }
       if (appSession?.user) {
         fetchProfile(appSession.user as AppUser).finally(() => setLoading(false));
       } else {
@@ -139,11 +159,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isAdmin = profile?.role === 'admin';
   const isStaff = profile?.role === 'admin' || profile?.role === 'staff';
   const isViewer = profile?.role === 'viewer';
-  const canAccess = (key: string) => permissions === null || permissions[key] !== false;
+  const canAccess = (key: string) => permissions === null || normalizePerm(permissions[key]).view;
+  const canEdit = (key: string) => permissions === null || normalizePerm(permissions[key]).edit;
+  const canDelete = (key: string) => permissions === null || normalizePerm(permissions[key]).delete;
 
   return (
     <AuthContext.Provider
-      value={{ user, session, profile, permissions, loading, isAdmin, isStaff, isViewer, canAccess, signIn, signUp, signOut, refreshProfile }}
+      value={{ user, session, profile, permissions, loading, isAdmin, isStaff, isViewer, canAccess, canEdit, canDelete, signIn, signUp, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>
