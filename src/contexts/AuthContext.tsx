@@ -99,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // onAuthStateChange fires INITIAL_SESSION immediately on mount, so getSession() is redundant
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       const appSession = s as AppSession | null;
       setSession(appSession);
       setUser(appSession?.user ?? null);
@@ -111,6 +111,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem('sm_access_token');
       }
       if (appSession?.user) {
+        // Re-enter loading while the profile fetch is in flight (e.g. right after
+        // sign-in) so ProtectedRoute shows a spinner instead of bouncing to /login
+        // because profile is still null. Skip it for silent token refreshes.
+        if (event !== 'TOKEN_REFRESHED') setLoading(true);
         fetchProfile(appSession.user as AppUser).finally(() => setLoading(false));
       } else {
         setProfile(null);
