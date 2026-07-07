@@ -10,7 +10,7 @@ export interface WarehouseZone {
 export interface WarehouseStaff {
   name: string;
   role: string;
-  shift: 'morning' | 'evening' | 'night';
+  shift: 'morning' | 'evening' | 'night' | 'Full Day'; 
 }
 
 export interface MonthlyActivity {

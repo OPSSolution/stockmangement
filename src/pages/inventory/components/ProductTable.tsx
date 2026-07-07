@@ -124,7 +124,7 @@ export default function ProductTable({ products, onEdit, onDelete, onAdjust, onV
                   </div>
                   {openMenu === p.id && (showEdit || showDelete) && (
                     <div
-                      className="absolute right-4 top-10 w-36 bg-white border border-gray-100 rounded-xl z-30 py-1 shadow-md"
+                      className="absolute right-4 top-10 w-36 bg-white border border-gray-100 rounded-2xl shadow-sm z-30 py-1 shadow-md"
                       onMouseLeave={() => setOpenMenu(null)}
                     >
                       {showEdit && (

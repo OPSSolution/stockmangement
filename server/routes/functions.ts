@@ -1,21 +1,55 @@
 import { Router } from 'express';
-import bcrypt from 'bcryptjs';
 import { generateKeyPairSync } from 'crypto';
-import { pool } from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { supabaseForToken, supabaseAdmin } from '../lib/supabaseEnv';
 
 const router = Router();
 
+// UTC [gte, lt) bounds for a period pattern — used for the `deliveries` table,
+// whose created_at is a real timestamptz (every other reported table stores
+// created_at as a 'YYYY-MM-DD[ HH24:MI]' text prefix, matched with `.like`).
+function periodRangeUTC(period: 'daily' | 'monthly' | 'yearly', pattern: string) {
+  if (period === 'daily') {
+    const start = new Date(`${pattern}T00:00:00.000Z`);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    return { gte: start.toISOString(), lt: end.toISOString() };
+  }
+  if (period === 'monthly') {
+    const [y, m] = pattern.split('-').map(Number);
+    return { gte: new Date(Date.UTC(y, m - 1, 1)).toISOString(), lt: new Date(Date.UTC(y, m, 1)).toISOString() };
+  }
+  const y = Number(pattern);
+  return { gte: new Date(Date.UTC(y, 0, 1)).toISOString(), lt: new Date(Date.UTC(y + 1, 0, 1)).toISOString() };
+}
+
+function groupCount(rows: Array<Record<string, unknown>>, field: string): Record<string, number> {
+  const m: Record<string, number> = {};
+  for (const r of rows) {
+    const key = String(r[field]);
+    m[key] = (m[key] || 0) + 1;
+  }
+  return m;
+}
+
 // Replaces the Supabase edge function: alert-rules-evaluator
-router.post('/alert-rules-evaluator', async (_req, res) => {
+// Reads/writes Supabase (not the local Postgres pool) — alert_rules, products, and
+// notifications all live in Supabase since that's what the rest of the app uses.
+router.post('/alert-rules-evaluator', async (req: AuthRequest, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const supabase = supabaseForToken(token);
+  if (!supabase) return res.status(503).json({ error: 'Supabase is not configured on the server' });
+
   try {
-    const [rulesResult, productsResult] = await Promise.all([
-      pool.query('SELECT * FROM alert_rules WHERE is_active = true'),
-      pool.query('SELECT * FROM products WHERE stock <= low_stock_threshold'),
+    const [rulesRes, productsRes] = await Promise.all([
+      supabase.from('alert_rules').select('*').eq('is_active', true),
+      supabase.from('products').select('*'),
     ]);
 
-    const rules = rulesResult.rows;
-    const lowStockProducts = productsResult.rows;
+    const rules = rulesRes.data ?? [];
+    const lowStockProducts = (productsRes.data ?? []).filter(
+      (p: any) => Number(p.stock) <= Number(p.low_stock_threshold)
+    );
     let totalCreated = 0;
 
     for (const rule of rules) {
@@ -26,13 +60,15 @@ router.post('/alert-rules-evaluator', async (_req, res) => {
         if (product.stock > threshold) continue;
 
         // Avoid duplicate notifications within the last hour
-        const recent = await pool.query(
-          `SELECT id FROM notifications
-           WHERE data->>'product_id' = $1 AND type = $2
-           AND created_at > NOW() - INTERVAL '1 hour' LIMIT 1`,
-          [product.id, rule.notification_type]
-        );
-        if (recent.rows.length > 0) continue;
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const { data: recent } = await supabase
+          .from('notifications')
+          .select('id')
+          .eq('type', rule.notification_type)
+          .contains('data', { product_id: product.id })
+          .gte('created_at', oneHourAgo)
+          .limit(1);
+        if (recent && recent.length > 0) continue;
 
         const msg = rule.message_template
           .replace('{{product_name}}', product.name)
@@ -42,15 +78,16 @@ router.post('/alert-rules-evaluator', async (_req, res) => {
           ? `Out of Stock: ${product.name}`
           : `Low Stock: ${product.name}`;
 
-        const admins = await pool.query("SELECT id FROM profiles WHERE role = 'admin'");
-        for (const admin of admins.rows) {
-          await pool.query(
-            `INSERT INTO notifications (user_id, type, title, message, data)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [admin.id, rule.notification_type, title, msg,
-              JSON.stringify({ product_id: product.id, product_name: product.name, stock: product.stock })]
-          );
-          totalCreated++;
+        const { data: admins } = await supabase.from('profiles').select('id').eq('role', 'admin');
+        for (const admin of admins ?? []) {
+          const { error } = await supabase.from('notifications').insert({
+            user_id: admin.id,
+            type: rule.notification_type,
+            title,
+            message: msg,
+            data: { product_id: product.id, product_name: product.name, stock: product.stock },
+          });
+          if (!error) totalCreated++;
         }
       }
     }
@@ -70,6 +107,10 @@ router.post('/report-summary', async (req: AuthRequest, res) => {
     year?: string;
     warehouse?: string;
   };
+
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const supabase = supabaseForToken(token);
+  if (!supabase) return res.status(503).json({ error: 'Supabase is not configured on the server' });
 
   try {
     let currPattern: string;
@@ -108,36 +149,38 @@ router.post('/report-summary', async (req: AuthRequest, res) => {
     }
 
     const wh = warehouse || null;
-    const whClause = wh ? ' AND warehouse = $2' : '';
-    const whVals: string[] = wh ? [wh] : [];
-
-    const toMap = (rows: any[]): Record<string, number> => {
-      const m: Record<string, number> = {};
-      rows.forEach((r: any) => { m[r.status] = Number(r.c); });
-      return m;
-    };
 
     const getSummary = async (pat: string) => {
-      const [ordRes, ordStRes, delRes, trnRes, trnStRes, purRes, purStRes, retRes, retStRes, proRes, proStRes] = await Promise.all([
-        pool.query(`SELECT COUNT(*) c, COALESCE(SUM(total),0) rev FROM orders WHERE created_at LIKE $1`, [`${pat}%`]),
-        pool.query(`SELECT status, COUNT(*) c FROM orders WHERE created_at LIKE $1 GROUP BY status`, [`${pat}%`]),
-        pool.query(`SELECT status, COUNT(*) c FROM deliveries WHERE TO_CHAR(created_at,'YYYY-MM-DD') LIKE $1${whClause} GROUP BY status`, [`${pat}%`, ...whVals]),
-        pool.query(`SELECT COUNT(*) c FROM transfers WHERE created_at LIKE $1`, [`${pat}%`]),
-        pool.query(`SELECT status, COUNT(*) c FROM transfers WHERE created_at LIKE $1 GROUP BY status`, [`${pat}%`]),
-        pool.query(`SELECT COUNT(*) c, COALESCE(SUM(total),0) tot FROM purchases WHERE created_at LIKE $1${whClause}`, [`${pat}%`, ...whVals]),
-        pool.query(`SELECT status, COUNT(*) c FROM purchases WHERE created_at LIKE $1${whClause} GROUP BY status`, [`${pat}%`, ...whVals]),
-        pool.query(`SELECT COUNT(*) c, COALESCE(SUM(refund_amount),0) ref FROM returns WHERE created_at LIKE $1${whClause}`, [`${pat}%`, ...whVals]),
-        pool.query(`SELECT status, COUNT(*) c FROM returns WHERE created_at LIKE $1${whClause} GROUP BY status`, [`${pat}%`, ...whVals]),
-        pool.query(`SELECT COUNT(*) c FROM promotions WHERE created_at LIKE $1`, [`${pat}%`]),
-        pool.query(`SELECT status, COUNT(*) c FROM promotions WHERE created_at LIKE $1 GROUP BY status`, [`${pat}%`]),
+      const delRange = periodRangeUTC(period, pat);
+
+      let purchasesQ = supabase.from('purchases').select('total,status').like('created_at', `${pat}%`);
+      if (wh) purchasesQ = purchasesQ.eq('warehouse', wh);
+      let returnsQ = supabase.from('returns').select('refund_amount,status').like('created_at', `${pat}%`);
+      if (wh) returnsQ = returnsQ.eq('warehouse', wh);
+
+      const [ordRes, delRes, trnRes, purRes, retRes, proRes] = await Promise.all([
+        supabase.from('orders').select('total,status').like('created_at', `${pat}%`),
+        supabase.from('deliveries').select('status').gte('created_at', delRange.gte).lt('created_at', delRange.lt),
+        supabase.from('transfers').select('status').like('created_at', `${pat}%`),
+        purchasesQ,
+        returnsQ,
+        supabase.from('promotions').select('status').like('created_at', `${pat}%`),
       ]);
+
+      const ordRows = ordRes.data ?? [];
+      const delRows = delRes.data ?? [];
+      const trnRows = trnRes.data ?? [];
+      const purRows = purRes.data ?? [];
+      const retRows = retRes.data ?? [];
+      const proRows = proRes.data ?? [];
+
       return {
-        orders:     { count: Number(ordRes.rows[0].c), revenue: Number(ordRes.rows[0].rev), statusBreakdown: toMap(ordStRes.rows) },
-        deliveries: { count: delRes.rows.reduce((s: number, r: any) => s + Number(r.c), 0), statusBreakdown: toMap(delRes.rows) },
-        transfers:  { count: Number(trnRes.rows[0].c), statusBreakdown: toMap(trnStRes.rows) },
-        purchases:  { count: Number(purRes.rows[0].c), total: Number(purRes.rows[0].tot), statusBreakdown: toMap(purStRes.rows) },
-        returns:    { count: Number(retRes.rows[0].c), refunded: Number(retRes.rows[0].ref), statusBreakdown: toMap(retStRes.rows) },
-        promotions: { count: Number(proRes.rows[0].c), statusBreakdown: toMap(proStRes.rows) },
+        orders:     { count: ordRows.length, revenue: ordRows.reduce((s, r) => s + Number(r.total || 0), 0), statusBreakdown: groupCount(ordRows, 'status') },
+        deliveries: { count: delRows.length, statusBreakdown: groupCount(delRows, 'status') },
+        transfers:  { count: trnRows.length, statusBreakdown: groupCount(trnRows, 'status') },
+        purchases:  { count: purRows.length, total: purRows.reduce((s, r) => s + Number(r.total || 0), 0), statusBreakdown: groupCount(purRows, 'status') },
+        returns:    { count: retRows.length, refunded: retRows.reduce((s, r) => s + Number(r.refund_amount || 0), 0), statusBreakdown: groupCount(retRows, 'status') },
+        promotions: { count: proRows.length, statusBreakdown: groupCount(proRows, 'status') },
       };
     };
 
@@ -145,11 +188,9 @@ router.post('/report-summary', async (req: AuthRequest, res) => {
       getSummary(currPattern),
       getSummary(prevPattern),
       Promise.all(trendItems.map(async ({ label, pattern }) => {
-        const r = await pool.query(
-          `SELECT COUNT(*) orders, COALESCE(SUM(total),0) revenue FROM orders WHERE created_at LIKE $1`,
-          [`${pattern}%`]
-        );
-        return { label, orders: Number(r.rows[0].orders), revenue: Number(r.rows[0].revenue) };
+        const { data } = await supabase.from('orders').select('total').like('created_at', `${pattern}%`);
+        const rows = data ?? [];
+        return { label, orders: rows.length, revenue: rows.reduce((s, r) => s + Number(r.total || 0), 0) };
       })),
     ]);
 
@@ -203,16 +244,20 @@ router.post('/webhook-dispatch', authenticate, async (req: AuthRequest, res) => 
     return res.status(400).json({ dispatched: false, error: 'Missing notification or config_ids' });
   }
 
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const supabase = supabaseForToken(token);
+  if (!supabase) return res.status(503).json({ dispatched: false, error: 'Supabase is not configured on the server' });
+
   try {
-    const placeholders = config_ids.map((_: unknown, i: number) => `$${i + 1}`).join(',');
-    const { rows: configs } = await pool.query(
-      `SELECT * FROM webhook_configs WHERE id IN (${placeholders}) AND is_active = true`,
-      config_ids
-    );
+    const { data: configs } = await supabase
+      .from('webhook_configs')
+      .select('*')
+      .in('id', config_ids)
+      .eq('is_active', true);
 
     const results: Array<{ id: string; name: string; success: boolean; status?: number; error?: string }> = [];
 
-    for (const config of configs) {
+    for (const config of configs ?? []) {
       try {
         let body: Record<string, unknown>;
 
@@ -256,14 +301,21 @@ router.post('/webhook-dispatch', authenticate, async (req: AuthRequest, res) => 
 });
 
 // POST /functions/v1/scheduled-dispatch  (authenticated)
-router.post('/scheduled-dispatch', authenticate, async (_req: AuthRequest, res) => {
+router.post('/scheduled-dispatch', authenticate, async (req: AuthRequest, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const supabase = supabaseForToken(token);
+  if (!supabase) return res.status(503).json({ message: 'Supabase is not configured on the server' });
+
   try {
-    const result = await pool.query(
-      `UPDATE notifications SET is_emailed = true
-       WHERE is_emailed = false AND created_at > NOW() - INTERVAL '24 hours'
-       RETURNING id`
-    );
-    const count = result.rows.length;
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('notifications')
+      .update({ is_emailed: true })
+      .eq('is_emailed', false)
+      .gte('created_at', dayAgo)
+      .select('id');
+    if (error) throw error;
+    const count = data?.length ?? 0;
     res.json({ message: `Dispatched ${count} pending notification${count !== 1 ? 's' : ''}` });
   } catch (err: any) {
     res.status(500).json({ message: 'Dispatch failed: ' + err.message });
@@ -271,7 +323,15 @@ router.post('/scheduled-dispatch', authenticate, async (_req: AuthRequest, res) 
 });
 
 // POST /functions/v1/invite-user  (admin only)
+// Creates the user directly in Supabase Auth + the Supabase `profiles` table —
+// that's the only database the real app (login, Teams, everything) reads from.
+// Requires SUPABASE_SERVICE_ROLE_KEY to be set on the server; that key must
+// never be exposed to the browser.
 router.post('/invite-user', authenticate, async (req: AuthRequest, res) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Admin access required' });
+  }
+
   const { email, full_name = 'User', role = 'staff', phone, password } = req.body;
 
   if (!email) return res.status(400).json({ success: false, error: 'Email is required' });
@@ -279,35 +339,59 @@ router.post('/invite-user', authenticate, async (req: AuthRequest, res) => {
     return res.status(400).json({ success: false, error: 'Invalid role' });
   }
 
+  const admin = supabaseAdmin();
+  if (!admin) {
+    return res.status(500).json({
+      success: false,
+      error: 'SUPABASE_SERVICE_ROLE_KEY is not configured on the server — invite cannot create a real Supabase account without it.',
+    });
+  }
+
+  const plainPassword = password || Math.random().toString(36).slice(-10);
+
   try {
-    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (existing.rows.length > 0) {
-      return res.status(400).json({ success: false, error: 'A user with this email already exists' });
+    console.log(`[invite-user] creating auth user for ${email}`);
+    const { data: created, error: createErr } = await admin.auth.admin.createUser({
+      email,
+      password: plainPassword,
+      email_confirm: true,
+      user_metadata: { full_name, role, phone: phone || null },
+    });
+
+    if (createErr || !created?.user) {
+      console.log(`[invite-user] createUser failed:`, createErr?.message);
+      return res.status(400).json({ success: false, error: createErr?.message || 'Failed to create user' });
     }
 
-    const plainPassword = password || Math.random().toString(36).slice(-10);
-    const passwordHash = await bcrypt.hash(plainPassword, 10);
+    const userId = created.user.id;
+    console.log(`[invite-user] auth user created, id=${userId}`);
 
-    const countResult = await pool.query('SELECT COUNT(*) FROM users');
-    const seq = String(Number(countResult.rows[0].count) + 1).padStart(3, '0');
-    const userId = `USR-${seq}`;
+    // A DB trigger (on_auth_user_created) creates a bare-bones profiles row in
+    // the same transaction as the auth user, so it already exists by now —
+    // upsert to fill in the full details rather than insert (which would
+    // conflict with the trigger's row).
+    const { error: profileErr } = await admin
+      .from('profiles')
+      .upsert({ id: userId, email, full_name, role, phone: phone || null }, { onConflict: 'id' });
 
-    await pool.query('BEGIN');
-    await pool.query('INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)', [userId, email, passwordHash]);
-    await pool.query(
-      'INSERT INTO profiles (id, email, full_name, role, phone) VALUES ($1, $2, $3, $4, $5)',
-      [userId, email, full_name, role, phone || null]
-    );
-    await pool.query(
-      `INSERT INTO notification_settings (user_id, email_enabled, sms_enabled, in_app_enabled, browser_push_enabled, category_thresholds)
-       VALUES ($1, true, false, true, true, $2) ON CONFLICT (user_id) DO NOTHING`,
-      [userId, JSON.stringify({ Electronics: 5, Furniture: 3, Lighting: 4, 'Smart Home': 5, Accessories: 10 })]
-    );
-    await pool.query('COMMIT');
+    if (profileErr) {
+      console.log(`[invite-user] profile upsert failed, rolling back auth user ${userId}:`, profileErr.message);
+      await admin.auth.admin.deleteUser(userId).catch((e) => console.log('[invite-user] rollback delete failed:', e));
+      return res.status(500).json({ success: false, error: profileErr.message });
+    }
+    console.log(`[invite-user] profile upsert OK`);
+
+    await admin.from('notification_settings').insert({
+      user_id: userId,
+      email_enabled: true,
+      sms_enabled: false,
+      in_app_enabled: true,
+      browser_push_enabled: true,
+      category_thresholds: { Electronics: 5, Furniture: 3, Lighting: 4, 'Smart Home': 5, Accessories: 10 },
+    });
 
     res.json({ success: true, userId, email, role, tempPassword: password ? undefined : plainPassword });
   } catch (err: any) {
-    await pool.query('ROLLBACK').catch(() => {});
     res.status(500).json({ success: false, error: err.message });
   }
 });

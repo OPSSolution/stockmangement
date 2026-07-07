@@ -5,7 +5,7 @@ export interface Product {
   name: string;
   sku: string;
   category: string;
-  warehouse: 'BM Warehouse' | 'Vendor Warehouse';
+  warehouse: string;
   vendor?: string;
   imageUrl?: string;
   stock: number;

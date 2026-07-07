@@ -36,7 +36,7 @@ const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
       { key: 'inventory',  label: 'Inventory',  icon: 'ri-archive-stack-line',   actions: ['edit', 'delete'] },
       { key: 'orders',     label: 'Orders',     icon: 'ri-shopping-bag-3-line',  actions: ['edit', 'delete'] },
       { key: 'deliveries', label: 'Deliveries', icon: 'ri-truck-line',           actions: ['edit', 'delete'] },
-      { key: 'warehouses', label: 'Warehouses', icon: 'ri-building-2-line',      actions: [] },
+      { key: 'warehouses', label: 'Warehouses', icon: 'ri-building-2-line',      actions: ['edit', 'delete'] },
       { key: 'transfers',  label: 'Transfers',  icon: 'ri-swap-box-line',        actions: [] },
       { key: 'returns',    label: 'Returns',    icon: 'ri-arrow-go-back-line',   actions: ['edit', 'delete'] },
       { key: 'purchases',  label: 'Purchases',  icon: 'ri-shopping-cart-2-line', actions: [] },
@@ -208,7 +208,7 @@ export default function RolesPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Roles</h1>
+            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Roles</h1>
             <p className="text-sm text-gray-500 mt-0.5">Control which pages each role can view, edit, and delete</p>
           </div>
           <button
@@ -368,7 +368,7 @@ export default function RolesPage() {
                     const allOn = group.pages.every(p => form.permissions[p.key].view);
                     const someOn = group.pages.some(p => form.permissions[p.key].view);
                     return (
-                      <div key={group.group} className="border border-gray-100 rounded-xl overflow-hidden">
+                      <div key={group.group} className="border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
                         {/* Group header */}
                         <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-100">
                           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">

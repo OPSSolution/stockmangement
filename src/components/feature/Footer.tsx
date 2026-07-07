@@ -12,7 +12,7 @@ export default function Footer() {
   return (
     <>
       {/* Mobile bottom nav — thumb-friendly quick access */}
-      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-100 safe-area-bottom">
+      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-gray-100/80 shadow-[0_-2px_12px_rgba(0,0,0,0.04)] safe-area-bottom">
         <div className="flex items-center justify-around">
           {bottomNavItems.map((item) => (
             <NavLink
@@ -38,7 +38,7 @@ export default function Footer() {
       <footer className="hidden sm:block bg-white border-t border-gray-100 mt-auto">
         <div className="px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-6 h-6 rounded-md bg-emerald-500 flex items-center justify-center">
+            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center">
               <i className="ri-box-3-fill text-white text-xs"></i>
             </div>
             <span className="text-sm font-semibold text-gray-800">StockManagement</span>

@@ -161,7 +161,7 @@ export default function NotificationAnalyticsPage() {
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Notification Analytics</h1>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Notification Analytics</h1>
             <p className="text-sm text-gray-400 mt-1">Delivery rates, read rates, and channel performance</p>
           </div>
           <div className="flex items-center gap-2">
@@ -206,7 +206,7 @@ export default function NotificationAnalyticsPage() {
         </div>
 
         {loading ? (
-          <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
             <i className="ri-loader-4-line animate-spin text-gray-400 text-2xl"></i>
             <p className="text-sm text-gray-400 mt-2">Loading analytics...</p>
           </div>
@@ -215,7 +215,7 @@ export default function NotificationAnalyticsPage() {
             {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
               {/* Daily Trend */}
-              <div className="bg-white rounded-xl border border-gray-100 p-5">
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                 <h3 className="text-sm font-bold text-gray-900 mb-1">Daily Volume</h3>
                 <p className="text-xs text-gray-400 mb-4">Notifications sent per day across all channels</p>
                 {dailyData.length === 0 ? (
@@ -245,7 +245,7 @@ export default function NotificationAnalyticsPage() {
               </div>
 
               {/* Type Breakdown Pie */}
-              <div className="bg-white rounded-xl border border-gray-100 p-5">
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                 <h3 className="text-sm font-bold text-gray-900 mb-1">By Type</h3>
                 <p className="text-xs text-gray-400 mb-4">Distribution of notification types</p>
                 {pieData.length === 0 ? (
@@ -281,7 +281,7 @@ export default function NotificationAnalyticsPage() {
             </div>
 
             {/* Delivery Rates by Type */}
-            <div className="bg-white rounded-xl border border-gray-100 p-5">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
               <h3 className="text-sm font-bold text-gray-900 mb-1">Delivery Rates by Type</h3>
               <p className="text-xs text-gray-400 mb-4">
                 Percentage of notifications successfully delivered via each channel
@@ -324,9 +324,9 @@ export default function NotificationAnalyticsPage() {
             </div>
 
             {/* Type Detail Table */}
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-100">
-                <h3 className="text-sm font-bold text-gray-900">Channel Performance Detail</h3>
+                <h3 className="text-sm font-bold text-gray-900 tracking-tight">Channel Performance Detail</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">

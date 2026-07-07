@@ -93,15 +93,15 @@ export default function CategoriesPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+          <div className="rounded-2xl border border-gray-100 shadow-sm bg-gray-50 p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-gray-400">Total Categories</p>
             <p className="text-2xl font-bold text-gray-900 mt-2">{categoryCount}</p>
           </div>
-          <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+          <div className="rounded-2xl border border-gray-100 shadow-sm bg-gray-50 p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-gray-400">Used In Inventory</p>
             <p className="text-sm text-gray-600 mt-2">The category filter on inventory now reads from this list.</p>
           </div>
-          <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+          <div className="rounded-2xl border border-gray-100 shadow-sm bg-gray-50 p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-gray-400">Tip</p>
             <p className="text-sm text-gray-600 mt-2">You can add custom categories here and they will appear in the inventory dropdown.</p>
           </div>
@@ -109,7 +109,7 @@ export default function CategoriesPage() {
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {categories.map((item) => (
-            <article key={item.id} className="rounded-xl border border-gray-100 p-4 hover:border-emerald-200 hover:bg-emerald-50/40 transition-colors">
+            <article key={item.id} className="rounded-2xl border border-gray-100 shadow-sm p-4 hover:border-emerald-200 hover:bg-emerald-50/40 transition-colors">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-gray-900">{item.name}</p>

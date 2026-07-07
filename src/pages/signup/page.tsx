@@ -35,7 +35,7 @@ export default function SignupPage() {
           <div className="w-14 h-14 bg-emerald-600 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
             <i className="ri-box-3-line text-white text-2xl"></i>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">StockManagement</h1>
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">StockManagement</h1>
           <p className="text-sm text-gray-500 mt-1">Create your admin account</p>
         </div>
 

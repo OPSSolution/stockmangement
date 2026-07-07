@@ -273,7 +273,7 @@ export default function OrdersPage() {
                   <i className={`${kpi.icon} ${kpi.color} text-lg`}></i>
                 </div>
                 <div>
-                  <p className="text-xl font-bold text-gray-900">{kpi.value}</p>
+                  <p className="text-xl font-bold text-gray-900 tracking-tight">{kpi.value}</p>
                   <p className="text-xs text-gray-400">{kpi.label}</p>
                 </div>
               </div>
@@ -391,7 +391,7 @@ export default function OrdersPage() {
                             )}
                             {openMenuId === order.id && menuPosition && (showEdit || showDelete) && (
                               <div
-                                className="fixed w-36 bg-white border border-gray-100 rounded-xl z-[60] py-1 shadow-md"
+                                className="fixed w-36 bg-white border border-gray-100 rounded-2xl shadow-sm z-[60] py-1 shadow-md"
                                 style={{ left: menuPosition.left, top: menuPosition.top }}
                                 onClick={(e) => e.stopPropagation()}
                                 onMouseLeave={() => {

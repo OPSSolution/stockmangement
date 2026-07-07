@@ -140,7 +140,7 @@ export default function NotificationHistoryPage() {
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Notification History</h1>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Notification History</h1>
             <p className="text-sm text-gray-400 mt-1">
               {filtered.length} notifications total · {filtered.filter((n) => !n.is_read).length} unread
             </p>
@@ -171,7 +171,7 @@ export default function NotificationHistoryPage() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white rounded-xl border border-gray-100 p-4 flex flex-wrap items-center gap-3">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 flex-1 min-w-[200px]">
             <i className="ri-search-line text-gray-400 text-sm"></i>
             <input
@@ -233,7 +233,7 @@ export default function NotificationHistoryPage() {
         </div>
 
         {/* List */}
-        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           {loading ? (
             <div className="py-16 text-center">
               <i className="ri-loader-4-line animate-spin text-gray-400 text-2xl"></i>

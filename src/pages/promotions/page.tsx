@@ -215,14 +215,14 @@ export default function PromotionsPage() {
                 <div className={`w-9 h-9 ${card.bg} rounded-lg flex items-center justify-center mb-3`}>
                   <i className={`${card.icon} ${card.color}`}></i>
                 </div>
-                <p className="text-xl font-bold text-gray-900">{card.value}</p>
+                <p className="text-xl font-bold text-gray-900 tracking-tight">{card.value}</p>
                 <p className="text-xs text-gray-500 mt-0.5">{card.label}</p>
               </button>
             ))}
           </div>
 
           {/* Toolbar */}
-          <div className="bg-white rounded-xl border border-gray-100 mb-4">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm mb-4">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-wrap gap-3">
               <div className="flex items-center gap-1.5 bg-gray-50 rounded-lg p-1 flex-wrap">
                 {(['all', 'active', 'scheduled', 'paused', 'expired', 'draft'] as FilterTab[]).map((tab) => (
@@ -304,11 +304,11 @@ export default function PromotionsPage() {
                         {/* Stats */}
                         <div className="hidden lg:flex items-center gap-6 text-center flex-shrink-0">
                           <div>
-                            <p className="text-sm font-bold text-gray-900">{p.usageCount}</p>
+                            <p className="text-sm font-bold text-gray-900 tracking-tight">{p.usageCount}</p>
                             <p className="text-xs text-gray-400">Uses</p>
                           </div>
                           <div>
-                            <p className="text-sm font-bold text-gray-900">{p.totalUnitsSold}</p>
+                            <p className="text-sm font-bold text-gray-900 tracking-tight">{p.totalUnitsSold}</p>
                             <p className="text-xs text-gray-400">Units Sold</p>
                           </div>
                           <div>
@@ -426,7 +426,7 @@ export default function PromotionsPage() {
                             {/* Promo Stats */}
                             <div className="space-y-3">
                               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Performance</p>
-                              <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-3">
+                              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
                                 {[
                                   { label: 'Total Revenue', val: formatAmount(p.totalRevenue), icon: 'ri-money-dollar-circle-line', color: 'text-emerald-600' },
                                   { label: 'Units Sold', val: `${p.totalUnitsSold}`, icon: 'ri-shopping-bag-3-line', color: 'text-sky-600' },
@@ -453,7 +453,7 @@ export default function PromotionsPage() {
                                 )}
                               </div>
                               {p.description && (
-                                <div className="bg-white rounded-xl border border-gray-100 p-4">
+                                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
                                   <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Description</p>
                                   <p className="text-sm text-gray-600">{p.description}</p>
                                 </div>

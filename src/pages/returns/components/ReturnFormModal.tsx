@@ -201,7 +201,7 @@ export default function ReturnFormModal({ ret, onClose, onSave }: Props) {
             </div>
           </section>
 
-          <section className="rounded-xl border border-gray-100 p-4">
+          <section className="rounded-2xl border border-gray-100 shadow-sm p-4">
             <div className="flex items-center justify-between gap-3 mb-3">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Returned items</p>
               <button type="button" onClick={() => setForm((prev) => ({ ...prev, items: [...prev.items, { ...emptyItem }] }))} className="text-xs font-medium text-emerald-700 hover:underline cursor-pointer">

@@ -41,52 +41,50 @@ function rowToRecord(row: any): DeliveryRecord {
 
   return {
     id: String(row.id ?? ''),
-    orderId: row.order_id ?? row.orderId ?? '',
-    destination: row.destination ?? row.customer ?? '',
+    transferId: row.transfer_id ?? '',
+    fromWarehouse: row.from_warehouse ?? row.warehouse ?? '',
+    toWarehouse: row.to_warehouse ?? row.destination ?? '',
     items,
     items_detail: row.items_detail ?? itemsToDetail(items),
     status: (row.status ?? 'prepare') as DeliveryStep,
-    warehouse: row.warehouse ?? '',
     estimatedDelivery: row.estimated_delivery ?? row.estimatedDelivery ?? '',
     timeline: Array.isArray(row.timeline) ? row.timeline : [],
     last_update: row.last_update ?? row.lastUpdate ?? '',
     created_at: row.created_at ?? '',
-    transfer_id: row.transfer_id ?? '',
-    from_warehouse_id: row.from_warehouse_id ?? '',
-    to_warehouse_id: row.to_warehouse_id ?? '',
     driver_name: row.driver_name ?? '',
     vehicle_plate: row.vehicle_plate ?? '',
     departure_time: row.departure_time ?? '',
     arrival_time: row.arrival_time ?? '',
     imageUrl: row.image_url ?? row.imageUrl ?? '',
+    notes: row.notes ?? '',
   };
 }
 
 function recordToRow(record: DeliveryRecord) {
   return {
     id: record.id,
-    order_id: record.orderId,
-    destination: record.destination,
+    transfer_id: record.transferId,
+    from_warehouse: record.fromWarehouse,
+    to_warehouse: record.toWarehouse,
+    warehouse: record.fromWarehouse,
+    destination: record.toWarehouse,
     items_detail: record.items_detail || itemsToDetail(record.items),
     status: record.status,
-    warehouse: record.warehouse,
     estimated_delivery: record.estimatedDelivery,
     timeline: record.timeline,
     last_update: record.last_update,
     created_at: record.created_at,
-    transfer_id: record.transfer_id,
-    from_warehouse_id: record.from_warehouse_id,
-    to_warehouse_id: record.to_warehouse_id,
     driver_name: record.driver_name,
     vehicle_plate: record.vehicle_plate,
     departure_time: record.departure_time,
     arrival_time: record.arrival_time,
     image_url: record.imageUrl,
+    notes: record.notes,
   };
 }
 
 export default function DeliveriesPage() {
-  const { canEdit, canDelete } = useAuth();
+  const { canEdit, canDelete, profile } = useAuth();
   const showEdit = canEdit('deliveries');
   const showDelete = canDelete('deliveries');
   const [deliveries, setDeliveries] = useState<DeliveryRecord[]>([]);
@@ -148,12 +146,12 @@ export default function DeliveriesPage() {
 
     return deliveries.filter((d) => {
       const matchStatus = filterStatus === 'all' || d.status === filterStatus;
-      const matchWarehouse = filterWarehouse === 'all' || d.warehouse === filterWarehouse;
+      const matchWarehouse = filterWarehouse === 'all' || d.fromWarehouse === filterWarehouse || d.toWarehouse === filterWarehouse;
       const matchSearch =
-        d.orderId.toLowerCase().includes(q) ||
-        d.destination.toLowerCase().includes(q) ||
         d.id.toLowerCase().includes(q) ||
-        (d.transfer_id || '').toLowerCase().includes(q);
+        d.fromWarehouse.toLowerCase().includes(q) ||
+        d.toWarehouse.toLowerCase().includes(q) ||
+        (d.transferId || '').toLowerCase().includes(q);
       return matchStatus && matchWarehouse && matchSearch;
     });
   }, [deliveries, filterStatus, filterWarehouse, search]);
@@ -166,12 +164,15 @@ export default function DeliveriesPage() {
     delivered: deliveries.filter((d) => d.status === 'delivered').length,
   }), [deliveries]);
 
-  const handleAdvance = async (id: string, nextStep: DeliveryStep, note: string) => {
+  const handleAdvance = async (id: string, nextStep: DeliveryStep, note: string, photoUrl?: string) => {
     const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
     const target = deliveries.find((d) => d.id === id);
     if (!target) return;
 
-    const newTimeline = [...target.timeline, { step: nextStep, timestamp: now, note, completedBy: 'Admin' }];
+    const newTimeline = [
+      ...target.timeline,
+      { step: nextStep, timestamp: now, note, completedBy: profile?.full_name || 'Admin', photoUrl },
+    ];
 
     await supabase
       .from('deliveries')
@@ -223,7 +224,7 @@ export default function DeliveriesPage() {
   ];
 
   const availableWarehouses = useMemo(
-    () => [...new Set(deliveries.map((d) => d.warehouse).filter(Boolean))],
+    () => [...new Set(deliveries.flatMap((d) => [d.fromWarehouse, d.toWarehouse]).filter(Boolean))],
     [deliveries]
   );
 
@@ -253,7 +254,7 @@ export default function DeliveriesPage() {
                 <i className={`${cfg.icon} text-lg`}></i>
               </div>
               <div>
-                <p className="text-2xl font-bold text-gray-900">{kpi.value}</p>
+                <p className="text-2xl font-bold text-gray-900 tracking-tight">{kpi.value}</p>
                 <p className="text-xs text-gray-400">{kpi.label}</p>
               </div>
             </div>
@@ -271,7 +272,7 @@ export default function DeliveriesPage() {
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search order, destination, transfer..."
+                placeholder="Search transfer ID, warehouse..."
                 className="pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg w-60 focus:outline-none focus:ring-2 focus:ring-emerald-200"
               />
             </div>
@@ -321,15 +322,18 @@ export default function DeliveriesPage() {
               const totalItems = delivery.items.reduce((sum, item) => sum + item.quantity, 0);
 
               return (
-                <div key={delivery.id} className="relative border border-gray-100 rounded-xl p-4 hover:border-emerald-200 transition-all cursor-pointer group" onClick={() => setSelectedDelivery(delivery)}>
+                <div key={delivery.id} className="relative border border-gray-100 rounded-2xl shadow-sm p-4 hover:border-emerald-200 transition-all cursor-pointer group" onClick={() => setSelectedDelivery(delivery)}>
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs font-bold text-gray-800">{delivery.orderId}</span>
+                        <span className="font-mono text-xs font-bold text-gray-800">{delivery.transferId || delivery.id}</span>
                         <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cfg.cls}`}>{cfg.label}</span>
                       </div>
-                      <p className="text-sm font-medium text-gray-700 mt-0.5">{delivery.destination}</p>
-                      <p className="text-xs text-gray-400">{delivery.warehouse}</p>
+                      <p className="text-sm font-medium text-gray-700 mt-0.5 flex items-center gap-1.5">
+                        {delivery.fromWarehouse}
+                        <i className="ri-arrow-right-line text-gray-300 text-xs"></i>
+                        {delivery.toWarehouse}
+                      </p>
                     </div>
                     <div className="flex items-center gap-1">
                       {canAdvance ? (
@@ -354,7 +358,7 @@ export default function DeliveriesPage() {
 
                   {openMenuId === delivery.id && menuPosition && (showEdit || showDelete) && (
                     <div
-                      className="fixed w-36 bg-white border border-gray-100 rounded-xl z-[60] py-1 shadow-md"
+                      className="fixed w-36 bg-white border border-gray-100 rounded-2xl shadow-sm z-[60] py-1 shadow-md"
                       style={{ left: menuPosition.left, top: menuPosition.top }}
                       onMouseLeave={() => {
                         setOpenMenuId(null);
@@ -398,17 +402,19 @@ export default function DeliveriesPage() {
                       <div className="w-3.5 h-3.5 flex items-center justify-center">
                         <i className="ri-truck-line text-gray-400"></i>
                       </div>
-                      <span>{delivery.transfer_id || delivery.orderId}</span>
-                      <span className="text-gray-300">-</span>
                       <span className="font-mono">{delivery.id}</span>
+                      {delivery.driver_name && (
+                        <>
+                          <span className="text-gray-300">-</span>
+                          <span>{delivery.driver_name}</span>
+                        </>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-gray-500">
                       <div className="w-3.5 h-3.5 flex items-center justify-center">
                         <i className="ri-box-3-line text-gray-400"></i>
                       </div>
                       <span>{totalItems} item{totalItems !== 1 ? 's' : ''}</span>
-                      <span className="text-gray-300">-</span>
-                      <span>{delivery.warehouse}</span>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-gray-500">
                       <div className="w-3.5 h-3.5 flex items-center justify-center">

@@ -263,7 +263,7 @@ export default function AdminCategoriesPage() {
 
                 <div className="p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                   {subsForSelected.map(sub => (
-                    <div key={sub.id} className="border border-gray-100 rounded-xl p-4 hover:border-gray-200 transition-all group">
+                    <div key={sub.id} className="border border-gray-100 rounded-2xl shadow-sm p-4 hover:border-gray-200 transition-all group">
                       <div className="flex items-start justify-between">
                         <div>
                           <p className="text-sm font-semibold text-gray-800">{sub.name}</p>

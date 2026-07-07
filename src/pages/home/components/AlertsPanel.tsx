@@ -61,7 +61,7 @@ export default function AlertsPanel() {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-xl border border-gray-100 flex flex-col p-6">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col p-6">
         <div className="flex items-center gap-2 text-gray-400">
           <i className="ri-loader-4-line animate-spin"></i>
           <span className="text-sm">Loading alerts...</span>
@@ -73,10 +73,10 @@ export default function AlertsPanel() {
   const totalCritical = stockAlerts.filter((a) => a.severity === 'critical').length;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100 flex flex-col">
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-bold text-gray-900">Low Stock Alerts</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Low Stock Alerts</h3>
           <p className="text-xs text-gray-400 mt-0.5">{stockAlerts.length + stockNotifications.length} active alerts</p>
         </div>
         <span className="flex items-center gap-1 text-xs font-semibold text-red-500 bg-red-50 px-2.5 py-1 rounded-full">

@@ -28,7 +28,7 @@ export default function WarehouseSnapshot() {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-xl border border-gray-100 p-6">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
         <div className="flex items-center gap-2 text-gray-400">
           <i className="ri-loader-4-line animate-spin"></i>
           <span className="text-sm">Loading snapshot...</span>
@@ -70,14 +70,14 @@ export default function WarehouseSnapshot() {
   ];
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100">
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
       <div className="px-5 py-4 border-b border-gray-100">
-        <h3 className="text-sm font-bold text-gray-900">Warehouse Snapshot</h3>
+        <h3 className="text-sm font-bold text-gray-900 tracking-tight">Warehouse Snapshot</h3>
         <p className="text-xs text-gray-400 mt-0.5">BM vs Vendor warehouse comparison</p>
       </div>
       <div className="p-4 grid grid-cols-2 gap-3">
         {warehouseStats.map((w) => (
-          <div key={w.name} className="rounded-xl border border-gray-100 p-4 hover:border-gray-200 transition-colors">
+          <div key={w.name} className="rounded-xl border border-gray-100 p-4 hover:border-emerald-200 hover:shadow-sm transition-all duration-200">
             <div className="flex items-center justify-between mb-3">
               <div className={`w-8 h-8 rounded-lg ${w.iconBg} flex items-center justify-center`}>
                 <i className={`${w.icon} ${w.iconColor} text-sm`}></i>
@@ -85,7 +85,7 @@ export default function WarehouseSnapshot() {
               <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${w.tagColor}`}>{w.tag}</span>
             </div>
             <p className="text-xs font-semibold text-gray-500 mb-1">{w.name}</p>
-            <p className="text-2xl font-bold text-gray-900">{w.total.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-gray-900 tracking-tight">{w.total.toLocaleString()}</p>
             <p className="text-xs text-gray-400 mb-3">total units</p>
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs">

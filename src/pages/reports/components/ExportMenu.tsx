@@ -123,7 +123,7 @@ export default function ExportMenu() {
 
       {/* CSV Dropdown */}
       {open && (
-        <div className="absolute right-0 top-11 w-80 bg-white border border-gray-100 rounded-xl z-50 py-1.5 overflow-hidden"
+        <div className="absolute right-0 top-11 w-80 bg-white border border-gray-100 rounded-2xl shadow-sm z-50 py-1.5 overflow-hidden"
           style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
           <div className="px-4 py-2.5 border-b border-gray-50">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Download as CSV</p>

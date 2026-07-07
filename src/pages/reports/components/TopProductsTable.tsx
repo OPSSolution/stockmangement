@@ -53,10 +53,10 @@ export default function TopProductsTable() {
   }[trend]);
 
   return (
-    <div className="bg-white border border-gray-100 rounded-xl p-5">
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
-          <h3 className="text-sm font-bold text-gray-900">Top Products</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Top Products</h3>
           <p className="text-xs text-gray-400 mt-0.5">Best performers by revenue, units and return rate</p>
         </div>
         <div className="flex items-center gap-1.5 bg-gray-50 rounded-lg p-1">

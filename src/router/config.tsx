@@ -14,6 +14,7 @@ import PurchasesPage from "../pages/purchases/page";
 import VendorsPage from "../pages/vendors/page";
 import ReturnsPage from "../pages/returns/page";
 import WarehousesPage from "../pages/warehouses/page";
+import WarehouseDetailPage from "../pages/warehouses/detail/page";
 import PromotionsPage from "../pages/promotions/page";
 import TeamsPage from "../pages/teams/page";
 import NotificationAnalyticsPage from "../pages/notifications/analytics/page";
@@ -73,6 +74,10 @@ const routes: RouteObject[] = [
   {
     path: "/warehouses",
     element: <ProtectedRoute permKey="warehouses"><WarehousesPage /></ProtectedRoute>,
+  },
+  {
+    path: "/warehouses/:id",
+    element: <ProtectedRoute permKey="warehouses"><WarehouseDetailPage /></ProtectedRoute>,
   },
   {
     path: "/promotions",

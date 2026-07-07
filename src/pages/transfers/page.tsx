@@ -185,14 +185,14 @@ export default function TransfersPage() {
                 <div className={`w-9 h-9 ${card.bg} rounded-lg flex items-center justify-center mb-3`}>
                   <i className={`${card.icon} ${card.color}`}></i>
                 </div>
-                <p className="text-2xl font-bold text-gray-900">{card.value}</p>
+                <p className="text-2xl font-bold text-gray-900 tracking-tight">{card.value}</p>
                 <p className="text-xs text-gray-500 mt-0.5">{card.label}</p>
               </button>
             ))}
           </div>
 
           {/* Toolbar */}
-          <div className="bg-white rounded-xl border border-gray-100 mb-4">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm mb-4">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-wrap gap-3">
               <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-1">
                 {tabs.map((tab) => (

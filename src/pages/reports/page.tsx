@@ -349,7 +349,7 @@ export default function ReportsPage() {
       </div>
 
       {/* Filter bar — single scrollable row */}
-      <div className="flex items-center gap-2 mb-5 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2.5">
+      <div className="flex items-center gap-2 mb-5 bg-gray-50 border border-gray-100 rounded-2xl shadow-sm px-3 py-2.5">
         <span className="text-xs font-medium text-gray-400 uppercase tracking-wide flex-shrink-0">Module</span>
         <div className="flex items-center gap-1.5 overflow-x-auto flex-1 scrollbar-hide">
           <button onClick={() => setSelectedModules(new Set())}
@@ -406,7 +406,7 @@ export default function ReportsPage() {
       {/* KPI Cards — dynamic per selected module */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
         {kpiCards.map((k) => (
-          <div key={k.label} className="bg-white border border-gray-100 rounded-xl p-4">
+          <div key={k.label} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
             {loading ? (
               <div className="animate-pulse space-y-2">
                 <div className="w-9 h-9 bg-gray-100 rounded-lg"></div>
@@ -418,7 +418,7 @@ export default function ReportsPage() {
                 <div className={`w-9 h-9 ${k.bg} rounded-lg flex items-center justify-center mb-2`}>
                   <i className={`${k.icon} ${k.color}`}></i>
                 </div>
-                <p className="text-xl font-bold text-gray-900">{k.value}</p>
+                <p className="text-xl font-bold text-gray-900 tracking-tight">{k.value}</p>
                 <p className="text-xs text-gray-500 mt-0.5">{k.label}</p>
                 <div className="mt-1"><GrowthBadge curr={k.curr} prev={k.prev} /></div>
               </>
@@ -429,8 +429,8 @@ export default function ReportsPage() {
 
       {/* Trend + highlights */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 mb-5">
-        <div className="lg:col-span-3 bg-white border border-gray-100 rounded-xl p-5">
-          <h3 className="text-sm font-bold text-gray-900">Trend — Orders &amp; Revenue</h3>
+        <div className="lg:col-span-3 bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Trend — Orders &amp; Revenue</h3>
           <p className="text-xs text-gray-400 mt-0.5 capitalize">{period} breakdown · hover bars for details</p>
           {loading ? (
             <div className="h-36 flex items-center justify-center text-gray-400">
@@ -439,7 +439,7 @@ export default function ReportsPage() {
           ) : <TrendChart trend={trend} formatAmount={formatAmount} />}
         </div>
 
-        <div className="lg:col-span-2 bg-white border border-gray-100 rounded-xl p-5">
+        <div className="lg:col-span-2 bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
           <h3 className="text-sm font-bold text-gray-900 mb-3">Period Highlights</h3>
           {loading ? (
             <div className="space-y-3">{Array(6).fill(0).map((_, i) => <div key={i} className="h-9 bg-gray-100 rounded-lg animate-pulse"></div>)}</div>
@@ -464,10 +464,10 @@ export default function ReportsPage() {
       </div>
 
       {/* Module Breakdown Table */}
-      <div className="bg-white border border-gray-100 rounded-xl mb-5 overflow-hidden">
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm mb-5 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-bold text-gray-900">Module Breakdown</h3>
+            <h3 className="text-sm font-bold text-gray-900 tracking-tight">Module Breakdown</h3>
             <p className="text-xs text-gray-400 mt-0.5">
               {periodLabel(period, periodValue)}
               {warehouse && <span className="ml-1.5 font-medium text-emerald-600">· {warehouse}</span>}
@@ -510,7 +510,7 @@ export default function ReportsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3.5 text-right">
-                    <span className="text-sm font-bold text-gray-900">{mod.count}</span>
+                    <span className="text-sm font-bold text-gray-900 tracking-tight">{mod.count}</span>
                   </td>
                   <td className="px-4 py-3.5 text-right">
                     <GrowthBadge curr={mod.count} prev={mod.prevCount} />

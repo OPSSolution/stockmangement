@@ -67,7 +67,7 @@ export default function StockTable() {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-xl border border-gray-100 p-8">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8">
         <div className="flex items-center gap-2 text-gray-400">
           <i className="ri-loader-4-line animate-spin"></i>
           <span className="text-sm">Loading inventory...</span>
@@ -77,11 +77,11 @@ export default function StockTable() {
   }
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100">
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
       {/* Header */}
       <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-bold text-gray-900">Inventory Overview</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Inventory Overview</h3>
           <p className="text-xs text-gray-400 mt-0.5">All products across warehouses</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

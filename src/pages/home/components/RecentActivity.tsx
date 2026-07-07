@@ -99,11 +99,11 @@ export default function RecentActivity() {
   const activeOption = FILTER_OPTIONS.find(o => o.key === filter) ?? FILTER_OPTIONS[0];
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100">
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
       {/* Header */}
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-bold text-gray-900">Recent Activity</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Recent Activity</h3>
           <p className="text-xs text-gray-400 mt-0.5">Stock history &amp; movements</p>
         </div>
 
@@ -119,7 +119,7 @@ export default function RecentActivity() {
           </button>
 
           {dropdownOpen && (
-            <div className="absolute right-0 top-8 w-44 bg-white border border-gray-100 rounded-xl shadow-lg z-20 py-1 overflow-hidden">
+            <div className="absolute right-0 top-8 w-44 bg-white border border-gray-100 rounded-2xl shadow-lg shadow-gray-200/50 z-20 py-1 overflow-hidden">
               {FILTER_OPTIONS.map((opt) => (
                 <button
                   key={String(opt.key)}

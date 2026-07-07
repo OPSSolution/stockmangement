@@ -515,7 +515,7 @@ export default function NotificationSettingsPage() {
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Notification Settings</h1>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Notification Settings</h1>
             <p className="text-sm text-gray-400 mt-1">Customize how and when you receive alerts</p>
           </div>
           <div className="flex items-center gap-2">
@@ -537,9 +537,9 @@ export default function NotificationSettingsPage() {
         </div>
 
         {/* Alert Channels */}
-        <div className="bg-white rounded-xl border border-gray-100">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
           <div className="px-6 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-bold text-gray-900">Alert Channels</h2>
+            <h2 className="text-sm font-bold text-gray-900 tracking-tight">Alert Channels</h2>
             <p className="text-xs text-gray-400 mt-0.5">Choose which channels to receive notifications on</p>
           </div>
           <div className="px-6">
@@ -587,10 +587,10 @@ export default function NotificationSettingsPage() {
 
         {/* Browser Push Setup (Admin Only) */}
         {isAdmin && (
-          <div className="bg-white rounded-xl border border-gray-100">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-bold text-gray-900">Browser Push Setup</h2>
+                <h2 className="text-sm font-bold text-gray-900 tracking-tight">Browser Push Setup</h2>
                 <p className="text-xs text-gray-400 mt-0.5">Generate VAPID keys to enable browser push notifications</p>
               </div>
               <button
@@ -638,9 +638,9 @@ export default function NotificationSettingsPage() {
         )}
 
         {/* Category Thresholds */}
-        <div className="bg-white rounded-xl border border-gray-100">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
           <div className="px-6 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-bold text-gray-900">Stock Thresholds by Category</h2>
+            <h2 className="text-sm font-bold text-gray-900 tracking-tight">Stock Thresholds by Category</h2>
             <p className="text-xs text-gray-400 mt-0.5">
               Set custom low-stock alert thresholds for each product category
             </p>
@@ -677,10 +677,10 @@ export default function NotificationSettingsPage() {
 
         {/* Alert Rules (Admin Only) */}
         {isAdmin && (
-          <div className="bg-white rounded-xl border border-gray-100">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-bold text-gray-900">Alert Rules</h2>
+                <h2 className="text-sm font-bold text-gray-900 tracking-tight">Alert Rules</h2>
                 <p className="text-xs text-gray-400 mt-0.5">Create custom notification triggers beyond stock thresholds</p>
               </div>
               <button
@@ -924,10 +924,10 @@ export default function NotificationSettingsPage() {
 
         {/* Webhook Integrations (Admin Only) */}
         {isAdmin && (
-          <div className="bg-white rounded-xl border border-gray-100">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-bold text-gray-900">Webhook Integrations</h2>
+                <h2 className="text-sm font-bold text-gray-900 tracking-tight">Webhook Integrations</h2>
                 <p className="text-xs text-gray-400 mt-0.5">
                   Send alerts to Slack, Discord, Telegram, or custom endpoints
                 </p>

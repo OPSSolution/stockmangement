@@ -14,12 +14,12 @@ export default function Home() {
       subtitle="Welcome back — here's your real-time warehouse and inventory overview."
     >
       {/* KPI Cards */}
-      <section className="mb-5">
+      <section className="mb-6">
         <KpiCards />
       </section>
 
       {/* Middle row: Quick Actions + Warehouse Snapshot + Alerts */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         <div className="lg:col-span-1">
           <QuickActions />
         </div>
@@ -32,12 +32,12 @@ export default function Home() {
       </section>
 
       {/* Inventory Table */}
-      <section className="mb-5">
+      <section className="mb-6">
         <StockTable />
       </section>
 
       {/* Bottom row: Deliveries + Recent Activity */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <DeliveryStatus />
         <RecentActivity />
       </section>

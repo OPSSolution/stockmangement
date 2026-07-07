@@ -19,22 +19,21 @@ interface ProductOption {
 const stepOptions: DeliveryStep[] = ['prepare', 'ready', 'in_transit', 'delivered'];
 
 const emptyForm = {
-  orderId: '',
-  destination: '',
+  fromWarehouse: '',
+  toWarehouse: '',
   items: [] as { productName: string; sku: string; quantity: number }[],
   status: 'prepare' as DeliveryStep,
-  warehouse: '',
   estimatedDelivery: '',
   timeline: [] as { step: DeliveryStep; timestamp: string; note: string; completedBy?: string }[],
   last_update: '',
   created_at: '',
-  transfer_id: '',
-  from_warehouse_id: '',
-  to_warehouse_id: '',
+  transferId: '',
   driver_name: '',
+  vehicle_plate: '',
   departure_time: '',
   arrival_time: '',
   imageUrl: '',
+  notes: '',
 };
 
 const formatStep = (step: DeliveryStep) => step.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -43,6 +42,7 @@ const inputClass = 'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg f
 export default function DeliveryFormModal({ delivery, onClose, onSave }: DeliveryFormModalProps) {
   const [form, setForm] = useState(emptyForm);
   const [products, setProducts] = useState<ProductOption[]>([]);
+  const [warehouses, setWarehouses] = useState<string[]>([]);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [selectedQty, setSelectedQty] = useState(1);
   const [imageMode, setImageMode] = useState<'file' | 'url'>('file');
@@ -58,42 +58,54 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
       const { data, error } = await supabase.from('products').select('id, name, sku, stock, warehouse');
       if (!error) setProducts((data || []) as ProductOption[]);
     };
+    const fetchWarehouses = async () => {
+      const { data, error } = await supabase.from('warehouses').select('name').order('name', { ascending: true });
+      if (!error && data) setWarehouses(data.map((w) => w.name as string));
+    };
 
     fetchProducts();
+    fetchWarehouses();
   }, []);
 
   useEffect(() => {
     if (!delivery) {
       setForm({
         ...emptyForm,
-        transfer_id: autoTransferId,
+        transferId: autoTransferId,
       });
       return;
     }
 
     setForm({
-      orderId: delivery.orderId,
-      destination: delivery.destination,
+      fromWarehouse: delivery.fromWarehouse,
+      toWarehouse: delivery.toWarehouse,
       items: delivery.items,
       status: delivery.status,
-      warehouse: delivery.warehouse,
       estimatedDelivery: delivery.estimatedDelivery,
       timeline: delivery.timeline,
       last_update: delivery.last_update,
       created_at: delivery.created_at,
-      transfer_id: delivery.transfer_id || autoTransferId,
-      from_warehouse_id: delivery.from_warehouse_id || '',
-      to_warehouse_id: delivery.to_warehouse_id || '',
+      transferId: delivery.transferId || autoTransferId,
       driver_name: delivery.driver_name || '',
+      vehicle_plate: delivery.vehicle_plate || '',
       departure_time: delivery.departure_time || '',
       arrival_time: delivery.arrival_time || '',
       imageUrl: delivery.imageUrl || '',
+      notes: delivery.notes || '',
     });
   }, [delivery, autoTransferId]);
 
+  useEffect(() => {
+    if (!delivery && !form.fromWarehouse && warehouses.length > 0) {
+      setForm((prev) => ({ ...prev, fromWarehouse: warehouses[0] }));
+    }
+  }, [warehouses, delivery, form.fromWarehouse]);
+
   const availableProducts = products.filter(
-    (p) => p.warehouse === form.warehouse && p.stock > 0 && !form.items.some((item) => item.sku === p.sku)
+    (p) => p.warehouse === form.fromWarehouse && p.stock > 0 && !form.items.some((item) => item.sku === p.sku)
   );
+
+  const destinationWarehouses = warehouses.filter((w) => w !== form.fromWarehouse);
 
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProductId);
@@ -129,13 +141,18 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
   };
 
   const handleSubmit = () => {
-    if (!form.orderId.trim() || !form.destination.trim()) {
-      setError('Please fill in Order ID and Destination.');
+    if (!form.fromWarehouse.trim() || !form.toWarehouse.trim()) {
+      setError('Please select the from and to warehouse.');
       return;
     }
 
-    if (!form.warehouse.trim() || !form.estimatedDelivery.trim()) {
-      setError('Please complete warehouse and estimated delivery.');
+    if (form.fromWarehouse === form.toWarehouse) {
+      setError('From and to warehouse must be different.');
+      return;
+    }
+
+    if (!form.estimatedDelivery.trim()) {
+      setError('Please set an estimated delivery date.');
       return;
     }
 
@@ -159,23 +176,22 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
 
     const record: DeliveryRecord = {
       id: delivery?.id || `DEL-${Date.now()}`,
-      orderId: form.orderId.trim(),
-      destination: form.destination.trim(),
+      transferId: form.transferId.trim(),
+      fromWarehouse: form.fromWarehouse.trim(),
+      toWarehouse: form.toWarehouse.trim(),
       items,
       items_detail: items.map((item) => `${item.productName}|${item.sku}|${item.quantity}`).join('\n'),
       status: form.status,
-      warehouse: form.warehouse.trim(),
       estimatedDelivery: form.estimatedDelivery.trim(),
       timeline,
       last_update: now,
       created_at: delivery?.created_at || now,
-      transfer_id: form.transfer_id.trim(),
-      from_warehouse_id: form.from_warehouse_id.trim(),
-      to_warehouse_id: form.to_warehouse_id.trim(),
       driver_name: form.driver_name.trim(),
+      vehicle_plate: form.vehicle_plate.trim(),
       departure_time: form.departure_time.trim(),
       arrival_time: form.arrival_time.trim(),
       imageUrl: form.imageUrl.trim() || undefined,
+      notes: form.notes.trim(),
     };
 
     onSave(record);
@@ -187,7 +203,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 shrink-0">
           <div>
             <h2 className="text-base font-bold text-gray-900">{delivery ? 'Edit Delivery' : 'Create Delivery'}</h2>
-            <p className="text-xs text-gray-400 mt-0.5">{delivery ? 'Update shipment details' : 'Add a new shipment record'}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{delivery ? 'Update shipment details' : 'Move stock from one warehouse to another'}</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
             <i className="ri-close-line text-lg"></i>
@@ -196,11 +212,29 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
 
         <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           <section className="space-y-4">
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Shipment details</p>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Route</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Order ID</label>
-                <input value={form.orderId} onChange={(e) => setForm((prev) => ({ ...prev, orderId: e.target.value }))} placeholder="ORD-0001" className={inputClass} />
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">From Warehouse</label>
+                <select
+                  value={form.fromWarehouse}
+                  onChange={(e) => setForm((prev) => ({ ...prev, fromWarehouse: e.target.value, items: [] }))}
+                  className={inputClass}
+                >
+                  <option value="">Select warehouse</option>
+                  {warehouses.map((w) => <option key={w} value={w}>{w}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">To Warehouse</label>
+                <select
+                  value={form.toWarehouse}
+                  onChange={(e) => setForm((prev) => ({ ...prev, toWarehouse: e.target.value }))}
+                  className={inputClass}
+                >
+                  <option value="">Select warehouse</option>
+                  {destinationWarehouses.map((w) => <option key={w} value={w}>{w}</option>)}
+                </select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Status</label>
@@ -208,26 +242,18 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                   {stepOptions.map((step) => <option key={step} value={step}>{formatStep(step)}</option>)}
                 </select>
               </div>
-              <div className="md:col-span-2">
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Destination</label>
-                <input value={form.destination} onChange={(e) => setForm((prev) => ({ ...prev, destination: e.target.value }))} placeholder="Customer or location name" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Warehouse</label>
-                <input value={form.warehouse} onChange={(e) => setForm((prev) => ({ ...prev, warehouse: e.target.value }))} placeholder="BM Warehouse" className={inputClass} />
-              </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Estimated delivery</label>
                 <input type="date" value={form.estimatedDelivery} onChange={(e) => setForm((prev) => ({ ...prev, estimatedDelivery: e.target.value }))} className={inputClass} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Transfer ID</label>
-                <input value={form.transfer_id} onChange={(e) => setForm((prev) => ({ ...prev, transfer_id: e.target.value }))} placeholder="TRF-00001" className={inputClass} />
+                <input value={form.transferId} onChange={(e) => setForm((prev) => ({ ...prev, transferId: e.target.value }))} placeholder="TRF-00001" className={inputClass} />
               </div>
             </div>
           </section>
 
-          <section className="rounded-xl border border-gray-100 p-4">
+          <section className="rounded-2xl border border-gray-100 shadow-sm p-4">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Delivery image</p>
             <div className="flex items-center gap-2 mb-2">
               <button
@@ -268,7 +294,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
             )}
           </section>
 
-          <section className="rounded-xl border border-gray-100 p-4">
+          <section className="rounded-2xl border border-gray-100 shadow-sm p-4">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Logistics</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -276,12 +302,8 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                 <input value={form.driver_name} onChange={(e) => setForm((prev) => ({ ...prev, driver_name: e.target.value }))} placeholder="John Doe" className={inputClass} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">From warehouse</label>
-                <input value={form.from_warehouse_id} onChange={(e) => setForm((prev) => ({ ...prev, from_warehouse_id: e.target.value }))} placeholder="WH-001" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">To warehouse</label>
-                <input value={form.to_warehouse_id} onChange={(e) => setForm((prev) => ({ ...prev, to_warehouse_id: e.target.value }))} placeholder="WH-002" className={inputClass} />
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Vehicle plate</label>
+                <input value={form.vehicle_plate} onChange={(e) => setForm((prev) => ({ ...prev, vehicle_plate: e.target.value }))} placeholder="BMA 4521" className={inputClass} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Departure time</label>
@@ -291,20 +313,28 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Arrival time</label>
                 <input type="datetime-local" value={form.arrival_time} onChange={(e) => setForm((prev) => ({ ...prev, arrival_time: e.target.value }))} className={inputClass} />
               </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Notes (optional)</label>
+                <textarea
+                  value={form.notes}
+                  onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Any additional remarks about this shipment..."
+                  rows={2}
+                  className={inputClass}
+                />
+              </div>
             </div>
           </section>
 
-          <section className="rounded-xl border border-gray-100 p-4">
+          <section className="rounded-2xl border border-gray-100 shadow-sm p-4">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Items</p>
-              <button type="button" onClick={() => setForm((prev) => ({ ...prev, items: [...prev.items, { productName: '', sku: '', quantity: 1 }] }))} className="text-xs font-medium text-emerald-700 hover:underline cursor-pointer">
-                + Add item
-              </button>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Items (picked from {form.fromWarehouse || 'the from-warehouse'})</p>
             </div>
             <div className="flex flex-col sm:flex-row gap-2">
               <select
                 value={selectedProductId}
                 onChange={(e) => setSelectedProductId(e.target.value)}
+                disabled={!form.fromWarehouse}
                 className={`${inputClass} sm:flex-1`}
               >
                 <option value="">Select inventory item</option>

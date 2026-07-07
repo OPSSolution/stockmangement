@@ -18,7 +18,7 @@ const mainNavItems: NavItem[] = [
   { label: 'Warehouses', icon: 'ri-building-2-line',      path: '/warehouses', permKey: 'warehouses' },
   { label: 'Transfers',  icon: 'ri-swap-box-line',        path: '/transfers',  permKey: 'transfers' },
   { label: 'Returns',    icon: 'ri-arrow-go-back-line',   path: '/returns',    permKey: 'returns' },
-  { label: 'Purchases',  icon: 'ri-shopping-cart-2-line', path: '/purchases',  permKey: 'purchases' },
+  // { label: 'Purchases',  icon: 'ri-shopping-cart-2-line', path: '/purchases',  permKey: 'purchases' },
   { label: 'Promotions', icon: 'ri-price-tag-3-line',     path: '/promotions', permKey: 'promotions' },
   { label: 'Vendors',    icon: 'ri-store-2-line',         path: '/vendors',    permKey: 'vendors' },
 ];
@@ -26,13 +26,13 @@ const mainNavItems: NavItem[] = [
 const managementNavItems: NavItem[] = [
   { label: 'Reports',      icon: 'ri-bar-chart-2-line',  path: '/reports',      permKey: 'reports' },
   { label: 'Teams',        icon: 'ri-team-line',         path: '/teams',        permKey: 'teams' },
-  { label: 'Requirements', icon: 'ri-list-check-2',      path: '/requirements', permKey: 'requirements' },
+  // { label: 'Requirements', icon: 'ri-list-check-2',      path: '/requirements', permKey: 'requirements' },
   { label: 'Roles',        icon: 'ri-shield-user-line',  path: '/admin/roles',  permKey: 'roles' },
 ];
 
-const adminNavItems: NavItem[] = [
-  { label: 'Categories', icon: 'ri-price-tag-2-line', path: '/admin/categories', permKey: 'categories' },
-];
+// const adminNavItems: NavItem[] = [
+//   { label: 'Categories', icon: 'ri-price-tag-2-line', path: '/admin/categories', permKey: 'categories' },
+// ];
 
 const notificationNavItems: NavItem[] = [
   { label: 'History',   icon: 'ri-history-line',        path: '/notifications/history',   permKey: 'notifications_history' },
@@ -58,7 +58,7 @@ function NavItemLink({ item, onClose }: { item: NavItem; onClose?: () => void })
       end={item.path === '/'}
       onClick={onClose}
       className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap ${
+        `relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer whitespace-nowrap ${
           isActive
             ? 'bg-emerald-50 text-emerald-700'
             : 'text-gray-500 hover:bg-gray-50 hover:text-gray-800'
@@ -67,6 +67,9 @@ function NavItemLink({ item, onClose }: { item: NavItem; onClose?: () => void })
     >
       {({ isActive }) => (
         <>
+          {isActive && (
+            <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-emerald-500 rounded-r-full" />
+          )}
           <div className="w-5 h-5 flex items-center justify-center">
             <i className={`${item.icon} text-base ${isActive ? 'text-emerald-600' : 'text-gray-400'}`}></i>
           </div>
@@ -89,7 +92,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const visibleMain          = mainNavItems.filter(i => canAccess(i.permKey));
   const visibleManagement    = managementNavItems.filter(i => canAccess(i.permKey));
   const visibleNotifications = notificationNavItems.filter(i => canAccess(i.permKey));
-  const visibleAdmin         = adminNavItems.filter(i => canAccess(i.permKey));
+  // const visibleAdmin         = adminNavItems.filter(i => canAccess(i.permKey));
 
   const handleSignOut = async () => {
     await signOut();
@@ -114,14 +117,14 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
-      className={`w-60 h-dvh bg-white border-r border-gray-100 flex flex-col fixed left-0 top-0 z-30 transition-transform duration-300 ease-in-out ${
+      className={`w-60 h-dvh bg-white border-r border-gray-100/80 shadow-[1px_0_16px_rgba(0,0,0,0.02)] flex flex-col fixed left-0 top-0 z-30 transition-transform duration-300 ease-in-out ${
         mobileOpen ? 'translate-x-0' : '-translate-x-full'
       } lg:translate-x-0`}
     >
       {/* Brand */}
       <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-sm shadow-emerald-500/30">
             <i className="ri-box-3-fill text-white text-sm"></i>
           </div>
           <div>
@@ -166,14 +169,14 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         )}
 
         {/* Admin */}
-        {visibleAdmin.length > 0 && (
+        {/* {visibleAdmin.length > 0 && (
           <>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest px-3 mb-3 mt-6">Admin</p>
             {visibleAdmin.map(item => (
               <NavItemLink key={item.path} item={item} onClose={onClose} />
             ))}
           </>
-        )}
+        )} */}
       </nav>
 
       {/* User profile */}
@@ -184,8 +187,8 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
           {roleMeta.label}
         </div>
 
-        <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-          <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+        <div className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors duration-200">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-100 to-emerald-200/60 flex items-center justify-center flex-shrink-0">
             <i className="ri-user-line text-emerald-600 text-sm"></i>
           </div>
           <div className="flex-1 min-w-0">

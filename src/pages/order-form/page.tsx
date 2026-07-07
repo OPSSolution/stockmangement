@@ -70,7 +70,7 @@ export default function PublicOrderFormPage() {
     <main className="min-h-screen bg-gray-50 px-4 py-8">
       <div className="mx-auto max-w-2xl bg-white rounded-2xl shadow-sm border border-gray-100">
         <div className="px-6 py-5 border-b border-gray-100">
-          <h1 className="text-xl font-bold text-gray-900">Order Request</h1>
+          <h1 className="text-xl font-bold text-gray-900 tracking-tight">Order Request</h1>
           <p className="text-sm text-gray-500 mt-1">Submit your order details for review.</p>
         </div>
 

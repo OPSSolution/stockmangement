@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { type DeliveryRecord, type DeliveryStep } from '@/mocks/deliveries';
 import DeliveryStepTracker from './DeliveryStepTracker';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface DeliveryDetailModalProps {
   delivery: DeliveryRecord;
   onClose: () => void;
-  onAdvance: (id: string, nextStep: DeliveryStep, note: string) => void;
+  onAdvance: (id: string, nextStep: DeliveryStep, note: string, photoUrl?: string) => void;
 }
 
 const steps: DeliveryStep[] = ['prepare', 'ready', 'in_transit', 'delivered'];
@@ -26,7 +27,9 @@ const timelineIcons: Record<DeliveryStep, string> = {
 };
 
 export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: DeliveryDetailModalProps) {
+  const { profile, isAdmin } = useAuth();
   const [note, setNote] = useState('');
+  const [photo, setPhoto] = useState('');
   const [confirming, setConfirming] = useState(false);
 
   const currentIdx = stepIndex[delivery.status];
@@ -34,10 +37,26 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
   const nextLabel = nextStepLabel[delivery.status];
   const totalItems = delivery.items.reduce((sum, item) => sum + item.quantity, 0);
 
+  // Confirming delivery is the receiving warehouse's call; earlier steps (pack,
+  // dispatch) belong to the sending warehouse. Admins can always do either.
+  const requiredWarehouse = nextStep === 'delivered' ? delivery.toWarehouse : delivery.fromWarehouse;
+  const isReceivingStep = nextStep === 'delivered';
+  const canAdvance = isAdmin || profile?.warehouse === requiredWarehouse;
+
+  const handlePhotoPick = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => setPhoto(String(reader.result || ''));
+    reader.readAsDataURL(file);
+  };
+
   const handleAdvance = () => {
     if (!nextStep) return;
-    onAdvance(delivery.id, nextStep, note || `Moved to ${nextStep}`);
+    onAdvance(delivery.id, nextStep, note || `Moved to ${nextStep}`, photo || undefined);
     setNote('');
+    setPhoto('');
     setConfirming(false);
   };
 
@@ -47,7 +66,7 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
         <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100 shrink-0">
           <div>
             <div className="flex items-center gap-3 flex-wrap">
-              <h2 className="text-base font-bold text-gray-900">DEL - {delivery.orderId}</h2>
+              <h2 className="text-base font-bold text-gray-900">{delivery.id}</h2>
               <span className={`text-xs font-medium px-2 py-1 rounded-full ${
                 delivery.status === 'delivered' ? 'bg-emerald-50 text-emerald-700' :
                 delivery.status === 'in_transit' ? 'bg-sky-50 text-sky-700' :
@@ -57,7 +76,11 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
                 {delivery.status.replace('_', ' ').replace(/^\w/, (c) => c.toUpperCase())}
               </span>
             </div>
-            <p className="text-xs text-gray-400 mt-0.5">{delivery.destination} - {delivery.warehouse}</p>
+            <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1.5">
+              {delivery.fromWarehouse}
+              <i className="ri-arrow-right-line text-gray-300"></i>
+              {delivery.toWarehouse}
+            </p>
           </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
             <i className="ri-close-line text-lg"></i>
@@ -71,9 +94,9 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
           <div className="grid grid-cols-2 gap-3">
             {[
-              { icon: 'ri-truck-line', label: 'Transfer ID', value: delivery.transfer_id || delivery.id },
+              { icon: 'ri-truck-line', label: 'Transfer ID', value: delivery.transferId || delivery.id },
               { icon: 'ri-user-line', label: 'Driver', value: delivery.driver_name || 'Unassigned' },
-              { icon: 'ri-building-2-line', label: 'Warehouse', value: delivery.warehouse },
+              { icon: 'ri-car-line', label: 'Vehicle', value: delivery.vehicle_plate || '—' },
               { icon: 'ri-calendar-check-line', label: 'Est. Delivery', value: delivery.estimatedDelivery },
             ].map((info) => (
               <div key={info.label} className="bg-gray-50 rounded-xl p-3">
@@ -88,8 +111,15 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
             ))}
           </div>
 
+          {delivery.notes && (
+            <div className="bg-gray-50 rounded-xl p-3">
+              <p className="text-xs text-gray-400 mb-1">Notes</p>
+              <p className="text-sm text-gray-700">{delivery.notes}</p>
+            </div>
+          )}
+
           <div>
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Package Contents ({totalItems} items)</p>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Shipment Contents ({totalItems} items)</p>
             <div className="space-y-2">
               {delivery.items.map((item, i) => (
                 <div key={`${item.sku}-${i}`} className="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2.5">
@@ -126,6 +156,9 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
                     </div>
                     <p className="text-sm text-gray-500 mt-0.5">{event.note}</p>
                     <p className="text-xs text-gray-400 mt-0.5">{event.timestamp} {event.completedBy ? `- by ${event.completedBy}` : ''}</p>
+                    {event.photoUrl && (
+                      <img src={event.photoUrl} alt="Proof" className="mt-1.5 w-14 h-14 rounded-md object-cover border border-gray-200" />
+                    )}
                   </div>
                 </div>
               ))}
@@ -134,8 +167,15 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
 
           {delivery.status !== 'delivered' && (
             <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
-              <p className="text-xs font-semibold text-emerald-700 mb-2">Admin Action</p>
-              {!confirming ? (
+              <p className="text-xs font-semibold text-emerald-700 mb-2">
+                {isReceivingStep ? 'Receiver Action' : 'Sender Action'}
+              </p>
+              {!canAdvance ? (
+                <div className="flex items-start gap-2 text-xs text-gray-500 bg-white rounded-lg border border-gray-200 px-3 py-2.5">
+                  <i className="ri-lock-line text-gray-400 mt-0.5"></i>
+                  <span>Only staff assigned to <strong>{requiredWarehouse}</strong> (or an admin) can {nextLabel?.toLowerCase()}.</span>
+                </div>
+              ) : !confirming ? (
                 <button
                   onClick={() => setConfirming(true)}
                   className="w-full py-2.5 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"
@@ -150,6 +190,22 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
                     placeholder={`Note for "${nextLabel}" (optional)`}
                     className="w-full px-3 py-2 text-sm border border-emerald-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 bg-white"
                   />
+                  <div>
+                    <label className="text-xs text-emerald-700 mb-1.5 flex items-center gap-1.5 cursor-pointer">
+                      <i className="ri-camera-line"></i>
+                      Attach proof photo (optional)
+                      <input type="file" accept="image/*" className="hidden" onChange={handlePhotoPick} />
+                    </label>
+                    {photo && (
+                      <div className="mt-1.5 flex items-center gap-2 bg-white border border-emerald-200 rounded-lg p-2">
+                        <img src={photo} alt="Proof preview" className="w-10 h-10 rounded-md object-cover border border-gray-200" />
+                        <span className="text-xs text-gray-500 flex-1">Photo attached</span>
+                        <button type="button" onClick={() => setPhoto('')} className="text-gray-400 hover:text-red-500 cursor-pointer">
+                          <i className="ri-close-line"></i>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <button onClick={() => setConfirming(false)} className="flex-1 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap">
                       Back

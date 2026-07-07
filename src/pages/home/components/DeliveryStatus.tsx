@@ -51,7 +51,7 @@ export default function DeliveryStatus() {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-xl border border-gray-100 p-6">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
         <div className="flex items-center gap-2 text-gray-400">
           <i className="ri-loader-4-line animate-spin"></i>
           <span className="text-sm">Loading deliveries...</span>
@@ -61,10 +61,10 @@ export default function DeliveryStatus() {
   }
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100">
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-bold text-gray-900">Active Deliveries</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Active Deliveries</h3>
           <p className="text-xs text-gray-400 mt-0.5">Live delivery tracking</p>
         </div>
         <button className="text-xs text-emerald-600 font-medium hover:text-emerald-700 cursor-pointer whitespace-nowrap">

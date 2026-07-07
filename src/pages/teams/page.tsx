@@ -12,6 +12,7 @@ interface TeamMember {
   full_name: string | null;
   role: UserRole;
   phone: string | null;
+  warehouse: string | null;
   created_at: string;
   last_sign_in_at: string | null;
 }
@@ -37,6 +38,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
 export default function TeamsPage() {
   const { isAdmin } = useAuth();
   const [members, setMembers] = useState<TeamMember[]>([]);
+  const [warehouses, setWarehouses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
@@ -61,7 +63,7 @@ export default function TeamsPage() {
     setLoading(true);
     const { data: profiles, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role, phone, created_at')
+      .select('id, email, full_name, role, phone, warehouse, created_at')
       .order('created_at', { ascending: false });
 
     if (error || !profiles) {
@@ -77,6 +79,7 @@ export default function TeamsPage() {
       full_name: p.full_name,
       role: (p.role as UserRole) || 'viewer',
       phone: p.phone,
+      warehouse: p.warehouse,
       created_at: p.created_at,
       last_sign_in_at: null,
     }));
@@ -87,6 +90,9 @@ export default function TeamsPage() {
 
   useEffect(() => {
     fetchMembers();
+    supabase.from('warehouses').select('name').order('name', { ascending: true }).then(({ data }) => {
+      if (data) setWarehouses(data.map((w) => w.name as string));
+    });
   }, [fetchMembers]);
 
   const handleUpdateRole = async (memberId: string, newRole: UserRole) => {
@@ -103,6 +109,20 @@ export default function TeamsPage() {
     }
   };
 
+  const handleUpdateWarehouse = async (memberId: string, newWarehouse: string) => {
+    if (!isAdmin) {
+      showToast('Admin access required', 'error');
+      return;
+    }
+    const { error } = await supabase.from('profiles').update({ warehouse: newWarehouse || null }).eq('id', memberId);
+    if (error) {
+      showToast('Failed to update warehouse: ' + error.message, 'error');
+    } else {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, warehouse: newWarehouse || null } : m)));
+      showToast('Warehouse updated');
+    }
+  };
+
   const handleSaveEdit = async () => {
     if (!editingMember || !isAdmin) return;
     const { error } = await supabase
@@ -111,6 +131,7 @@ export default function TeamsPage() {
         full_name: editingMember.full_name,
         phone: editingMember.phone,
         role: editingMember.role,
+        warehouse: editingMember.warehouse,
       })
       .eq('id', editingMember.id);
 
@@ -125,6 +146,7 @@ export default function TeamsPage() {
                 full_name: editingMember.full_name,
                 phone: editingMember.phone,
                 role: editingMember.role,
+                warehouse: editingMember.warehouse,
               }
             : m
         )
@@ -182,7 +204,7 @@ export default function TeamsPage() {
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Teams & Users</h1>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Teams & Users</h1>
             <p className="text-sm text-gray-400 mt-1">
               {members.length} members · {members.filter((m) => m.role === 'admin').length} admins ·{' '}
               {members.filter((m) => m.role === 'staff').length} staff
@@ -200,7 +222,7 @@ export default function TeamsPage() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white rounded-xl border border-gray-100 p-4 flex flex-wrap items-center gap-3">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 flex-1 min-w-[200px]">
             <i className="ri-search-line text-gray-400 text-sm"></i>
             <input
@@ -224,7 +246,7 @@ export default function TeamsPage() {
         </div>
 
         {/* Table */}
-        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           {loading ? (
             <div className="py-16 text-center">
               <i className="ri-loader-4-line animate-spin text-gray-400 text-2xl"></i>
@@ -246,6 +268,7 @@ export default function TeamsPage() {
                     <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Member</th>
                     <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Contact</th>
                     <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Role</th>
+                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Warehouse</th>
                     <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Joined</th>
                     <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Actions</th>
                   </tr>
@@ -295,6 +318,20 @@ export default function TeamsPage() {
                           <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${ROLE_COLORS[member.role]}`}>
                             {ROLE_LABELS[member.role]}
                           </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-4">
+                        {isAdmin ? (
+                          <select
+                            value={member.warehouse || ''}
+                            onChange={(e) => handleUpdateWarehouse(member.id, e.target.value)}
+                            className="px-2 py-1 text-xs font-medium rounded-lg border border-gray-200 bg-white focus:outline-none focus:border-emerald-400 cursor-pointer"
+                          >
+                            <option value="">Unassigned</option>
+                            {warehouses.map((w) => <option key={w} value={w}>{w}</option>)}
+                          </select>
+                        ) : (
+                          <span className="text-xs text-gray-500">{member.warehouse || '—'}</span>
                         )}
                       </td>
                       <td className="px-5 py-4">
@@ -381,6 +418,20 @@ export default function TeamsPage() {
                   <option value="staff">Staff</option>
                   <option value="viewer">Viewer</option>
                 </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Warehouse</label>
+                <select
+                  value={editingMember.warehouse || ''}
+                  onChange={(e) =>
+                    setEditingMember((prev) => (prev ? { ...prev, warehouse: e.target.value || null } : null))
+                  }
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-emerald-400 bg-white cursor-pointer"
+                >
+                  <option value="">Unassigned</option>
+                  {warehouses.map((w) => <option key={w} value={w}>{w}</option>)}
+                </select>
+                <p className="text-[10px] text-gray-400 mt-1">Controls which warehouse's delivery actions this member can perform.</p>
               </div>
             </div>
             <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3">

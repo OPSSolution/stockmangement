@@ -58,7 +58,7 @@ export default function KpiCards() {
     return (
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="bg-white rounded-xl border border-gray-100 p-4 animate-pulse h-28" />
+          <div key={i} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 animate-pulse h-28" />
         ))}
       </div>
     );
@@ -78,7 +78,7 @@ export default function KpiCards() {
       value: totalProducts,
       sub: `${totalStock.toLocaleString()} units across all warehouses`,
       icon: 'ri-archive-stack-line',
-      iconBg: 'bg-emerald-50',
+      iconBg: 'from-emerald-50 to-emerald-100/60',
       iconColor: 'text-emerald-600',
       trend: '+3 this week',
       trendDir: 'up',
@@ -88,7 +88,7 @@ export default function KpiCards() {
       value: lowStockCount,
       sub: `${outOfStockCount} items completely out of stock`,
       icon: 'ri-error-warning-line',
-      iconBg: 'bg-amber-50',
+      iconBg: 'from-amber-50 to-amber-100/60',
       iconColor: 'text-amber-500',
       trend: `${criticalAlerts} critical alerts`,
       trendDir: 'down',
@@ -98,7 +98,7 @@ export default function KpiCards() {
       value: activeDeliveries,
       sub: 'In transit or ready for pickup',
       icon: 'ri-truck-line',
-      iconBg: 'bg-sky-50',
+      iconBg: 'from-sky-50 to-sky-100/60',
       iconColor: 'text-sky-500',
       trend: '1 delivered today',
       trendDir: 'up',
@@ -108,7 +108,7 @@ export default function KpiCards() {
       value: 7,
       sub: '3 awaiting vendor response',
       icon: 'ri-shopping-bag-3-line',
-      iconBg: 'bg-violet-50',
+      iconBg: 'from-violet-50 to-violet-100/60',
       iconColor: 'text-violet-500',
       trend: '+2 since yesterday',
       trendDir: 'neutral',
@@ -118,7 +118,7 @@ export default function KpiCards() {
       value: formatAmount(totalStockValue),
       sub: 'BM + Vendor warehouses combined',
       icon: 'ri-money-dollar-circle-line',
-      iconBg: 'bg-emerald-50',
+      iconBg: 'from-emerald-50 to-emerald-100/60',
       iconColor: 'text-emerald-600',
       trend: formatAmount(totalStockValue * 0.025),
       trendDir: 'up',
@@ -128,7 +128,7 @@ export default function KpiCards() {
       value: 4,
       sub: 'Vendor → BM warehouse',
       icon: 'ri-swap-box-line',
-      iconBg: 'bg-orange-50',
+      iconBg: 'from-orange-50 to-orange-100/60',
       iconColor: 'text-orange-500',
       trend: '2 shipped to BM',
       trendDir: 'neutral',
@@ -152,10 +152,10 @@ export default function KpiCards() {
       {cards.map((card, i) => (
         <div
           key={i}
-          className="bg-white rounded-xl border border-gray-100 p-4 flex flex-col gap-3 hover:border-emerald-200 transition-all duration-200 cursor-pointer"
+          className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col gap-3 hover:shadow-md hover:-translate-y-0.5 hover:border-emerald-200 transition-all duration-200 cursor-pointer"
         >
           <div className="flex items-center justify-between">
-            <div className={`w-9 h-9 rounded-lg ${card.iconBg} flex items-center justify-center`}>
+            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${card.iconBg} flex items-center justify-center`}>
               <i className={`${card.icon} ${card.iconColor} text-lg`}></i>
             </div>
             {card.trend && (
@@ -167,7 +167,7 @@ export default function KpiCards() {
             )}
           </div>
           <div>
-            <p className="text-2xl font-bold text-gray-900">{card.value}</p>
+            <p className="text-2xl font-bold text-gray-900 tracking-tight">{card.value}</p>
             <p className="text-xs font-semibold text-gray-500 mt-0.5">{card.label}</p>
           </div>
           <p className="text-xs text-gray-400 leading-tight">{card.sub}</p>

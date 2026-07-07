@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { Product, ProductType } from '@/mocks/inventory';
+import { supabase } from '@/lib/supabase';
 
 interface ProductFormModalProps {
   product: Product | null;
@@ -10,7 +11,6 @@ interface ProductFormModalProps {
 
 const CATEGORY_STORAGE_KEY = 'inventory_categories';
 const DEFAULT_CATEGORIES = ['Electronics', 'Furniture', 'Accessories', 'Lighting', 'Smart Home'];
-const warehouses: ('BM Warehouse' | 'Vendor Warehouse')[] = ['BM Warehouse', 'Vendor Warehouse'];
 const productTypes = ['kg', 'pack', 'box', 'piece', 'liter', 'meter', 'bottle', 'bundle'] as const;
 
 function autoSku(name: string, nextNum: number) {
@@ -29,12 +29,13 @@ type ProductFormState = Omit<Product, 'id' | 'status' | 'lastUpdated'>;
 
 export default function ProductFormModal({ product, nextNum, onClose, onSave }: ProductFormModalProps) {
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [warehouses, setWarehouses] = useState<string[]>([]);
   const [skuManuallyEdited, setSkuManuallyEdited] = useState(Boolean(product));
   const [form, setForm] = useState<ProductFormState>({
     name: '',
     sku: '',
     category: 'Electronics',
-    warehouse: 'BM Warehouse' as 'BM Warehouse' | 'Vendor Warehouse',
+    warehouse: '',
     vendor: '',
     stock: 0,
     lowStockThreshold: 10,
@@ -52,6 +53,18 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
     } catch {
       localStorage.removeItem(CATEGORY_STORAGE_KEY);
     }
+  }, []);
+
+  useEffect(() => {
+    const loadWarehouses = async () => {
+      const { data, error } = await supabase.from('warehouses').select('name').order('name', { ascending: true });
+      if (!error && data && data.length > 0) {
+        const names = data.map((w) => w.name as string);
+        setWarehouses(names);
+        setForm((prev) => (prev.warehouse ? prev : { ...prev, warehouse: names[0] }));
+      }
+    };
+    loadWarehouses();
   }, []);
 
   useEffect(() => {

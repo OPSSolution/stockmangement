@@ -28,7 +28,7 @@ function mapProduct(row: Record<string, unknown>): Product {
     name: row.name as string,
     sku: row.sku as string,
     category: row.category as string,
-    warehouse: row.warehouse as 'BM Warehouse' | 'Vendor Warehouse',
+    warehouse: row.warehouse as string,
     vendor: row.vendor as string | undefined,
     imageUrl: (row.image_url as string) || undefined,
     stock: row.stock as number,
@@ -69,6 +69,7 @@ export default function InventoryPage() {
   const [filterWarehouse, setFilterWarehouse] = useState('all');
   const [filterCategory, setFilterCategory] = useState('all');
   const [categories, setCategories] = useState<string[]>(['Electronics', 'Furniture', 'Accessories', 'Lighting', 'Smart Home']);
+  const [warehouses, setWarehouses] = useState<string[]>([]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editProduct, setEditProduct] = useState<Product | null>(null);
@@ -102,7 +103,13 @@ export default function InventoryPage() {
       }
     };
 
+    const loadWarehouses = async () => {
+      const { data } = await supabase.from('warehouses').select('name').order('name', { ascending: true });
+      if (data) setWarehouses(data.map((w) => w.name as string));
+    };
+
     loadCategories();
+    loadWarehouses();
     fetchProducts();
     fetchHistory();
   }, []);
@@ -161,6 +168,10 @@ export default function InventoryPage() {
     const fromProducts = [...new Set(products.map((p) => p.category))];
     return [...new Set([ ...categories, ...fromProducts ])];
   }, [categories, products]);
+
+  const availableWarehouses = useMemo(() => {
+    return [...new Set([ ...warehouses, ...products.map((p) => p.warehouse) ])];
+  }, [warehouses, products]);
 
   const handleSaveProduct = async (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string }) => {
     const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
@@ -336,7 +347,7 @@ export default function InventoryPage() {
                   <i className={`${kpi.icon} ${kpi.color} text-lg`}></i>
                 </div>
                 <div>
-                  <p className="text-xl font-bold text-gray-900">{kpi.value}</p>
+                  <p className="text-xl font-bold text-gray-900 tracking-tight">{kpi.value}</p>
                   <p className="text-xs text-gray-400">{kpi.label}</p>
                 </div>
               </div>
@@ -368,8 +379,7 @@ export default function InventoryPage() {
                   className="py-2 px-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer text-gray-600"
                 >
                   <option value="all">All Warehouses</option>
-                  <option value="BM Warehouse">BM Warehouse</option>
-                  <option value="Vendor Warehouse">Vendor Warehouse</option>
+                  {availableWarehouses.map((w) => <option key={w} value={w}>{w}</option>)}
                 </select>
 
                 {/* Category filter */}

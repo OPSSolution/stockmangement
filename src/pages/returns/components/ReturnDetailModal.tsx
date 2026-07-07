@@ -158,7 +158,7 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
                       <p className="font-semibold text-gray-800 text-sm">{item.productName}</p>
                       <p className="text-xs text-gray-400 font-mono mt-0.5">{item.sku} · Qty: {item.quantity} · {formatAmount(item.unitPrice)} each</p>
                     </div>
-                    <p className="text-sm font-bold text-gray-900">{formatAmount(item.quantity * item.unitPrice)}</p>
+                    <p className="text-sm font-bold text-gray-900 tracking-tight">{formatAmount(item.quantity * item.unitPrice)}</p>
                   </div>
 
                   {isEditable && (

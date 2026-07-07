@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { createClient } from '@supabase/supabase-js';
+import { supabaseForToken } from '../lib/supabaseEnv';
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'stockmanagement-local-secret-2026';
 
@@ -11,15 +11,9 @@ export interface AuthRequest extends Request {
 // Real user sessions are issued by Supabase Auth (see src/contexts/AuthContext.tsx),
 // not the local JWT_SECRET above — that one is only used by the unused src/lib/api.ts
 // client. Verify Supabase-issued tokens here so Express routes work for real logins.
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.VITE_PUBLIC_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_PUBLIC_SUPABASE_ANON_KEY || '';
-
 async function verifySupabaseToken(token: string): Promise<{ id: string; email: string; role: string } | null> {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
-
-  const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-  });
+  const client = supabaseForToken(token);
+  if (!client) return null;
 
   const { data: userData, error: userErr } = await client.auth.getUser(token);
   if (userErr || !userData?.user) return null;

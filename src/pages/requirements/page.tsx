@@ -180,7 +180,7 @@ export default function RequirementsPage() {
     return (
       <DashboardLayout title="Requirements" subtitle="System requirements tracking">
         <div className="max-w-4xl mx-auto">
-          <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
             <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
               <i className="ri-lock-line text-gray-300 text-2xl"></i>
             </div>
@@ -204,7 +204,7 @@ export default function RequirementsPage() {
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Requirements</h1>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Requirements</h1>
             <p className="text-sm text-gray-400 mt-1">Track and manage system feature requirements</p>
           </div>
           <button
@@ -225,7 +225,7 @@ export default function RequirementsPage() {
             { label: 'Completed', value: stats.completed, color: 'text-emerald-600', bg: 'bg-emerald-50' },
             { label: 'Critical', value: stats.critical, color: 'text-red-600', bg: 'bg-red-50' },
           ].map((s) => (
-            <div key={s.label} className={`${s.bg} rounded-xl border border-gray-100 px-4 py-3`}>
+            <div key={s.label} className={`${s.bg} rounded-2xl border border-gray-100 shadow-sm px-4 py-3`}>
               <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
               <p className="text-xs text-gray-400">{s.label}</p>
             </div>
@@ -233,7 +233,7 @@ export default function RequirementsPage() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white rounded-xl border border-gray-100 px-4 py-3">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3">
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs font-medium text-gray-500">Filters:</span>
             <select
@@ -280,7 +280,7 @@ export default function RequirementsPage() {
 
         {/* Create/Edit Form */}
         {showForm && (
-          <div className="bg-white rounded-xl border border-gray-100 px-6 py-5">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5">
             <h3 className="text-sm font-bold text-gray-900 mb-4">
               {editingReq ? 'Edit Requirement' : 'New Requirement'}
             </h3>
@@ -376,7 +376,7 @@ export default function RequirementsPage() {
         )}
 
         {/* Table */}
-        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           {loading ? (
             <div className="py-12 text-center">
               <i className="ri-loader-4-line animate-spin text-gray-400 text-xl"></i>

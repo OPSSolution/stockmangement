@@ -17,7 +17,7 @@ export default function UnauthorizedPage() {
           <i className="ri-lock-2-line text-3xl text-red-400"></i>
         </div>
 
-        <h1 className="text-2xl font-bold text-gray-900">Access Denied</h1>
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Access Denied</h1>
         <p className="text-gray-500 max-w-sm">
           Your account role{' '}
           {profile?.role && (

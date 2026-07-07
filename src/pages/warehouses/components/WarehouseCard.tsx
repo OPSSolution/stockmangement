@@ -1,21 +1,20 @@
+import { useNavigate } from 'react-router-dom';
 import type { Warehouse } from '@/mocks/warehouses';
 
 interface Props {
   warehouse: Warehouse;
-  isSelected: boolean;
-  onClick: () => void;
+  onDelete?: () => void;
 }
 
-export default function WarehouseCard({ warehouse, isSelected, onClick }: Props) {
+export default function WarehouseCard({ warehouse, onDelete }: Props) {
+  const navigate = useNavigate();
   const usagePct = Math.round((warehouse.usedCapacity / warehouse.totalCapacity) * 100);
   const usageColor = usagePct >= 85 ? 'bg-red-400' : usagePct >= 65 ? 'bg-amber-400' : 'bg-emerald-500';
 
   return (
-    <button
-      onClick={onClick}
-      className={`w-full text-left bg-white rounded-xl border p-5 transition-all cursor-pointer ${
-        isSelected ? 'border-emerald-400 ring-2 ring-emerald-100' : 'border-gray-100 hover:border-gray-200'
-      }`}
+    <div
+      onClick={() => navigate(`/warehouses/${warehouse.id}`)}
+      className="w-full text-left bg-white rounded-2xl border border-gray-100 shadow-sm p-5 hover:shadow-md hover:border-emerald-200 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer"
     >
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-3">
@@ -23,13 +22,25 @@ export default function WarehouseCard({ warehouse, isSelected, onClick }: Props)
             <i className={`ri-building-2-line text-lg ${warehouse.type === 'owned' ? 'text-emerald-600' : 'text-violet-600'}`}></i>
           </div>
           <div>
-            <p className="font-bold text-gray-900">{warehouse.name}</p>
+            <p className="font-bold text-gray-900 tracking-tight">{warehouse.name}</p>
             <p className="text-xs text-gray-500 mt-0.5">{warehouse.city}</p>
           </div>
         </div>
-        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${warehouse.type === 'owned' ? 'bg-emerald-50 text-emerald-700' : 'bg-violet-50 text-violet-700'} whitespace-nowrap`}>
-          {warehouse.type === 'owned' ? 'Owned' : 'Vendor'}
-        </span>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${warehouse.type === 'owned' ? 'bg-emerald-50 text-emerald-700' : 'bg-violet-50 text-violet-700'} whitespace-nowrap`}>
+            {warehouse.type === 'owned' ? 'Owned' : 'Vendor'}
+          </span>
+          {onDelete && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors cursor-pointer"
+              title="Delete warehouse"
+            >
+              <i className="ri-delete-bin-line text-sm"></i>
+            </button>
+          )}
+          <i className="ri-arrow-right-s-line text-gray-300 text-lg"></i>
+        </div>
       </div>
 
       {/* Capacity Bar */}
@@ -62,6 +73,6 @@ export default function WarehouseCard({ warehouse, isSelected, onClick }: Props)
           <p className="text-xs text-gray-500">In Today</p>
         </div>
       </div>
-    </button>
+    </div>
   );
 }

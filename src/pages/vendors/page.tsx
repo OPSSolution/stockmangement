@@ -124,14 +124,14 @@ export default function VendorsPage() {
                 <div className={`w-9 h-9 ${card.bg} rounded-lg flex items-center justify-center mb-3`}>
                   <i className={`${card.icon} ${card.color}`}></i>
                 </div>
-                <p className="text-xl font-bold text-gray-900">{card.value}</p>
+                <p className="text-xl font-bold text-gray-900 tracking-tight">{card.value}</p>
                 <p className="text-xs text-gray-500 mt-0.5">{card.label}</p>
               </div>
             ))}
           </div>
 
           {/* Toolbar */}
-          <div className="bg-white rounded-xl border border-gray-100">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-wrap gap-3">
               <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-1">
                 {(['all', 'active', 'inactive', 'suspended'] as FilterTab[]).map((tab) => (
@@ -267,7 +267,7 @@ export default function VendorsPage() {
                     <div
                       key={v.id}
                       onClick={() => setSelectedVendor(v)}
-                      className="bg-gray-50/60 border border-gray-100 rounded-xl p-5 cursor-pointer hover:border-emerald-200 transition-all"
+                      className="bg-gray-50/60 border border-gray-100 rounded-2xl shadow-sm p-5 cursor-pointer hover:border-emerald-200 transition-all"
                     >
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center gap-3">

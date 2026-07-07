@@ -54,17 +54,17 @@ export default function TopBar({ title, subtitle, onMenuClick }: TopBarProps) {
 
   return (
     <>
-      <header className="h-16 bg-white border-b border-gray-100 flex items-center justify-between px-4 md:px-6 sticky top-0 z-10">
+      <header className="h-16 bg-white/90 backdrop-blur-md border-b border-gray-100/80 shadow-[0_1px_2px_rgba(0,0,0,0.02)] flex items-center justify-between px-4 md:px-6 sticky top-0 z-10">
         <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={onMenuClick}
-            className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors lg:hidden cursor-pointer flex-shrink-0"
+            className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-gray-100 transition-colors duration-200 lg:hidden cursor-pointer flex-shrink-0"
             aria-label="Open menu"
           >
             <i className="ri-menu-line text-gray-500 text-lg"></i>
           </button>
           <div className="min-w-0">
-            <h2 className="text-base md:text-lg font-bold text-gray-900 leading-tight truncate">{title}</h2>
+            <h2 className="text-lg md:text-xl font-bold text-gray-900 tracking-tight leading-tight truncate">{title}</h2>
             {subtitle && <p className="text-xs text-gray-400 mt-0.5 truncate hidden sm:block">{subtitle}</p>}
           </div>
         </div>
@@ -112,7 +112,7 @@ export default function TopBar({ title, subtitle, onMenuClick }: TopBarProps) {
             </button>
 
             {notifOpen && (
-              <div className="absolute right-0 top-11 w-[320px] sm:w-96 bg-white border border-gray-100 rounded-xl shadow-xl z-50 py-2 flex flex-col max-h-[480px]">
+              <div className="absolute right-0 top-11 w-[320px] sm:w-96 bg-white border border-gray-100 rounded-2xl shadow-xl shadow-gray-200/60 z-50 py-2 flex flex-col max-h-[480px]">
                 <div className="px-4 py-2 border-b border-gray-50 flex items-center justify-between">
                   <span className="text-sm font-semibold text-gray-800">Notifications</span>
                   {unreadCount > 0 && (

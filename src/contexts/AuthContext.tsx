@@ -33,7 +33,7 @@ export const normalizePerm = (value: boolean | Partial<PagePermission> | undefin
 interface AuthContextType {
   user: AppUser | null;
   session: AppSession | null;
-  profile: { full_name: string; email: string; role: UserRole; phone: string | null } | null;
+  profile: { full_name: string; email: string; role: UserRole; phone: string | null; warehouse: string | null } | null;
   permissions: Permissions | null;
   loading: boolean;
   isAdmin: boolean;
@@ -53,19 +53,19 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [session, setSession] = useState<AppSession | null>(null);
-  const [profile, setProfile] = useState<{ full_name: string; email: string; role: UserRole; phone: string | null } | null>(null);
+  const [profile, setProfile] = useState<{ full_name: string; email: string; role: UserRole; phone: string | null; warehouse: string | null } | null>(null);
   const [permissions, setPermissions] = useState<Permissions | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (authUser: AppUser) => {
     const { data, error } = await supabase
       .from('profiles')
-      .select('full_name, email, role, phone')
+      .select('full_name, email, role, phone, warehouse')
       .eq('id', authUser.id)
       .maybeSingle();
 
     if (!error && data) {
-      const p = data as { full_name: string; email: string; role: UserRole; phone: string | null };
+      const p = data as { full_name: string; email: string; role: UserRole; phone: string | null; warehouse: string | null };
       setProfile(p);
       await loadPermissions(p.role);
       return;
@@ -79,6 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email: authUser.email,
       role,
       phone: (meta.phone as string | null) || null,
+      warehouse: null,
     });
     await loadPermissions(role);
   };

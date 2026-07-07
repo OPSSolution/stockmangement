@@ -49,7 +49,7 @@ export default function WarehousePerformancePanel() {
 
   if (loading) return (
     <div className="space-y-5">
-      <div className="bg-white border border-gray-100 rounded-xl p-5 flex items-center justify-center py-16 text-gray-400">
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5 flex items-center justify-center py-16 text-gray-400">
         <i className="ri-loader-4-line animate-spin text-xl mr-2"></i>
         <span className="text-sm">Loading...</span>
       </div>
@@ -61,9 +61,9 @@ export default function WarehousePerformancePanel() {
   return (
     <div className="space-y-5">
       {/* Warehouse Performance */}
-      <div className="bg-white border border-gray-100 rounded-xl p-5">
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
         <div className="mb-4">
-          <h3 className="text-sm font-bold text-gray-900">Warehouse Performance</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Warehouse Performance</h3>
           <p className="text-xs text-gray-400 mt-0.5">Inbound, outbound, returns and fulfillment metrics</p>
         </div>
 
@@ -111,9 +111,9 @@ export default function WarehousePerformancePanel() {
       </div>
 
       {/* Vendor Performance Table */}
-      <div className="bg-white border border-gray-100 rounded-xl p-5">
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
         <div className="mb-4">
-          <h3 className="text-sm font-bold text-gray-900">Vendor Performance Rankings</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Vendor Performance Rankings</h3>
           <p className="text-xs text-gray-400 mt-0.5">Ranked by fulfillment rate</p>
         </div>
         <div className="space-y-2.5">

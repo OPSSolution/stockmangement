@@ -38,7 +38,7 @@ export default function MonthlySnapshotTable() {
   }, []);
 
   if (loading) return (
-    <div className="bg-white border border-gray-100 rounded-xl p-5 flex items-center justify-center py-10 text-gray-400">
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5 flex items-center justify-center py-10 text-gray-400">
       <i className="ri-loader-4-line animate-spin text-xl mr-2"></i>
       <span className="text-sm">Loading snapshots...</span>
     </div>
@@ -56,10 +56,10 @@ export default function MonthlySnapshotTable() {
   const revenueGrowth = latest && previous ? growthPct(latest.revenue, previous.revenue) : null;
 
   return (
-    <div className="bg-white border border-gray-100 rounded-xl p-5">
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-sm font-bold text-gray-900">Monthly Snapshot</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Monthly Snapshot</h3>
           <p className="text-xs text-gray-400 mt-0.5">Year-to-date performance across all modules</p>
         </div>
         {revenueGrowth && (

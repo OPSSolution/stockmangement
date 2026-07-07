@@ -18,6 +18,16 @@ const adjustTypes = [
   { value: 'sale', label: 'Manual Sale', icon: 'ri-shopping-bag-3-line' },
 ];
 
+// Every type except "Manual Adjustment" has an obvious direction — no need to make
+// the user pick it separately. Only 'adjustment' leaves the toggle up to them.
+const fixedDirection: Record<string, 'add' | 'remove' | undefined> = {
+  purchase: 'add',
+  return: 'add',
+  transfer_in: 'add',
+  transfer_out: 'remove',
+  sale: 'remove',
+};
+
 const typeConfig: Record<string, { label: string; icon: string; color: string; bg: string }> = {
   sale: { label: 'Sale', icon: 'ri-shopping-bag-3-line', color: 'text-rose-600', bg: 'bg-rose-50' },
   purchase: { label: 'Purchase', icon: 'ri-add-circle-line', color: 'text-emerald-600', bg: 'bg-emerald-50' },
@@ -35,13 +45,18 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
 
-  const isOutbound = mode === 'remove' || adjustType === 'transfer_out' || adjustType === 'sale';
-  const delta = isOutbound ? -Math.abs(quantity) : Math.abs(quantity);
+  const delta = mode === 'remove' ? -Math.abs(quantity) : Math.abs(quantity);
   const newStock = product.stock + delta;
   const safeHistory = Array.isArray(history) ? history : [];
   const productHistory = safeHistory.filter((h) => h.productId === product.id);
   const totalIn = productHistory.filter((h) => h.quantity > 0).reduce((sum, h) => sum + h.quantity, 0);
   const totalOut = productHistory.filter((h) => h.quantity < 0).reduce((sum, h) => sum + h.quantity, 0);
+
+  const selectType = (value: string) => {
+    setAdjustType(value);
+    const forced = fixedDirection[value];
+    if (forced) setMode(forced);
+  };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -87,7 +102,7 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
                   <button
                     key={t.value}
                     type="button"
-                    onClick={() => setAdjustType(t.value)}
+                    onClick={() => selectType(t.value)}
                     className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-xs font-medium transition-all cursor-pointer ${
                       adjustType === t.value
                         ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
@@ -101,25 +116,32 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
               </div>
             </div>
 
-            {/* Add / Remove toggle */}
+            {/* Direction: locked for every type except Manual Adjustment */}
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-2">Direction</label>
-              <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setMode('add')}
-                  className={`flex-1 py-2 text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${mode === 'add' ? 'bg-emerald-500 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
-                >
-                  <i className="ri-add-line mr-1"></i>Add Stock
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode('remove')}
-                  className={`flex-1 py-2 text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${mode === 'remove' ? 'bg-red-500 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
-                >
-                  <i className="ri-subtract-line mr-1"></i>Remove Stock
-                </button>
-              </div>
+              {fixedDirection[adjustType] ? (
+                <div className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${mode === 'add' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+                  <i className={mode === 'add' ? 'ri-add-line' : 'ri-subtract-line'}></i>
+                  {mode === 'add' ? 'Adding Stock' : 'Removing Stock'}
+                </div>
+              ) : (
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setMode('add')}
+                    className={`flex-1 py-2 text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${mode === 'add' ? 'bg-emerald-500 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+                  >
+                    <i className="ri-add-line mr-1"></i>Add Stock
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMode('remove')}
+                    className={`flex-1 py-2 text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${mode === 'remove' ? 'bg-red-500 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+                  >
+                    <i className="ri-subtract-line mr-1"></i>Remove Stock
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Quantity */}

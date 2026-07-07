@@ -37,10 +37,10 @@ export default function RevenueChart() {
   const toBarH = (v: number, max: number) => Math.max(4, Math.round((v / max) * 140));
 
   return (
-    <div className="bg-white border border-gray-100 rounded-xl p-5">
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
       <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
         <div>
-          <h3 className="text-sm font-bold text-gray-900">Revenue Trend</h3>
+          <h3 className="text-sm font-bold text-gray-900 tracking-tight">Revenue Trend</h3>
           <p className="text-xs text-gray-400 mt-0.5">Total revenue across selected period</p>
         </div>
         <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-1">
