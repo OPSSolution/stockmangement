@@ -127,8 +127,19 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange }: Pro
                   {po.items.map((item) => (
                     <tr key={item.productId} className="hover:bg-gray-50/50">
                       <td className="px-4 py-3">
-                        <p className="font-medium text-gray-800">{item.productName}</p>
-                        <p className="text-xs text-gray-400 font-mono">{item.sku}</p>
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                            {item.imageUrl ? (
+                              <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                            ) : (
+                              <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-800">{item.productName}</p>
+                            <p className="text-xs text-gray-400 font-mono">{item.sku}</p>
+                          </div>
+                        </div>
                       </td>
                       <td className="px-3 py-3 text-center text-gray-700">{item.orderedQty}</td>
                       {isReceiving && (

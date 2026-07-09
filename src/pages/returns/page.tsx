@@ -18,6 +18,7 @@ const tabs: { key: FilterTab; label: string }[] = [
   { key: 'restocked', label: 'Restocked' },
   { key: 'discarded', label: 'Discarded' },
   { key: 'refunded', label: 'Refunded' },
+  { key: 'returned', label: 'Returned' },
 ];
 
 const reasonLabels: Record<string, string> = {
@@ -51,9 +52,10 @@ function mapReturn(row: Record<string, unknown>): ReturnRequest {
     reasonNote: row.reason_note as string | undefined,
     refundMethod: row.refund_method as ReturnRequest['refundMethod'],
     refundAmount: row.refund_amount as number,
-    warehouse: row.warehouse as 'BM Warehouse' | 'Vendor Warehouse',
+    warehouse: row.warehouse as string,
     assignedTo: row.assigned_to as string | undefined,
     inspectionNotes: row.inspection_notes as string | undefined,
+    requestId: (row.request_id as string) || null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     completedAt: row.completed_at as string | undefined,
@@ -78,6 +80,7 @@ function toDbReturn(ret: ReturnRequest): Record<string, unknown> {
     warehouse: ret.warehouse,
     assigned_to: ret.assignedTo || null,
     inspection_notes: ret.inspectionNotes || null,
+    request_id: ret.requestId || null,
     created_at: ret.createdAt,
     updated_at: ret.updatedAt,
     completed_at: ret.completedAt || null,
@@ -86,7 +89,7 @@ function toDbReturn(ret: ReturnRequest): Record<string, unknown> {
 
 export default function ReturnsPage() {
   const { formatAmount } = useCurrency();
-  const { canEdit, canDelete } = useAuth();
+  const { canEdit, canDelete, warehouseScope } = useAuth();
   const showEdit = canEdit('returns');
   const showDelete = canDelete('returns');
   const [returns, setReturns] = useState<ReturnRequest[]>([]);
@@ -101,11 +104,13 @@ export default function ReturnsPage() {
 
   useEffect(() => {
     fetchReturns();
-  }, []);
+  }, [warehouseScope]);
 
   const fetchReturns = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('returns').select('*').order('created_at', { ascending: false });
+    let query = supabase.from('returns').select('*').order('created_at', { ascending: false });
+    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    const { data, error } = await query;
     if (error) {
       console.error(error);
     } else {
@@ -156,12 +161,27 @@ export default function ReturnsPage() {
         restocked: 'Items restocked to inventory.',
         discarded: 'Items discarded.',
         refunded: 'Refund processed successfully!',
+        returned: 'Return completed!',
       };
       const newStatus = updates.status;
       if (newStatus && statusMessages[newStatus]) {
         setSuccessMsg(statusMessages[newStatus] ?? 'Updated.');
         setTimeout(() => setSuccessMsg(''), 3000);
       }
+
+      // Completing a request-linked return closes the loop on the original request too.
+      if (newStatus === 'returned') {
+        const requestId = returns.find((r) => r.id === id)?.requestId;
+        if (requestId) {
+          const { error: reqError } = await supabase.from('stock_requests').update({
+            status: 'returned',
+            return_reason: `Returned via ${id}`,
+            updated_at: new Date().toISOString(),
+          }).eq('id', requestId);
+          if (reqError) console.error('Failed to mark linked request as returned:', reqError);
+        }
+      }
+
       await fetchReturns();
       if (selectedReturn?.id === id) {
         const refreshed = (await supabase.from('returns').select('*').eq('id', id).single()).data;
@@ -323,8 +343,19 @@ export default function ReturnsPage() {
                           <p className="text-xs text-gray-400">{r.email}</p>
                         </td>
                         <td className="px-4 py-3.5">
-                          <p className="text-gray-700 text-sm">{r.items[0].productName}</p>
-                          {r.items.length > 1 && <p className="text-xs text-gray-400">+{r.items.length - 1} more</p>}
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                              {r.items[0].imageUrl ? (
+                                <img src={r.items[0].imageUrl} alt={r.items[0].productName} className="w-full h-full object-cover" />
+                              ) : (
+                                <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                              )}
+                            </div>
+                            <div>
+                              <p className="text-gray-700 text-sm">{r.items[0].productName}</p>
+                              {r.items.length > 1 && <p className="text-xs text-gray-400">+{r.items.length - 1} more</p>}
+                            </div>
+                          </div>
                         </td>
                         <td className="px-4 py-3.5">
                           <span className="text-xs text-gray-600">{reasonLabels[r.reason]}</span>

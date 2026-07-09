@@ -13,6 +13,7 @@ type NavItem = {
 const mainNavItems: NavItem[] = [
   { label: 'Dashboard',  icon: 'ri-dashboard-3-line',     path: '/',           permKey: 'dashboard' },
   { label: 'Inventory',  icon: 'ri-archive-stack-line',   path: '/inventory',  permKey: 'inventory' },
+  { label: 'Requests',   icon: 'ri-file-list-3-line',     path: '/requests',   permKey: 'requests' },
   { label: 'Orders',     icon: 'ri-shopping-bag-3-line',  path: '/orders',     permKey: 'orders' },
   { label: 'Deliveries', icon: 'ri-truck-line',           path: '/deliveries', permKey: 'deliveries' },
   { label: 'Warehouses', icon: 'ri-building-2-line',      path: '/warehouses', permKey: 'warehouses' },
@@ -28,6 +29,7 @@ const managementNavItems: NavItem[] = [
   { label: 'Teams',        icon: 'ri-team-line',         path: '/teams',        permKey: 'teams' },
   // { label: 'Requirements', icon: 'ri-list-check-2',      path: '/requirements', permKey: 'requirements' },
   { label: 'Roles',        icon: 'ri-shield-user-line',  path: '/admin/roles',  permKey: 'roles' },
+  { label: 'Request Templates', icon: 'ri-file-list-2-line', path: '/admin/request-templates', permKey: 'request_templates' },
 ];
 
 // const adminNavItems: NavItem[] = [

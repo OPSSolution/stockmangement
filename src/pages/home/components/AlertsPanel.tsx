@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useNotifications } from '@/contexts/NotificationContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface StockAlert {
   id: string;
@@ -20,6 +21,7 @@ export default function AlertsPanel() {
   const [loading, setLoading] = useState(true);
   const { notifications, markAsRead, deleteNotification } = useNotifications();
   const navigate = useNavigate();
+  const { warehouseScope } = useAuth();
 
   const stockNotifications = notifications.filter(
     (n) => (n.type === 'low_stock' || n.type === 'out_of_stock') && !n.is_read
@@ -27,7 +29,9 @@ export default function AlertsPanel() {
 
   useEffect(() => {
     async function fetchAlerts() {
-      const { data, error } = await supabase.from('products').select('*');
+      let query = supabase.from('products').select('*');
+      if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+      const { data, error } = await query;
       if (!error && data) {
         const alerts: StockAlert[] = data
           .filter((p: Record<string, unknown>) => (p.stock as number) <= (p.low_stock_threshold as number))
@@ -47,7 +51,7 @@ export default function AlertsPanel() {
       setLoading(false);
     }
     fetchAlerts();
-  }, [notifications]);
+  }, [notifications, warehouseScope]);
 
   const handleDismiss = async (alertId: string, isNotification: boolean) => {
     if (isNotification) {
@@ -61,7 +65,7 @@ export default function AlertsPanel() {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col p-6">
+      <div className="h-[400px] bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center justify-center p-6">
         <div className="flex items-center gap-2 text-gray-400">
           <i className="ri-loader-4-line animate-spin"></i>
           <span className="text-sm">Loading alerts...</span>
@@ -73,8 +77,8 @@ export default function AlertsPanel() {
   const totalCritical = stockAlerts.filter((a) => a.severity === 'critical').length;
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col">
-      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+    <div className="h-[400px] bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
         <div>
           <h3 className="text-sm font-bold text-gray-900 tracking-tight">Low Stock Alerts</h3>
           <p className="text-xs text-gray-400 mt-0.5">{stockAlerts.length + stockNotifications.length} active alerts</p>
@@ -85,7 +89,7 @@ export default function AlertsPanel() {
         </span>
       </div>
 
-      <div className="flex-1 divide-y divide-gray-50 overflow-y-auto max-h-[360px]">
+      <div className="flex-1 min-h-0 divide-y divide-gray-50 overflow-y-auto">
         {stockNotifications.length > 0 && (
           <div className="px-5 py-2 bg-emerald-50/40">
             <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider">New Notifications</span>
@@ -166,7 +170,7 @@ export default function AlertsPanel() {
         )}
       </div>
 
-      <div className="px-5 py-3 border-t border-gray-100">
+      <div className="px-5 py-3 border-t border-gray-100 shrink-0">
         <button onClick={() => navigate('/inventory')} className="text-xs text-emerald-600 font-medium hover:text-emerald-700 cursor-pointer whitespace-nowrap">
           View All Inventory <i className="ri-arrow-right-s-line"></i>
         </button>

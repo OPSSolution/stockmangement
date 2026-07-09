@@ -158,6 +158,10 @@ export default function TeamsPage() {
 
   const handleInvite = async () => {
     if (!isAdmin) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(inviteForm.email.trim())) {
+      showToast('Enter a valid email address (e.g. name@example.com)', 'error');
+      return;
+    }
     setInviting(true);
 
     try {

@@ -22,12 +22,12 @@ export default function QuickActions() {
   const navigate = useNavigate();
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
-      <div className="px-5 py-4 border-b border-gray-100">
+    <div className="h-[400px] bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+      <div className="px-5 py-4 border-b border-gray-100 shrink-0">
         <h3 className="text-sm font-bold text-gray-900 tracking-tight">Quick Actions</h3>
         <p className="text-xs text-gray-400 mt-0.5">Shortcuts for common tasks</p>
       </div>
-      <div className="p-4 grid grid-cols-2 gap-2">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 grid grid-cols-2 gap-2 content-start">
         {actions.map((a) => (
           <button
             key={a.label}

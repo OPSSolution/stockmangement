@@ -7,9 +7,9 @@ const router = Router();
 type PagePermission = { view: boolean; edit: boolean; delete: boolean };
 
 const PAGE_KEYS = [
-  'dashboard', 'inventory', 'orders', 'deliveries', 'warehouses', 'transfers',
+  'dashboard', 'inventory', 'requests', 'orders', 'deliveries', 'warehouses', 'transfers',
   'returns', 'purchases', 'promotions', 'vendors', 'reports', 'teams',
-  'requirements', 'roles', 'categories',
+  'requirements', 'roles', 'categories', 'request_templates',
   'notifications_history', 'notifications_analytics', 'notifications_settings',
 ] as const;
 
@@ -40,7 +40,7 @@ const DEFAULT_ROLES = [
     name: 'Staff',
     description: 'Access to operational pages',
     permissions: buildPermissions(
-      ['dashboard', 'inventory', 'orders', 'deliveries', 'warehouses', 'transfers',
+      ['dashboard', 'inventory', 'requests', 'orders', 'deliveries', 'warehouses', 'transfers',
        'returns', 'purchases', 'promotions', 'vendors', 'reports',
        'notifications_history', 'notifications_settings'],
       { edit: true, del: false }
@@ -89,6 +89,29 @@ async function migrateLegacyPermissions() {
   }
 }
 
+// Adds default permission entries for any PAGE_KEYS introduced after a role
+// row was first seeded (e.g. 'requests') — INSERT ... ON CONFLICT DO NOTHING
+// never touches pre-existing rows, so without this they'd be missing the key
+// entirely and canAccess() would treat that as "no access".
+async function backfillMissingPageKeys() {
+  const defaultsById = new Map(DEFAULT_ROLES.map((r) => [r.id, r.permissions]));
+
+  const { rows } = await pool.query('SELECT id, permissions FROM roles');
+  for (const row of rows) {
+    const perms = row.permissions as Record<string, PagePermission>;
+    const missing = PAGE_KEYS.filter((key) => !(key in perms));
+    if (missing.length === 0) continue;
+
+    // Known system roles (admin/staff/viewer) inherit this key's shipped default;
+    // custom roles get a safe "no access until an admin opts in" default.
+    const knownDefaults = defaultsById.get(row.id);
+    for (const key of missing) {
+      perms[key] = knownDefaults?.[key] ?? { view: false, edit: false, delete: false };
+    }
+    await pool.query('UPDATE roles SET permissions = $1 WHERE id = $2', [JSON.stringify(perms), row.id]);
+  }
+}
+
 export async function ensureRolesTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS roles (
@@ -112,6 +135,7 @@ export async function ensureRolesTable() {
   }
 
   await migrateLegacyPermissions();
+  await backfillMissingPageKeys();
 }
 
 // GET /roles — list all roles

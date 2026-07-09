@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface Product {
   id: string;
@@ -31,15 +32,34 @@ export default function KpiCards() {
   const [products, setProducts] = useState<Product[]>([]);
   const [deliveries, setDeliveries] = useState<{ status: string }[]>([]);
   const [stockAlerts, setStockAlerts] = useState<{ severity: string }[]>([]);
+  const [pendingOrders, setPendingOrders] = useState(0);
+  const [pendingTransfers, setPendingTransfers] = useState(0);
   const [loading, setLoading] = useState(true);
   const { formatAmount } = useCurrency();
+  const { warehouseScope } = useAuth();
 
   useEffect(() => {
     async function fetchData() {
-      const [{ data: p }, { data: d }, { data: a }] = await Promise.all([
-        supabase.from('products').select('*'),
-        supabase.from('deliveries').select('status'),
-        supabase.from('products').select('stock, low_stock_threshold, severity:status').lt('stock', 50),
+      let productsQuery = supabase.from('products').select('*');
+      let deliveriesQuery = supabase.from('deliveries').select('status, warehouse, destination');
+      let alertsQuery = supabase.from('products').select('stock, low_stock_threshold, severity:status').lt('stock', 50);
+      let transfersQuery = supabase.from('transfers').select('status').neq('status', 'received').neq('status', 'cancelled');
+      // Orders don't carry a warehouse column, so pending-order count isn't scoped.
+      const ordersQuery = supabase.from('orders').select('status').eq('status', 'pending');
+
+      if (warehouseScope) {
+        productsQuery = productsQuery.eq('warehouse', warehouseScope);
+        deliveriesQuery = deliveriesQuery.or(`warehouse.eq.${warehouseScope},destination.eq.${warehouseScope}`);
+        alertsQuery = alertsQuery.eq('warehouse', warehouseScope);
+        transfersQuery = transfersQuery.or(`from_warehouse.eq.${warehouseScope},to_warehouse.eq.${warehouseScope}`);
+      }
+
+      const [{ data: p }, { data: d }, { data: a }, { data: o }, { data: t }] = await Promise.all([
+        productsQuery,
+        deliveriesQuery,
+        alertsQuery,
+        ordersQuery,
+        transfersQuery,
       ]);
       if (p) setProducts(p as Product[]);
       if (d) setDeliveries(d as { status: string }[]);
@@ -49,10 +69,12 @@ export default function KpiCards() {
           .map((x) => ({ severity: x.stock === 0 ? 'critical' : 'warning' }));
         setStockAlerts(alerts);
       }
+      if (o) setPendingOrders(o.length);
+      if (t) setPendingTransfers(t.length);
       setLoading(false);
     }
     fetchData();
-  }, []);
+  }, [warehouseScope]);
 
   if (loading) {
     return (
@@ -80,8 +102,6 @@ export default function KpiCards() {
       icon: 'ri-archive-stack-line',
       iconBg: 'from-emerald-50 to-emerald-100/60',
       iconColor: 'text-emerald-600',
-      trend: '+3 this week',
-      trendDir: 'up',
     },
     {
       label: 'Low Stock Items',
@@ -100,18 +120,14 @@ export default function KpiCards() {
       icon: 'ri-truck-line',
       iconBg: 'from-sky-50 to-sky-100/60',
       iconColor: 'text-sky-500',
-      trend: '1 delivered today',
-      trendDir: 'up',
     },
     {
       label: 'Pending Orders',
-      value: 7,
-      sub: '3 awaiting vendor response',
+      value: pendingOrders,
+      sub: 'Awaiting review',
       icon: 'ri-shopping-bag-3-line',
       iconBg: 'from-violet-50 to-violet-100/60',
       iconColor: 'text-violet-500',
-      trend: '+2 since yesterday',
-      trendDir: 'neutral',
     },
     {
       label: 'Total Stock Value',
@@ -120,17 +136,14 @@ export default function KpiCards() {
       icon: 'ri-money-dollar-circle-line',
       iconBg: 'from-emerald-50 to-emerald-100/60',
       iconColor: 'text-emerald-600',
-      trend: formatAmount(totalStockValue * 0.025),
-      trendDir: 'up',
     },
     {
       label: 'Pending Transfers',
-      value: 4,
-      sub: 'Vendor → BM warehouse',
+      value: pendingTransfers,
+      sub: 'Requested, approved, or in transit',
       icon: 'ri-swap-box-line',
       iconBg: 'from-orange-50 to-orange-100/60',
       iconColor: 'text-orange-500',
-      trend: '2 shipped to BM',
       trendDir: 'neutral',
     },
   ];

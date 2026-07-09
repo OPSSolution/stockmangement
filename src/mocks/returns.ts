@@ -1,4 +1,4 @@
-export type ReturnStatus = 'pending' | 'inspecting' | 'approved' | 'restocked' | 'discarded' | 'refunded';
+export type ReturnStatus = 'pending' | 'inspecting' | 'approved' | 'restocked' | 'discarded' | 'refunded' | 'returned';
 export type ReturnCondition = 'new' | 'good' | 'fair' | 'damaged' | 'defective';
 export type ReturnReason = 'wrong_item' | 'damaged' | 'defective' | 'not_as_described' | 'changed_mind' | 'other';
 export type ReturnDecision = 'restock' | 'discard' | 'pending';
@@ -8,6 +8,7 @@ export interface ReturnItem {
   productId: string;
   productName: string;
   sku: string;
+  imageUrl?: string | null;
   quantity: number;
   unitPrice: number;
   condition?: ReturnCondition;
@@ -28,9 +29,11 @@ export interface ReturnRequest {
   reasonNote?: string;
   refundMethod: RefundMethod;
   refundAmount: number;
-  warehouse: 'BM Warehouse' | 'Vendor Warehouse';
+  warehouse: string;
   assignedTo?: string;
   inspectionNotes?: string;
+  /** If set, this return was created from a stock request flagged "needs return". */
+  requestId?: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

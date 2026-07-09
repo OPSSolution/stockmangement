@@ -4,14 +4,15 @@ export interface TransferItem {
   productId: string;
   productName: string;
   sku: string;
+  imageUrl?: string | null;
   quantity: number;
   unitPrice: number;
 }
 
 export interface StockTransfer {
   id: string;
-  fromWarehouse: 'BM Warehouse' | 'Vendor Warehouse';
-  toWarehouse: 'BM Warehouse' | 'Vendor Warehouse';
+  fromWarehouse: string;
+  toWarehouse: string;
   requestedBy: string;
   approvedBy?: string;
   status: TransferStatus;

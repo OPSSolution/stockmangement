@@ -123,8 +123,12 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
             <div className="space-y-2">
               {delivery.items.map((item, i) => (
                 <div key={`${item.sku}-${i}`} className="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2.5">
-                  <div className="w-7 h-7 flex items-center justify-center rounded-md bg-white border border-gray-200">
-                    <i className="ri-box-3-line text-gray-400 text-sm"></i>
+                  <div className="w-7 h-7 flex items-center justify-center rounded-md bg-white border border-gray-200 overflow-hidden">
+                    {item.imageUrl ? (
+                      <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                    ) : (
+                      <i className="ri-box-3-line text-gray-400 text-sm"></i>
+                    )}
                   </div>
                   <div className="flex-1">
                     <p className="text-sm font-medium text-gray-800">{item.productName}</p>

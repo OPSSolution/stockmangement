@@ -6,6 +6,7 @@ import LoginPage from "../pages/login/page";
 import SignupPage from "../pages/signup/page";
 import Home from "../pages/home/page";
 import InventoryPage from "../pages/inventory/page";
+import RequestsPage from "../pages/requests/page";
 import OrdersPage from "../pages/orders/page";
 import PublicOrderFormPage from "../pages/order-form/page";
 import DeliveriesPage from "../pages/deliveries/page";
@@ -25,6 +26,7 @@ import RequirementsPage from "../pages/requirements/page";
 import RolesPage from "../pages/roles/page";
 import CategoriesPage from "../pages/categories/page";
 import AdminCategoriesPage from "../pages/admin/categories/page";
+import RequestTemplatesPage from "../pages/admin/request-templates/page";
 
 const routes: RouteObject[] = [
   {
@@ -46,6 +48,10 @@ const routes: RouteObject[] = [
   {
     path: "/inventory",
     element: <ProtectedRoute permKey="inventory"><InventoryPage /></ProtectedRoute>,
+  },
+  {
+    path: "/requests",
+    element: <ProtectedRoute permKey="requests"><RequestsPage /></ProtectedRoute>,
   },
   {
     path: "/orders",
@@ -118,6 +124,10 @@ const routes: RouteObject[] = [
   {
     path: "/admin/categories",
     element: <ProtectedRoute permKey="categories"><AdminCategoriesPage /></ProtectedRoute>,
+  },
+  {
+    path: "/admin/request-templates",
+    element: <ProtectedRoute permKey="request_templates"><RequestTemplatesPage /></ProtectedRoute>,
   },
   {
     path: "*",

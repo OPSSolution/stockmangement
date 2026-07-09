@@ -4,6 +4,7 @@ import { useCurrency } from '@/contexts/CurrencyContext';
 interface Props {
   vendor: Vendor;
   onClose: () => void;
+  onEdit?: () => void;
 }
 
 const statusConfig = {
@@ -23,7 +24,7 @@ function MetricBar({ value, max = 100, color = 'bg-emerald-500' }: { value: numb
   );
 }
 
-export default function VendorDetailModal({ vendor, onClose }: Props) {
+export default function VendorDetailModal({ vendor, onClose, onEdit }: Props) {
   const { formatAmount } = useCurrency();
   const sc = statusConfig[vendor.status];
 
@@ -45,9 +46,16 @@ export default function VendorDetailModal({ vendor, onClose }: Props) {
               <p className="text-sm text-gray-500 mt-0.5">{vendor.address}, {vendor.city}, {vendor.country}</p>
             </div>
           </div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer ml-4">
-            <i className="ri-close-line text-gray-500"></i>
-          </button>
+          <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+            {onEdit && (
+              <button onClick={onEdit} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sky-600 bg-sky-50 rounded-lg hover:bg-sky-100 cursor-pointer whitespace-nowrap">
+                <i className="ri-edit-line"></i>Edit
+              </button>
+            )}
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer">
+              <i className="ri-close-line text-gray-500"></i>
+            </button>
+          </div>
         </div>
 
         <div className="px-6 py-5 space-y-6">

@@ -388,6 +388,13 @@ export default function PromotionsPage() {
 
                                   return (
                                     <div key={prod.productId} className="flex items-center gap-3 bg-white rounded-lg px-4 py-3 border border-gray-100">
+                                      <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                                        {prod.imageUrl ? (
+                                          <img src={prod.imageUrl} alt={prod.productName} className="w-full h-full object-cover" />
+                                        ) : (
+                                          <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                                        )}
+                                      </div>
                                       <div className="flex-1 min-w-0">
                                         <p className="text-sm font-medium text-gray-800 truncate">{prod.productName}</p>
                                         <p className="text-xs text-gray-400 font-mono">{prod.sku}</p>

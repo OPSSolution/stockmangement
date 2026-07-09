@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface Activity {
   id: string;
@@ -41,6 +42,7 @@ export default function RecentActivity() {
   const [filter, setFilter] = useState<FilterKey>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const { warehouseScope } = useAuth();
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -62,13 +64,14 @@ export default function RecentActivity() {
       .order('created_at', { ascending: false })
       .limit(PAGE_SIZE);
     if (activeFilter) query = query.eq('type', activeFilter);
+    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
     const { data, error } = await query;
     if (!error && data) {
       setActivities(data as Activity[]);
       setHasMore(data.length === PAGE_SIZE);
     }
     setLoading(false);
-  }, []);
+  }, [warehouseScope]);
 
   useEffect(() => {
     fetchActivities(filter);
@@ -80,9 +83,9 @@ export default function RecentActivity() {
       .from('activity_log')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(PAGE_SIZE)
-      .offset(activities.length);
+      .range(activities.length, activities.length + PAGE_SIZE - 1);
     if (filter) query = query.eq('type', filter);
+    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
     const { data, error } = await query;
     if (!error && data) {
       setActivities(prev => [...prev, ...data as Activity[]]);

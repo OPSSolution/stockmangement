@@ -2,8 +2,10 @@ import { useState, useMemo, useEffect } from 'react';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { type Vendor } from '@/mocks/vendors';
 import VendorDetailModal from './components/VendorDetailModal';
+import VendorFormModal from './components/VendorFormModal';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 type FilterTab = 'all' | 'active' | 'inactive' | 'suspended';
 
@@ -42,19 +44,63 @@ function mapVendor(row: Record<string, unknown>): Vendor {
 }
 
 export default function VendorsPage() {
+  const { canEdit, canDelete, warehouseScope } = useAuth();
+  const showEdit = canEdit('vendors');
+  const showDelete = canDelete('vendors');
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [search, setSearch] = useState('');
   const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null);
   const [viewMode, setViewMode] = useState<'table' | 'card'>('table');
+  const [showForm, setShowForm] = useState(false);
+  const [editVendor, setEditVendor] = useState<Vendor | null>(null);
+  const [deleteVendor, setDeleteVendor] = useState<Vendor | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   useEffect(() => {
     fetchVendors();
-  }, []);
+  }, [warehouseScope]);
 
   const fetchVendors = async () => {
     setLoading(true);
+
+    // Warehouse-scoped staff only see vendors approved for their own warehouse
+    // (the "Approved Vendors" list set on the warehouse detail page) — admins
+    // keep the unrestricted, all-vendors view.
+    if (warehouseScope) {
+      const { data: whRow, error: whError } = await supabase
+        .from('warehouses')
+        .select('vendor_names')
+        .eq('name', warehouseScope)
+        .maybeSingle();
+      if (whError) {
+        console.error(whError);
+        setVendors([]);
+        setLoading(false);
+        return;
+      }
+      const vendorNames = (whRow?.vendor_names as string[]) || [];
+      if (vendorNames.length === 0) {
+        setVendors([]);
+        setLoading(false);
+        return;
+      }
+      const { data, error } = await supabase.from('vendors').select('*').in('name', vendorNames);
+      if (error) {
+        console.error(error);
+      } else {
+        setVendors((data || []).map(mapVendor));
+      }
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase.from('vendors').select('*');
     if (error) {
       console.error(error);
@@ -62,6 +108,59 @@ export default function VendorsPage() {
       setVendors((data || []).map(mapVendor));
     }
     setLoading(false);
+  };
+
+  const openNew = () => { setEditVendor(null); setShowForm(true); };
+  const openEdit = (v: Vendor, e?: React.MouseEvent) => { e?.stopPropagation(); setEditVendor(v); setShowForm(true); };
+
+  const handleSaveVendor = async (data: Omit<Vendor, 'id' | 'metrics' | 'products'> & { id?: string }) => {
+    const payload = {
+      name: data.name,
+      type: data.type,
+      status: data.status,
+      address: data.address || null,
+      city: data.city,
+      country: data.country,
+      website: data.website || null,
+      payment_terms: data.paymentTerms || null,
+      notes: data.notes || null,
+      tags: data.tags,
+      contacts: data.contacts,
+      registered_at: data.registeredAt,
+    };
+
+    if (data.id) {
+      const { error } = await supabase.from('vendors').update(payload).eq('id', data.id);
+      if (error) { console.error(error); showToast('Failed to update vendor.', 'error'); return; }
+      showToast('Vendor updated.');
+    } else {
+      const maxNum = vendors.length > 0 ? Math.max(...vendors.map((v) => parseInt(v.id.replace('V', '')) || 0)) : 0;
+      const newId = `V${String(maxNum + 1).padStart(3, '0')}`;
+      const { error } = await supabase.from('vendors').insert({
+        id: newId,
+        ...payload,
+        metrics: { totalOrders: 0, fulfilledOrders: 0, rejectedOrders: 0, fulfillmentRate: 0, avgDeliveryDays: 0, totalPurchaseValue: 0, lastOrderDate: '', onTimeDeliveryRate: 0 },
+        products: [],
+      });
+      if (error) { console.error(error); showToast('Failed to create vendor.', 'error'); return; }
+      showToast('Vendor created.');
+    }
+    setShowForm(false);
+    setEditVendor(null);
+    await fetchVendors();
+  };
+
+  const handleDeleteVendor = async () => {
+    if (!deleteVendor) return;
+    const { error } = await supabase.from('vendors').delete().eq('id', deleteVendor.id);
+    if (error) {
+      console.error(error);
+      showToast('Failed to delete vendor.', 'error');
+    } else {
+      showToast('Vendor deleted.');
+      setVendors((prev) => prev.filter((v) => v.id !== deleteVendor.id));
+    }
+    setDeleteVendor(null);
   };
 
   const filtered = useMemo(() => {
@@ -99,6 +198,13 @@ export default function VendorsPage() {
 
   return (
     <DashboardLayout title="Vendors" subtitle="Manage vendor profiles, performance metrics and product assignments">
+      {toast && (
+        <div className={`fixed top-5 right-5 z-[100] flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium shadow-lg ${toast.type === 'error' ? 'bg-red-500' : 'bg-emerald-500'} text-white`}>
+          <i className={`${toast.type === 'error' ? 'ri-error-warning-line' : 'ri-check-line'} text-base`}></i>
+          {toast.msg}
+        </div>
+      )}
+
       {loading && (
         <div className="flex items-center justify-center py-12 text-gray-400">
           <div className="w-8 h-8 flex items-center justify-center mr-3">
@@ -173,6 +279,14 @@ export default function VendorsPage() {
                     <i className="ri-grid-line text-sm"></i>
                   </button>
                 </div>
+                {showEdit && (
+                  <button
+                    onClick={openNew}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-add-line"></i>New Vendor
+                  </button>
+                )}
               </div>
             </div>
 
@@ -239,13 +353,34 @@ export default function VendorsPage() {
                               {v.status.charAt(0).toUpperCase() + v.status.slice(1)}
                             </span>
                           </td>
-                          <td className="px-4 py-3.5 text-center">
-                            <button
-                              onClick={() => setSelectedVendor(v)}
-                              className="text-xs font-medium text-emerald-600 hover:text-emerald-800 hover:underline cursor-pointer whitespace-nowrap"
-                            >
-                              View
-                            </button>
+                          <td className="px-4 py-3.5">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => setSelectedVendor(v)}
+                                className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 cursor-pointer"
+                                title="View vendor"
+                              >
+                                <i className="ri-eye-line text-sm"></i>
+                              </button>
+                              {showEdit && (
+                                <button
+                                  onClick={(e) => openEdit(v, e)}
+                                  className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-sky-500 hover:bg-sky-50 cursor-pointer"
+                                  title="Edit vendor"
+                                >
+                                  <i className="ri-edit-line text-sm"></i>
+                                </button>
+                              )}
+                              {showDelete && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setDeleteVendor(v); }}
+                                  className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 cursor-pointer"
+                                  title="Delete vendor"
+                                >
+                                  <i className="ri-delete-bin-line text-sm"></i>
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -267,7 +402,7 @@ export default function VendorsPage() {
                     <div
                       key={v.id}
                       onClick={() => setSelectedVendor(v)}
-                      className="bg-gray-50/60 border border-gray-100 rounded-2xl shadow-sm p-5 cursor-pointer hover:border-emerald-200 transition-all"
+                      className="bg-gray-50/60 border border-gray-100 rounded-2xl shadow-sm p-5 cursor-pointer hover:border-emerald-200 transition-all group"
                     >
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center gap-3">
@@ -279,9 +414,31 @@ export default function VendorsPage() {
                             <p className="text-xs text-gray-500">{v.city} · {typeLabel[v.type]}</p>
                           </div>
                         </div>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadge(v.status)} whitespace-nowrap`}>
-                          {v.status.charAt(0).toUpperCase() + v.status.slice(1)}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadge(v.status)} whitespace-nowrap`}>
+                            {v.status.charAt(0).toUpperCase() + v.status.slice(1)}
+                          </span>
+                          <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            {showEdit && (
+                              <button
+                                onClick={(e) => openEdit(v, e)}
+                                className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-sky-500 hover:bg-sky-50 cursor-pointer"
+                                title="Edit vendor"
+                              >
+                                <i className="ri-edit-line text-xs"></i>
+                              </button>
+                            )}
+                            {showDelete && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDeleteVendor(v); }}
+                                className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 cursor-pointer"
+                                title="Delete vendor"
+                              >
+                                <i className="ri-delete-bin-line text-xs"></i>
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       </div>
                       <div className="space-y-2.5">
                         <div>
@@ -339,7 +496,48 @@ export default function VendorsPage() {
         <VendorDetailModal
           vendor={selectedVendor}
           onClose={() => setSelectedVendor(null)}
+          onEdit={showEdit ? () => { setSelectedVendor(null); openEdit(selectedVendor); } : undefined}
         />
+      )}
+
+      {showForm && (
+        <VendorFormModal
+          vendor={editVendor}
+          onClose={() => { setShowForm(false); setEditVendor(null); }}
+          onSave={handleSaveVendor}
+        />
+      )}
+
+      {deleteVendor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl w-full max-w-sm mx-4 shadow-xl p-6">
+            <div className="flex flex-col items-center text-center gap-3 mb-6">
+              <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
+                <i className="ri-delete-bin-line text-red-500 text-xl"></i>
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-gray-900">Delete Vendor?</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  You are about to delete <span className="font-semibold text-gray-800">{deleteVendor.name}</span>. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setDeleteVendor(null)}
+                className="flex-1 py-2.5 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteVendor}
+                className="flex-1 py-2.5 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </DashboardLayout>
   );

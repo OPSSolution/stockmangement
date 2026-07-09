@@ -7,6 +7,7 @@ import PurchaseDetailModal from './components/PurchaseDetailModal';
 import PurchaseFormModal from './components/PurchaseFormModal';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 type FilterTab = 'all' | PurchaseStatus;
 
@@ -44,6 +45,7 @@ function mapPurchase(row: Record<string, unknown>): PurchaseOrder {
 
 export default function PurchasesPage() {
   const { formatAmount } = useCurrency();
+  const { warehouseScope } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,7 +57,7 @@ export default function PurchasesPage() {
 
   useEffect(() => {
     fetchPurchases();
-  }, []);
+  }, [warehouseScope]);
 
   useEffect(() => {
     if (searchParams.get('action') === 'new') {
@@ -67,7 +69,9 @@ export default function PurchasesPage() {
 
   const fetchPurchases = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('purchases').select('*').order('created_at', { ascending: false });
+    let query = supabase.from('purchases').select('*').order('created_at', { ascending: false });
+    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    const { data, error } = await query;
     if (error) {
       console.error(error);
     } else {
@@ -296,8 +300,19 @@ export default function PurchasesPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3.5">
-                          <p className="text-gray-700 text-sm">{po.items[0].productName}</p>
-                          {po.items.length > 1 && <p className="text-xs text-gray-400">+{po.items.length - 1} more</p>}
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                              {po.items[0].imageUrl ? (
+                                <img src={po.items[0].imageUrl} alt={po.items[0].productName} className="w-full h-full object-cover" />
+                              ) : (
+                                <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                              )}
+                            </div>
+                            <div>
+                              <p className="text-gray-700 text-sm">{po.items[0].productName}</p>
+                              {po.items.length > 1 && <p className="text-xs text-gray-400">+{po.items.length - 1} more</p>}
+                            </div>
+                          </div>
                         </td>
                         <td className="px-4 py-3.5">
                           <span className={`text-xs font-medium px-2 py-0.5 rounded ${po.warehouse === 'BM Warehouse' ? 'bg-sky-50 text-sky-700' : 'bg-violet-50 text-violet-700'}`}>

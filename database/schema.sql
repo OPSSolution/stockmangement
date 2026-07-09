@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS profiles (
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  sku TEXT NOT NULL UNIQUE,
+  sku TEXT NOT NULL,
   category TEXT NOT NULL,
   warehouse TEXT NOT NULL,
   vendor TEXT,
@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS products (
 -- Add columns to existing products table (idempotent)
 ALTER TABLE products ADD COLUMN IF NOT EXISTS product_type TEXT NOT NULL DEFAULT 'pack';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+-- SKU must be unique per warehouse, not globally, so the same product can
+-- exist as separate stock records in different warehouses (e.g. after a transfer).
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_sku_key;
+ALTER TABLE products ADD CONSTRAINT products_sku_warehouse_key UNIQUE (sku, warehouse);
 
 -- STOCK HISTORY
 CREATE TABLE IF NOT EXISTS stock_history (
@@ -237,7 +242,7 @@ CREATE TABLE IF NOT EXISTS returns (
   customer TEXT NOT NULL,
   email TEXT,
   phone TEXT,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','inspecting','approved','restocked','discarded','refunded')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','inspecting','approved','restocked','discarded','refunded','returned')),
   items JSONB NOT NULL DEFAULT '[]',
   total_items INTEGER NOT NULL DEFAULT 0,
   total_value NUMERIC(12,2) NOT NULL DEFAULT 0,

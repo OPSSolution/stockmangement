@@ -38,7 +38,7 @@ export default function WarehouseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { formatAmount } = useCurrency();
-  const { canEdit, canDelete } = useAuth();
+  const { canEdit, canDelete, warehouseScope } = useAuth();
   const showEdit = canEdit('warehouses');
   const showDelete = canDelete('warehouses');
   const [warehouse, setWarehouse] = useState<Warehouse | null>(null);
@@ -61,6 +61,12 @@ export default function WarehouseDetailPage() {
   const [savingStaff, setSavingStaff] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
 
+  const [allVendors, setAllVendors] = useState<string[]>([]);
+  const [editingVendors, setEditingVendors] = useState(false);
+  const [vendorsDraft, setVendorsDraft] = useState<string[]>([]);
+  const [savingVendors, setSavingVendors] = useState(false);
+  const [vendorsError, setVendorsError] = useState<string | null>(null);
+
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -68,13 +74,15 @@ export default function WarehouseDetailPage() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const result = await fetchWarehousesWithLiveData();
+      const result = await fetchWarehousesWithLiveData(warehouseScope);
       if (!result) {
         setLoading(false);
         return;
       }
       const match = result.warehouses.find((w) => w.id === id);
       if (!match) {
+        // Either the id doesn't exist, or (when scoped) it belongs to a
+        // warehouse the current user isn't assigned to.
         setNotFound(true);
         setLoading(false);
         return;
@@ -89,7 +97,14 @@ export default function WarehouseDetailPage() {
       }
       setLoading(false);
     })();
-  }, [id]);
+  }, [id, warehouseScope]);
+
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase.from('vendors').select('name').order('name', { ascending: true });
+      if (!error && data) setAllVendors(data.map((v) => v.name as string));
+    })();
+  }, []);
 
   const openEditInfo = () => {
     if (!warehouse) return;
@@ -174,6 +189,34 @@ export default function WarehouseDetailPage() {
     }
     setWarehouse({ ...warehouse, staff: cleaned });
     setEditingStaff(false);
+  };
+
+  const openEditVendors = () => {
+    if (!warehouse) return;
+    setVendorsDraft(warehouse.vendorNames ?? []);
+    setVendorsError(null);
+    setEditingVendors(true);
+  };
+
+  const toggleVendorDraft = (name: string) => {
+    setVendorsDraft((prev) => (prev.includes(name) ? prev.filter((v) => v !== name) : [...prev, name]));
+  };
+
+  const saveVendors = async () => {
+    if (!warehouse) return;
+    setSavingVendors(true);
+    setVendorsError(null);
+    const { error } = await supabase
+      .from('warehouses')
+      .update({ vendor_names: vendorsDraft })
+      .eq('id', warehouse.id);
+    setSavingVendors(false);
+    if (error) {
+      setVendorsError(error.message);
+      return;
+    }
+    setWarehouse({ ...warehouse, vendorNames: vendorsDraft });
+    setEditingVendors(false);
   };
 
   const confirmDelete = async () => {
@@ -342,6 +385,33 @@ export default function WarehouseDetailPage() {
               ))}
             </div>
           </div>
+      </div>
+
+      {/* Approved Vendors */}
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5 mb-5">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Approved Vendors</p>
+          {showEdit && (
+            <button
+              onClick={openEditVendors}
+              className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+              title="Edit"
+            >
+              <i className="ri-edit-line text-xs"></i>
+            </button>
+          )}
+        </div>
+        {(warehouse.vendorNames ?? []).length === 0 ? (
+          <p className="text-xs text-gray-400">No vendors linked yet — the Vendor picker on Add Product will be empty for this warehouse until you add some.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {(warehouse.vendorNames ?? []).map((name) => (
+              <span key={name} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <i className="ri-store-2-line"></i>{name}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Live Operations — real counts from products, transfers, purchases, returns */}
@@ -652,6 +722,45 @@ export default function WarehouseDetailPage() {
               <button onClick={() => setEditingStaff(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 font-medium cursor-pointer">Cancel</button>
               <button onClick={saveStaff} disabled={savingStaff} className="px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer">
                 {savingStaff ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Vendors modal */}
+      {editingVendors && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+              <h2 className="text-lg font-semibold text-gray-900">Approved Vendors</h2>
+              <button onClick={() => setEditingVendors(false)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
+                <i className="ri-close-line text-lg"></i>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-2">
+              {vendorsError && (
+                <div className="px-3 py-2.5 bg-red-50 border border-red-100 rounded-lg text-sm text-red-700 flex items-center gap-2">
+                  <i className="ri-error-warning-line"></i>
+                  {vendorsError}
+                </div>
+              )}
+              <p className="text-xs text-gray-400 mb-2">Select which vendors can supply products for this warehouse.</p>
+              {allVendors.length === 0 ? (
+                <p className="text-sm text-gray-400">No vendors yet — add one from the Vendors page first.</p>
+              ) : (
+                allVendors.map((name) => (
+                  <label key={name} className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-gray-200 hover:border-gray-300 cursor-pointer">
+                    <input type="checkbox" checked={vendorsDraft.includes(name)} onChange={() => toggleVendorDraft(name)} className="rounded" />
+                    <span className="text-sm text-gray-700">{name}</span>
+                  </label>
+                ))
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={() => setEditingVendors(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 font-medium cursor-pointer">Cancel</button>
+              <button onClick={saveVendors} disabled={savingVendors} className="px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer">
+                {savingVendors ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>

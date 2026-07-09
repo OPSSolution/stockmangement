@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Product, ProductType } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface ProductFormModalProps {
   product: Product | null;
@@ -28,8 +29,10 @@ function autoSku(name: string, nextNum: number) {
 type ProductFormState = Omit<Product, 'id' | 'status' | 'lastUpdated'>;
 
 export default function ProductFormModal({ product, nextNum, onClose, onSave }: ProductFormModalProps) {
+  const { warehouseScope } = useAuth();
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
   const [warehouses, setWarehouses] = useState<string[]>([]);
+  const [warehouseVendors, setWarehouseVendors] = useState<Record<string, string[]>>({});
   const [skuManuallyEdited, setSkuManuallyEdited] = useState(Boolean(product));
   const [form, setForm] = useState<ProductFormState>({
     name: '',
@@ -57,15 +60,18 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
 
   useEffect(() => {
     const loadWarehouses = async () => {
-      const { data, error } = await supabase.from('warehouses').select('name').order('name', { ascending: true });
+      const { data, error } = await supabase.from('warehouses').select('name, vendor_names').order('name', { ascending: true });
       if (!error && data && data.length > 0) {
         const names = data.map((w) => w.name as string);
         setWarehouses(names);
-        setForm((prev) => (prev.warehouse ? prev : { ...prev, warehouse: names[0] }));
+        setWarehouseVendors(Object.fromEntries(data.map((w) => [w.name as string, (w.vendor_names as string[]) || []])));
+        setForm((prev) => (prev.warehouse ? prev : { ...prev, warehouse: warehouseScope || names[0] }));
       }
     };
     loadWarehouses();
-  }, []);
+  }, [warehouseScope]);
+
+  const vendorOptions = warehouseVendors[form.warehouse] || [];
 
   useEffect(() => {
     if (product) {
@@ -185,24 +191,38 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Warehouse</label>
-              <select
-                name="warehouse"
-                value={form.warehouse}
-                onChange={handleChange}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
-              >
-                {warehouses.map((w) => <option key={w}>{w}</option>)}
-              </select>
+              {warehouseScope ? (
+                <input
+                  value={warehouseScope}
+                  disabled
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500"
+                />
+              ) : (
+                <select
+                  name="warehouse"
+                  value={form.warehouse}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
+                >
+                  {warehouses.map((w) => <option key={w}>{w}</option>)}
+                </select>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Vendor (optional)</label>
-              <input
+              <select
                 name="vendor"
                 value={form.vendor}
                 onChange={handleChange}
-                placeholder="e.g. TechSupply Co."
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
-              />
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
+              >
+                <option value="">None</option>
+                {vendorOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+                {form.vendor && !vendorOptions.includes(form.vendor) && <option value={form.vendor}>{form.vendor}</option>}
+              </select>
+              {vendorOptions.length === 0 && (
+                <p className="text-[11px] text-gray-400 mt-1">No vendors approved for this warehouse yet — add some from the warehouse's detail page.</p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Initial Stock</label>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 type ProductStatus = 'in_stock' | 'low_stock' | 'out_of_stock';
 
@@ -38,10 +39,13 @@ export default function StockTable() {
   const [filter, setFilter] = useState<'all' | ProductStatus>('all');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const { warehouseScope } = useAuth();
 
   useEffect(() => {
     async function fetchProducts() {
-      const { data, error } = await supabase.from('products').select('*');
+      let query = supabase.from('products').select('*');
+      if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+      const { data, error } = await query;
       if (!error && data) {
         setProducts(
           data.map((p) => ({
@@ -55,7 +59,7 @@ export default function StockTable() {
       setLoading(false);
     }
     fetchProducts();
-  }, []);
+  }, [warehouseScope]);
 
   const filtered = products.filter((p) => {
     const matchStatus = filter === 'all' || p.status === filter;

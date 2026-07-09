@@ -6,6 +6,11 @@ interface TransferDetailModalProps {
   transfer: StockTransfer;
   onClose: () => void;
   onStatusChange: (id: string, status: TransferStatus) => void;
+  /** Only the sending warehouse (or an admin) may approve a transfer or mark it in transit. */
+  isSendingWarehouse: boolean;
+  /** Only the receiving warehouse (or an admin) may confirm a transfer as received. */
+  isReceivingWarehouse: boolean;
+  statusChanging: boolean;
 }
 
 const steps: { key: TransferStatus; label: string; icon: string }[] = [
@@ -23,7 +28,7 @@ function getNextStatus(current: TransferStatus): TransferStatus | null {
   return stepOrder[idx + 1] as TransferStatus;
 }
 
-export default function TransferDetailModal({ transfer, onClose, onStatusChange }: TransferDetailModalProps) {
+export default function TransferDetailModal({ transfer, onClose, onStatusChange, isSendingWarehouse, isReceivingWarehouse, statusChanging }: TransferDetailModalProps) {
   const { formatAmount } = useCurrency();
   const currentIdx = stepOrder.indexOf(transfer.status);
   const nextStatus = getNextStatus(transfer.status);
@@ -125,7 +130,18 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange 
                 <tbody className="divide-y divide-gray-100">
                   {transfer.items.map((item) => (
                     <tr key={item.productId} className="hover:bg-gray-50/50">
-                      <td className="px-4 py-3 font-medium text-gray-800">{item.productName}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                            {item.imageUrl ? (
+                              <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                            ) : (
+                              <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                            )}
+                          </div>
+                          <span className="font-medium text-gray-800">{item.productName}</span>
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-gray-500 font-mono text-xs">{item.sku}</td>
                       <td className="px-4 py-3 text-center text-gray-700">{item.quantity}</td>
                       <td className="px-4 py-3 text-right text-gray-600">{formatAmount(item.unitPrice)}</td>
@@ -151,24 +167,37 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange 
           )}
 
           {/* Action */}
-          {!isCancelled && nextStatus && (
+          {!isCancelled && nextStatus && (() => {
+            const canAct = nextStatus === 'received' ? isReceivingWarehouse : isSendingWarehouse;
+            return (
             <div className="bg-gray-50 rounded-lg p-4 flex items-center justify-between">
               <div>
                 <p className="text-sm font-semibold text-gray-800">Next Action</p>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {nextStatus === 'approved' && 'Approve this transfer request to allow dispatch.'}
-                  {nextStatus === 'in_transit' && 'Mark as In Transit once stock has left the source warehouse.'}
-                  {nextStatus === 'received' && 'Confirm received once stock arrives at destination.'}
+                  {nextStatus === 'approved' && (canAct
+                    ? 'Approve this transfer request to allow dispatch.'
+                    : `Only ${transfer.fromWarehouse} can approve this transfer.`)}
+                  {nextStatus === 'in_transit' && (canAct
+                    ? 'Mark as In Transit once stock has left the source warehouse.'
+                    : `Only ${transfer.fromWarehouse} can mark this transfer in transit.`)}
+                  {nextStatus === 'received' && (canAct
+                    ? 'Confirm received once stock arrives at destination.'
+                    : `Only ${transfer.toWarehouse} can confirm receipt of this transfer.`)}
                 </p>
               </div>
-              <button
-                onClick={() => onStatusChange(transfer.id, nextStatus)}
-                className="px-5 py-2.5 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap ml-4"
-              >
-                <i className="ri-check-line mr-1.5"></i>{nextLabel[transfer.status]}
-              </button>
+              {canAct && (
+                <button
+                  onClick={() => onStatusChange(transfer.id, nextStatus)}
+                  disabled={statusChanging}
+                  className="px-5 py-2.5 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap ml-4 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <i className={`${statusChanging ? 'ri-loader-4-line animate-spin' : 'ri-check-line'} mr-1.5`}></i>
+                  {statusChanging ? 'Updating…' : nextLabel[transfer.status]}
+                </button>
+              )}
             </div>
-          )}
+            );
+          })()}
 
           {!isCancelled && transfer.status === 'requested' && (
             <div className="flex justify-end">

@@ -43,6 +43,8 @@ export interface Warehouse {
   monthlyActivity: MonthlyActivity[];
   lastAudit: string;
   notes?: string;
+  /** Vendors approved/available for this warehouse — scopes the Vendor picker on Add Product. */
+  vendorNames?: string[];
 }
 
 export const warehouses: Warehouse[] = [

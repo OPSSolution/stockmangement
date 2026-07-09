@@ -26,14 +26,14 @@ function parseItems(row: any): DeliveryItem[] {
   return row.items_detail
     .split('\n')
     .map((line: string) => {
-      const [productName = '', sku = '', rawQuantity = '1'] = line.split('|');
-      return { productName, sku, quantity: Number(rawQuantity) || 1 };
+      const [productName = '', sku = '', rawQuantity = '1', imageUrl = ''] = line.split('|');
+      return { productName, sku, quantity: Number(rawQuantity) || 1, imageUrl: imageUrl || null };
     })
     .filter((item: DeliveryItem) => item.productName || item.sku);
 }
 
 function itemsToDetail(items: DeliveryItem[]) {
-  return items.map((item) => `${item.productName}|${item.sku}|${item.quantity}`).join('\n');
+  return items.map((item) => `${item.productName}|${item.sku}|${item.quantity}|${item.imageUrl || ''}`).join('\n');
 }
 
 function rowToRecord(row: any): DeliveryRecord {

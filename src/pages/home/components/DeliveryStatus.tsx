@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface Delivery {
   id: string;
@@ -37,17 +38,20 @@ const statusColors: Record<string, { badge: string; text: string }> = {
 export default function DeliveryStatus() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [loading, setLoading] = useState(true);
+  const { warehouseScope } = useAuth();
 
   useEffect(() => {
     async function fetchDeliveries() {
-      const { data, error } = await supabase.from('deliveries').select('*').order('created_at', { ascending: false }).limit(5);
+      let query = supabase.from('deliveries').select('*').order('created_at', { ascending: false }).limit(5);
+      if (warehouseScope) query = query.or(`warehouse.eq.${warehouseScope},destination.eq.${warehouseScope}`);
+      const { data, error } = await query;
       if (!error && data) {
         setDeliveries(data as Delivery[]);
       }
       setLoading(false);
     }
     fetchDeliveries();
-  }, []);
+  }, [warehouseScope]);
 
   if (loading) {
     return (

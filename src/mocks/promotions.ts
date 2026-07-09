@@ -5,6 +5,7 @@ export interface PromotionProduct {
   productId: string;
   productName: string;
   sku: string;
+  imageUrl?: string | null;
   originalPrice: number;
   currentStock: number;
   expectedSalesPerDay: number;
@@ -14,6 +15,7 @@ export interface BundleItem {
   productId: string;
   productName: string;
   sku: string;
+  imageUrl?: string | null;
   quantity: number;
   originalPrice: number;
 }

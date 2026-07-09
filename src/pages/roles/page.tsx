@@ -41,7 +41,7 @@ const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
       { key: 'returns',    label: 'Returns',    icon: 'ri-arrow-go-back-line',   actions: ['edit', 'delete'] },
       { key: 'purchases',  label: 'Purchases',  icon: 'ri-shopping-cart-2-line', actions: [] },
       { key: 'promotions', label: 'Promotions', icon: 'ri-price-tag-3-line',     actions: [] },
-      { key: 'vendors',    label: 'Vendors',    icon: 'ri-store-2-line',         actions: [] },
+      { key: 'vendors',    label: 'Vendors',    icon: 'ri-store-2-line',         actions: ['edit', 'delete'] },
     ],
   },
   {
@@ -65,6 +65,7 @@ const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
     group: 'Admin',
     pages: [
       { key: 'categories', label: 'Categories', icon: 'ri-price-tag-2-line', actions: ['edit', 'delete'] },
+      { key: 'request_templates', label: 'Request Templates', icon: 'ri-file-list-2-line', actions: ['edit', 'delete'] },
     ],
   },
 ];

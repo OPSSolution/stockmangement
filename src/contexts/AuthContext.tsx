@@ -39,6 +39,8 @@ interface AuthContextType {
   isAdmin: boolean;
   isStaff: boolean;
   isViewer: boolean;
+  /** Assigned warehouse name to scope data to, or null when the user should see all warehouses. */
+  warehouseScope: string | null;
   canAccess: (key: string) => boolean;
   canEdit: (key: string) => boolean;
   canDelete: (key: string) => boolean;
@@ -167,10 +169,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const canAccess = (key: string) => permissions === null || normalizePerm(permissions[key]).view;
   const canEdit = (key: string) => permissions === null || normalizePerm(permissions[key]).edit;
   const canDelete = (key: string) => permissions === null || normalizePerm(permissions[key]).delete;
+  // Non-admins assigned to a warehouse only see data tied to that warehouse;
+  // admins always see everything regardless of their own assignment.
+  const warehouseScope = !isAdmin && profile?.warehouse ? profile.warehouse : null;
 
   return (
     <AuthContext.Provider
-      value={{ user, session, profile, permissions, loading, isAdmin, isStaff, isViewer, canAccess, canEdit, canDelete, signIn, signUp, signOut, refreshProfile }}
+      value={{ user, session, profile, permissions, loading, isAdmin, isStaff, isViewer, canAccess, canEdit, canDelete, warehouseScope, signIn, signUp, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>

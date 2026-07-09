@@ -150,8 +150,12 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
               <div className="space-y-2">
                 {split.items.map((item) => (
                   <div key={item.id} className="flex items-center gap-3 bg-white rounded-lg px-3 py-2.5 border border-gray-100">
-                    <div className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-50">
-                      <i className="ri-box-3-line text-gray-400 text-sm"></i>
+                    <div className="w-7 h-7 flex items-center justify-center rounded-md bg-gray-50 overflow-hidden">
+                      {item.imageUrl ? (
+                        <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                      ) : (
+                        <i className="ri-box-3-line text-gray-400 text-sm"></i>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 leading-tight truncate">{item.productName}</p>

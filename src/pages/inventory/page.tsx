@@ -11,6 +11,7 @@ import { StockHistoryEntry } from '@/mocks/stockHistory';
 import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 const CATEGORY_STORAGE_KEY = 'inventory_categories';
 
@@ -59,6 +60,7 @@ function mapHistory(row: Record<string, unknown>): StockHistoryEntry {
 export default function InventoryPage() {
   const navigate = useNavigate();
   const { formatAmount } = useCurrency();
+  const { warehouseScope } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
   const [history, setHistory] = useState<StockHistoryEntry[]>([]);
@@ -68,8 +70,10 @@ export default function InventoryPage() {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [filterWarehouse, setFilterWarehouse] = useState('all');
   const [filterCategory, setFilterCategory] = useState('all');
+  const [filterVendor, setFilterVendor] = useState('all');
   const [categories, setCategories] = useState<string[]>(['Electronics', 'Furniture', 'Accessories', 'Lighting', 'Smart Home']);
   const [warehouses, setWarehouses] = useState<string[]>([]);
+  const [scopedVendorNames, setScopedVendorNames] = useState<string[]>([]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editProduct, setEditProduct] = useState<Product | null>(null);
@@ -104,15 +108,20 @@ export default function InventoryPage() {
     };
 
     const loadWarehouses = async () => {
-      const { data } = await supabase.from('warehouses').select('name').order('name', { ascending: true });
-      if (data) setWarehouses(data.map((w) => w.name as string));
+      let query = supabase.from('warehouses').select('name, vendor_names').order('name', { ascending: true });
+      if (warehouseScope) query = query.eq('name', warehouseScope);
+      const { data } = await query;
+      if (data) {
+        setWarehouses(data.map((w) => w.name as string));
+        if (warehouseScope) setScopedVendorNames((data[0]?.vendor_names as string[]) || []);
+      }
     };
 
     loadCategories();
     loadWarehouses();
     fetchProducts();
     fetchHistory();
-  }, []);
+  }, [warehouseScope]);
 
   // Auto-open add modal when navigated with ?action=add
   useEffect(() => {
@@ -138,7 +147,9 @@ export default function InventoryPage() {
 
   const fetchProducts = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('products').select('*').order('last_updated', { ascending: false });
+    let query = supabase.from('products').select('*').order('last_updated', { ascending: false });
+    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    const { data, error } = await query;
     if (error) {
       console.error(error);
       showToast('Failed to load products.', 'error');
@@ -149,7 +160,9 @@ export default function InventoryPage() {
   };
 
   const fetchHistory = async () => {
-    const { data, error } = await supabase.from('stock_history').select('*').order('created_at', { ascending: false });
+    let query = supabase.from('stock_history').select('*').order('created_at', { ascending: false });
+    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    const { data, error } = await query;
     if (error) console.error(error);
     else setHistory((data || []).map(mapHistory));
   };
@@ -160,9 +173,10 @@ export default function InventoryPage() {
       const matchStatus = filterStatus === 'all' || p.status === filterStatus;
       const matchWarehouse = filterWarehouse === 'all' || p.warehouse === filterWarehouse;
       const matchCategory = filterCategory === 'all' || p.category === filterCategory;
-      return matchSearch && matchStatus && matchWarehouse && matchCategory;
+      const matchVendor = filterVendor === 'all' || p.vendor === filterVendor;
+      return matchSearch && matchStatus && matchWarehouse && matchCategory && matchVendor;
     });
-  }, [products, search, filterStatus, filterWarehouse, filterCategory]);
+  }, [products, search, filterStatus, filterWarehouse, filterCategory, filterVendor]);
 
   const availableCategories = useMemo(() => {
     const fromProducts = [...new Set(products.map((p) => p.category))];
@@ -172,6 +186,13 @@ export default function InventoryPage() {
   const availableWarehouses = useMemo(() => {
     return [...new Set([ ...warehouses, ...products.map((p) => p.warehouse) ])];
   }, [warehouses, products]);
+
+  const availableVendors = useMemo(() => {
+    // Scoped staff only ever see their warehouse's approved vendor list —
+    // not every vendor in the system, unlike the unrestricted admin view.
+    if (warehouseScope) return scopedVendorNames;
+    return [...new Set(products.map((p) => p.vendor).filter((v): v is string => !!v))];
+  }, [products, warehouseScope, scopedVendorNames]);
 
   const handleSaveProduct = async (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string }) => {
     const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
@@ -198,7 +219,7 @@ export default function InventoryPage() {
         showToast('Failed to update product.', 'error');
       } else {
         showToast('Product updated successfully.');
-        await fetchProducts();
+        setProducts((prev) => prev.map((p) => (p.id === data.id ? { ...p, ...data, id: data.id as string, status, lastUpdated: now } : p)));
       }
     } else {
       const maxNum = products.length > 0 ? Math.max(...products.map(p => parseInt(p.id.replace('P', '')) || 0)) : 0;
@@ -225,7 +246,7 @@ export default function InventoryPage() {
         showToast('Failed to add product.', 'error');
       } else {
         showToast('Product added successfully.');
-        await fetchProducts();
+        setProducts((prev) => [{ ...data, id: newId, status, lastUpdated: now }, ...prev]);
       }
     }
     setEditProduct(null);
@@ -252,8 +273,10 @@ export default function InventoryPage() {
       return;
     }
 
+    const newStatus = deriveStatus(newStock, target.lowStockThreshold);
+    const historyId = `SH-${Date.now()}`;
     const { error: historyError } = await supabase.from('stock_history').insert({
-      id: `SH-${Date.now()}`,
+      id: historyId,
       product_id: productId,
       type,
       quantity: delta,
@@ -268,8 +291,11 @@ export default function InventoryPage() {
 
     if (historyError) console.error(historyError);
 
-    await fetchProducts();
-    await fetchHistory();
+    setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, stock: newStock, status: newStatus, lastUpdated: now } : p)));
+    setHistory((prev) => [
+      { id: historyId, productId, type: type as StockHistoryEntry['type'], quantity: delta, stockBefore: target.stock, stockAfter: newStock, reference: 'ADJ-MANUAL', note: note || 'Manual stock adjustment', warehouse: target.warehouse, user: 'Admin', timestamp: now },
+      ...prev,
+    ]);
     setAdjustProduct(null);
 
     // Real-time low-stock alert pipeline trigger
@@ -299,7 +325,7 @@ export default function InventoryPage() {
       showToast('Failed to delete product.', 'error');
     } else {
       showToast('Product deleted.', 'error');
-      await fetchProducts();
+      setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
     }
     setDeleteProduct(null);
   };
@@ -390,6 +416,16 @@ export default function InventoryPage() {
                 >
                   <option value="all">All Categories</option>
                   {availableCategories.map((c) => <option key={c}>{c}</option>)}
+                </select>
+
+                {/* Vendor filter */}
+                <select
+                  value={filterVendor}
+                  onChange={(e) => setFilterVendor(e.target.value)}
+                  className="py-2 px-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer text-gray-600"
+                >
+                  <option value="all">All Vendors</option>
+                  {availableVendors.map((v) => <option key={v} value={v}>{v}</option>)}
                 </select>
 
                 {/* Status filter */}

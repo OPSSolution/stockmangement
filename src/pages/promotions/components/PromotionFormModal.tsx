@@ -27,6 +27,7 @@ interface ProductOption {
   id: string;
   name: string;
   sku: string;
+  image_url?: string | null;
   price: number;
   stock: number;
 }
@@ -64,9 +65,9 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
 
   const fetchProducts = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('products').select('id, name, sku, price, stock');
+    const { data, error } = await supabase.from('products').select('id, name, sku, image_url, price, stock');
     if (error) console.error(error);
-    else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, price: p.price, stock: p.stock })));
+    else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, stock: p.stock })));
     setLoading(false);
   };
 
@@ -278,6 +279,13 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
                   >
                     <div className={`w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center ${form.productIds.includes(p.id) ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'}`}>
                       {form.productIds.includes(p.id) && <i className="ri-check-line text-white text-xs"></i>}
+                    </div>
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                      {p.image_url ? (
+                        <img src={p.image_url} alt={p.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">{p.name}</p>

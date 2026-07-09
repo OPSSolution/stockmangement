@@ -56,6 +56,7 @@ function mapWarehouse(row: Record<string, unknown>): Warehouse {
     monthlyActivity: (row.monthly_activity as unknown as Warehouse['monthlyActivity']) || [],
     country: (row.country as string) || 'Malaysia',
     pendingPickups: (row.pending_pickups as number) || 0,
+    vendorNames: (row.vendor_names as string[]) || [],
   };
 }
 
@@ -65,7 +66,12 @@ const monthLabel = (d: Date) => d.toLocaleDateString('en-US', { month: 'short' }
 // Fetches warehouses plus real product/transfer/purchase/return data, and derives
 // live per-warehouse stats — replacing the static seeded totals on the warehouses
 // table with numbers that reflect what's actually happening right now.
-export async function fetchWarehousesWithLiveData(): Promise<{ warehouses: Warehouse[]; liveStats: Record<string, LiveStats> } | null> {
+export async function fetchWarehousesWithLiveData(
+  scopeWarehouseName?: string | null
+): Promise<{ warehouses: Warehouse[]; liveStats: Record<string, LiveStats> } | null> {
+  let warehousesQuery = supabase.from('warehouses').select('*');
+  if (scopeWarehouseName) warehousesQuery = warehousesQuery.eq('name', scopeWarehouseName);
+
   const [
     { data: whRows, error },
     { data: products },
@@ -73,7 +79,7 @@ export async function fetchWarehousesWithLiveData(): Promise<{ warehouses: Wareh
     { data: purchases },
     { data: returns },
   ] = await Promise.all([
-    supabase.from('warehouses').select('*'),
+    warehousesQuery,
     supabase.from('products').select('warehouse, stock, price, status'),
     supabase.from('transfers').select('from_warehouse, to_warehouse, status, total_items, created_at'),
     supabase.from('purchases').select('warehouse, status, total, created_at'),

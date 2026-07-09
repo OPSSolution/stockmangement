@@ -6,6 +6,7 @@ import TransferStatusBadge from './components/TransferStatusBadge';
 import TransferDetailModal from './components/TransferDetailModal';
 import TransferFormModal from './components/TransferFormModal';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 
 type FilterTab = 'all' | TransferStatus;
 
@@ -18,11 +19,123 @@ const tabs: { key: FilterTab; label: string }[] = [
   { key: 'cancelled', label: 'Cancelled' },
 ];
 
+function deriveStatus(stock: number, threshold: number): 'in_stock' | 'low_stock' | 'out_of_stock' {
+  if (stock === 0) return 'out_of_stock';
+  if (stock <= threshold) return 'low_stock';
+  return 'in_stock';
+}
+
+// Moves stock from the source warehouse's product into the destination warehouse's
+// matching product (matched by SKU) — creating it there if it doesn't exist yet —
+// and logs both sides to stock_history so it shows up in each product's history.
+async function fulfillTransfer(transfer: StockTransfer): Promise<{ error: string | null }> {
+  const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+  const { data: allProducts, error: fetchErr } = await supabase.from('products').select('*');
+  if (fetchErr || !allProducts) return { error: fetchErr?.message || 'Failed to load products' };
+
+  let maxNum = allProducts.length > 0
+    ? Math.max(...allProducts.map((p) => parseInt(String(p.id).replace('P', '')) || 0))
+    : 0;
+
+  for (const item of transfer.items) {
+    const sourceProduct = allProducts.find((p) => p.id === item.productId);
+    if (!sourceProduct) continue;
+
+    const newSourceStock = Math.max(0, sourceProduct.stock - item.quantity);
+    const { error: srcErr } = await supabase.from('products').update({
+      stock: newSourceStock,
+      status: deriveStatus(newSourceStock, sourceProduct.low_stock_threshold),
+      last_updated: now,
+    }).eq('id', sourceProduct.id);
+    if (srcErr) return { error: srcErr.message };
+
+    await supabase.from('stock_history').insert({
+      id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      product_id: sourceProduct.id,
+      type: 'transfer_out',
+      quantity: -item.quantity,
+      stock_before: sourceProduct.stock,
+      stock_after: newSourceStock,
+      reference: transfer.id,
+      note: `Transferred to ${transfer.toWarehouse}`,
+      warehouse: sourceProduct.warehouse,
+      user_name: 'Admin',
+      created_at: now,
+    });
+    sourceProduct.stock = newSourceStock;
+
+    const destProduct = allProducts.find((p) => p.warehouse === transfer.toWarehouse && p.sku === sourceProduct.sku);
+
+    if (destProduct) {
+      const newDestStock = destProduct.stock + item.quantity;
+      const { error: destErr } = await supabase.from('products').update({
+        stock: newDestStock,
+        status: deriveStatus(newDestStock, destProduct.low_stock_threshold),
+        last_updated: now,
+      }).eq('id', destProduct.id);
+      if (destErr) return { error: destErr.message };
+
+      await supabase.from('stock_history').insert({
+        id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        product_id: destProduct.id,
+        type: 'transfer_in',
+        quantity: item.quantity,
+        stock_before: destProduct.stock,
+        stock_after: newDestStock,
+        reference: transfer.id,
+        note: `Transferred from ${transfer.fromWarehouse}`,
+        warehouse: destProduct.warehouse,
+        user_name: 'Admin',
+        created_at: now,
+      });
+      destProduct.stock = newDestStock;
+    } else {
+      maxNum += 1;
+      const newId = `P${String(maxNum).padStart(3, '0')}`;
+      const { error: createErr } = await supabase.from('products').insert({
+        id: newId,
+        name: sourceProduct.name,
+        sku: sourceProduct.sku,
+        category: sourceProduct.category,
+        warehouse: transfer.toWarehouse,
+        vendor: sourceProduct.vendor || null,
+        image_url: sourceProduct.image_url || null,
+        stock: item.quantity,
+        low_stock_threshold: sourceProduct.low_stock_threshold,
+        price: sourceProduct.price,
+        product_type: sourceProduct.product_type,
+        status: deriveStatus(item.quantity, sourceProduct.low_stock_threshold),
+        last_updated: now,
+      });
+      if (createErr) return { error: createErr.message };
+
+      await supabase.from('stock_history').insert({
+        id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        product_id: newId,
+        type: 'transfer_in',
+        quantity: item.quantity,
+        stock_before: 0,
+        stock_after: item.quantity,
+        reference: transfer.id,
+        note: `Transferred from ${transfer.fromWarehouse} — new product added to ${transfer.toWarehouse}`,
+        warehouse: transfer.toWarehouse,
+        user_name: 'Admin',
+        created_at: now,
+      });
+
+      allProducts.push({ ...sourceProduct, id: newId, warehouse: transfer.toWarehouse, stock: item.quantity });
+    }
+  }
+
+  return { error: null };
+}
+
 function mapTransfer(row: Record<string, unknown>): StockTransfer {
   return {
     id: row.id as string,
-    fromWarehouse: row.from_warehouse as 'BM Warehouse' | 'Vendor Warehouse',
-    toWarehouse: row.to_warehouse as 'BM Warehouse' | 'Vendor Warehouse',
+    fromWarehouse: row.from_warehouse as string,
+    toWarehouse: row.to_warehouse as string,
     requestedBy: row.requested_by as string,
     approvedBy: row.approved_by as string | undefined,
     status: row.status as TransferStatus,
@@ -38,6 +151,7 @@ function mapTransfer(row: Record<string, unknown>): StockTransfer {
 }
 
 export default function TransfersPage() {
+  const { warehouseScope, isAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,10 +160,11 @@ export default function TransfersPage() {
   const [selectedTransfer, setSelectedTransfer] = useState<StockTransfer | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
+  const [statusChanging, setStatusChanging] = useState(false);
 
   useEffect(() => {
     fetchTransfers();
-  }, []);
+  }, [warehouseScope]);
 
   useEffect(() => {
     if (searchParams.get('action') === 'new') {
@@ -61,7 +176,9 @@ export default function TransfersPage() {
 
   const fetchTransfers = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('transfers').select('*').order('created_at', { ascending: false });
+    let query = supabase.from('transfers').select('*').order('created_at', { ascending: false });
+    if (warehouseScope) query = query.or(`from_warehouse.eq.${warehouseScope},to_warehouse.eq.${warehouseScope}`);
+    const { data, error } = await query;
     if (error) {
       console.error(error);
     } else {
@@ -94,23 +211,54 @@ export default function TransfersPage() {
   }), [transfers]);
 
   const handleStatusChange = async (id: string, status: TransferStatus) => {
-    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
-    const updateData: Record<string, unknown> = { status, updated_at: now };
-    if (status === 'approved') updateData.approved_by = 'Admin';
-    if (status === 'received') updateData.completed_at = now;
+    if (statusChanging) return;
+    const transfer = transfers.find((t) => t.id === id);
 
-    const { error } = await supabase.from('transfers').update(updateData).eq('id', id);
-    if (error) {
-      console.error(error);
-    } else {
-      const label: Record<string, string> = { approved: 'Transfer approved!', in_transit: 'Marked as In Transit', received: 'Stock received successfully!', cancelled: 'Transfer cancelled.' };
-      setSuccessMsg(label[status] ?? 'Status updated.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      await fetchTransfers();
-      if (selectedTransfer?.id === id) {
-        const refreshed = (await supabase.from('transfers').select('*').eq('id', id).single()).data;
-        if (refreshed) setSelectedTransfer(mapTransfer(refreshed));
+    if (status === 'approved' || status === 'in_transit' || status === 'received') {
+      const isReceivingWarehouse = isAdmin || (transfer && warehouseScope === transfer.toWarehouse);
+      const isSendingWarehouse = isAdmin || (transfer && warehouseScope === transfer.fromWarehouse);
+      const allowed = status === 'received' ? isReceivingWarehouse : isSendingWarehouse;
+      if (!allowed) {
+        const warehouse = status === 'received' ? transfer?.toWarehouse : transfer?.fromWarehouse;
+        const action = status === 'approved' ? 'approve' : status === 'in_transit' ? 'mark in transit' : 'confirm receipt of';
+        window.alert(`Only ${warehouse ?? 'the responsible warehouse'} can ${action} this transfer.`);
+        return;
       }
+    }
+
+    setStatusChanging(true);
+    try {
+      if (status === 'received' && transfer) {
+        const { error: fulfillError } = await fulfillTransfer(transfer);
+        if (fulfillError) {
+          window.alert(`Failed to update inventory: ${fulfillError}`);
+          return;
+        }
+      }
+
+      const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+      const updateData: Record<string, unknown> = { status, updated_at: now };
+      if (status === 'approved') updateData.approved_by = 'Admin';
+      if (status === 'received') updateData.completed_at = now;
+
+      const { error } = await supabase.from('transfers').update(updateData).eq('id', id);
+      if (error) {
+        console.error(error);
+        window.alert(`Failed to update status: ${error.message}`);
+      } else {
+        const label: Record<string, string> = { approved: 'Transfer approved!', in_transit: 'Marked as In Transit', received: 'Stock received successfully!', cancelled: 'Transfer cancelled.' };
+        setSuccessMsg(label[status] ?? 'Status updated.');
+        setTimeout(() => setSuccessMsg(''), 3000);
+
+        const patch: Partial<StockTransfer> = { status, updatedAt: now };
+        if (status === 'approved') patch.approvedBy = 'Admin';
+        if (status === 'received') patch.completedAt = now;
+
+        setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+        setSelectedTransfer((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
+      }
+    } finally {
+      setStatusChanging(false);
     }
   };
 
@@ -119,6 +267,7 @@ export default function TransfersPage() {
     const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
     const maxNum = transfers.length > 0 ? Math.max(...transfers.map(t => parseInt(t.id.replace('TRF-', '')) || 0)) : 0;
     const newId = `TRF-${String(maxNum + 1).padStart(4, '0')}`;
+    const totalItems = data.items.reduce((s: number, i: { quantity: number }) => s + i.quantity, 0);
 
     const { error } = await supabase.from('transfers').insert({
       id: newId,
@@ -127,7 +276,7 @@ export default function TransfersPage() {
       requested_by: 'Admin',
       status: 'requested',
       items: data.items,
-      total_items: data.items.reduce((s: number, i: { quantity: number }) => s + i.quantity, 0),
+      total_items: totalItems,
       reason: data.reason,
       notes: data.notes || null,
       expected_arrival: data.expectedArrival || null,
@@ -141,7 +290,22 @@ export default function TransfersPage() {
     } else {
       setShowForm(false);
       setSuccessMsg('Transfer request submitted!');
-      await fetchTransfers();
+      setTransfers((prev) => [{
+        id: newId,
+        fromWarehouse: data.fromWarehouse,
+        toWarehouse: data.toWarehouse,
+        requestedBy: 'Admin',
+        approvedBy: undefined,
+        status: 'requested',
+        items: data.items,
+        totalItems,
+        reason: data.reason,
+        notes: data.notes || undefined,
+        expectedArrival: data.expectedArrival || undefined,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: undefined,
+      }, ...prev]);
     }
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -259,18 +423,29 @@ export default function TransfersPage() {
                         </td>
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-1.5 text-sm">
-                            <span className={`text-xs font-medium px-2 py-0.5 rounded ${t.fromWarehouse === 'BM Warehouse' ? 'bg-sky-50 text-sky-700' : 'bg-violet-50 text-violet-700'}`}>
-                              {t.fromWarehouse === 'BM Warehouse' ? 'BM' : 'Vendor'}
+                            <span className="text-xs font-medium px-2 py-0.5 rounded bg-sky-50 text-sky-700 whitespace-nowrap">
+                              {t.fromWarehouse}
                             </span>
-                            <i className="ri-arrow-right-line text-gray-400"></i>
-                            <span className={`text-xs font-medium px-2 py-0.5 rounded ${t.toWarehouse === 'BM Warehouse' ? 'bg-sky-50 text-sky-700' : 'bg-violet-50 text-violet-700'}`}>
-                              {t.toWarehouse === 'BM Warehouse' ? 'BM' : 'Vendor'}
+                            <i className="ri-arrow-right-line text-gray-400 flex-shrink-0"></i>
+                            <span className="text-xs font-medium px-2 py-0.5 rounded bg-violet-50 text-violet-700 whitespace-nowrap">
+                              {t.toWarehouse}
                             </span>
                           </div>
                         </td>
                         <td className="px-4 py-3.5">
-                          <p className="text-gray-700 text-sm">{t.items[0].productName}</p>
-                          {t.items.length > 1 && <p className="text-xs text-gray-400">+{t.items.length - 1} more</p>}
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                              {t.items[0].imageUrl ? (
+                                <img src={t.items[0].imageUrl} alt={t.items[0].productName} className="w-full h-full object-cover" />
+                              ) : (
+                                <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                              )}
+                            </div>
+                            <div>
+                              <p className="text-gray-700 text-sm">{t.items[0].productName}</p>
+                              {t.items.length > 1 && <p className="text-xs text-gray-400">+{t.items.length - 1} more</p>}
+                            </div>
+                          </div>
                         </td>
                         <td className="px-4 py-3.5 text-center">
                           <span className="font-semibold text-gray-800">{t.totalItems}</span>
@@ -307,6 +482,9 @@ export default function TransfersPage() {
           transfer={selectedTransfer}
           onClose={() => setSelectedTransfer(null)}
           onStatusChange={handleStatusChange}
+          isSendingWarehouse={isAdmin || warehouseScope === selectedTransfer.fromWarehouse}
+          isReceivingWarehouse={isAdmin || warehouseScope === selectedTransfer.toWarehouse}
+          statusChanging={statusChanging}
         />
       )}
       {showForm && (

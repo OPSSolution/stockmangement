@@ -6,6 +6,7 @@ export interface OrderItem {
   productId: string;
   productName: string;
   sku: string;
+  imageUrl?: string | null;
   quantity: number;
   unitPrice: number;
   availableQty: number;

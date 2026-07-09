@@ -6,6 +6,7 @@ interface NewPOItem {
   productId: string;
   productName: string;
   sku: string;
+  imageUrl?: string | null;
   orderedQty: number;
   receivedQty: number;
   unitCost: number;
@@ -30,6 +31,7 @@ interface ProductOption {
   id: string;
   name: string;
   sku: string;
+  image_url?: string | null;
   price: number;
 }
 
@@ -65,11 +67,11 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
   const fetchData = async () => {
     setLoading(true);
     const [prodRes, vendRes] = await Promise.all([
-      supabase.from('products').select('id, name, sku, price'),
+      supabase.from('products').select('id, name, sku, image_url, price'),
       supabase.from('vendors').select('name, contacts, payment_terms'),
     ]);
     if (prodRes.error) console.error(prodRes.error);
-    else setProducts((prodRes.data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, price: p.price })));
+    else setProducts((prodRes.data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price })));
     if (vendRes.error) console.error(vendRes.error);
     else setVendors((vendRes.data || []).map((v) => ({ name: v.name, contacts: v.contacts || [], payment_terms: v.payment_terms })));
     setLoading(false);
@@ -104,7 +106,7 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
       ...f,
       items: [
         ...f.items,
-        { productId: product.id, productName: product.name, sku: product.sku, orderedQty: selectedQty, receivedQty: 0, unitCost: selectedCost },
+        { productId: product.id, productName: product.name, sku: product.sku, imageUrl: product.image_url || null, orderedQty: selectedQty, receivedQty: 0, unitCost: selectedCost },
       ],
     }));
     setSelectedProduct('');
@@ -272,8 +274,19 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                     {form.items.map((item) => (
                       <tr key={item.productId}>
                         <td className="px-4 py-2.5">
-                          <p className="font-medium text-gray-800 text-sm">{item.productName}</p>
-                          <p className="text-xs text-gray-400 font-mono">{item.sku}</p>
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                              {item.imageUrl ? (
+                                <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                              ) : (
+                                <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                              )}
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-800 text-sm">{item.productName}</p>
+                              <p className="text-xs text-gray-400 font-mono">{item.sku}</p>
+                            </div>
+                          </div>
                         </td>
                         <td className="px-3 py-2.5 text-center text-gray-700">{item.orderedQty}</td>
                         <td className="px-4 py-2.5 text-right text-gray-600">{formatAmount(item.unitCost)}</td>

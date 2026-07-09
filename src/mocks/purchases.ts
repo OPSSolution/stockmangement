@@ -4,6 +4,7 @@ export interface PurchaseItem {
   productId: string;
   productName: string;
   sku: string;
+  imageUrl?: string | null;
   orderedQty: number;
   receivedQty: number;
   unitCost: number;

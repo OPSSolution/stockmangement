@@ -96,7 +96,15 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
     onClose();
   };
 
-  const isEditable = ret.status === 'pending' || ret.status === 'inspecting';
+  const handleComplete = () => {
+    onUpdate(ret.id, { status: 'returned', completedAt: new Date().toISOString().slice(0, 16).replace('T', ' '), updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') });
+    onClose();
+  };
+
+  // Request-linked returns skip the customer-return inspection/condition workflow —
+  // just a single "Complete" action that closes both the return and the source request.
+  const isLinked = !!ret.requestId;
+  const isEditable = !isLinked && (ret.status === 'pending' || ret.status === 'inspecting');
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -127,7 +135,10 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
               <div className="flex justify-between"><span className="text-gray-500">Name</span><span className="font-medium text-gray-800">{ret.customer}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Email</span><span className="text-gray-700 text-xs">{ret.email}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Phone</span><span className="text-gray-700 text-xs">{ret.phone}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Warehouse</span><span className="text-gray-700">{ret.warehouse === 'BM Warehouse' ? 'BM' : 'Vendor'}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Warehouse</span><span className="text-gray-700">{ret.warehouse}</span></div>
+              {ret.requestId && (
+                <div className="flex justify-between"><span className="text-gray-500">Linked Request</span><span className="font-mono text-xs text-emerald-700">{ret.requestId}</span></div>
+              )}
             </div>
             <div className="bg-gray-50 rounded-lg p-4 space-y-2">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Return Details</p>
@@ -154,9 +165,18 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
               {items.map((item, idx) => (
                 <div key={item.productId} className="border border-gray-200 rounded-xl p-4">
                   <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <p className="font-semibold text-gray-800 text-sm">{item.productName}</p>
-                      <p className="text-xs text-gray-400 font-mono mt-0.5">{item.sku} · Qty: {item.quantity} · {formatAmount(item.unitPrice)} each</p>
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                        {item.imageUrl ? (
+                          <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                        ) : (
+                          <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-gray-800 text-sm">{item.productName}</p>
+                        <p className="text-xs text-gray-400 font-mono mt-0.5">{item.sku} · Qty: {item.quantity} · {formatAmount(item.unitPrice)} each</p>
+                      </div>
                     </div>
                     <p className="text-sm font-bold text-gray-900 tracking-tight">{formatAmount(item.quantity * item.unitPrice)}</p>
                   </div>
@@ -241,7 +261,7 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100">
           <div className="flex gap-2">
-            {ret.status === 'approved' && (
+            {!isLinked && ret.status === 'approved' && (
               <>
                 <button
                   onClick={handleFinalizeRestocked}
@@ -262,21 +282,34 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap">
               Close
             </button>
-            {nextAction && ret.status !== 'approved' && (
-              <button
-                onClick={handleAction}
-                className={`flex items-center gap-1.5 px-5 py-2 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${nextAction.color}`}
-              >
-                <i className={nextAction.icon}></i>{nextAction.label}
-              </button>
-            )}
-            {ret.status === 'inspecting' && (
-              <button
-                onClick={handleAction}
-                className="flex items-center gap-1.5 px-5 py-2 bg-violet-500 text-white text-sm font-semibold rounded-lg hover:bg-violet-600 cursor-pointer whitespace-nowrap"
-              >
-                <i className="ri-checkbox-circle-line"></i>Approve Return
-              </button>
+            {isLinked ? (
+              ret.status !== 'returned' && (
+                <button
+                  onClick={handleComplete}
+                  className="flex items-center gap-1.5 px-5 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
+                >
+                  <i className="ri-check-double-line"></i>Complete — Mark Returned
+                </button>
+              )
+            ) : (
+              <>
+                {nextAction && ret.status !== 'approved' && (
+                  <button
+                    onClick={handleAction}
+                    className={`flex items-center gap-1.5 px-5 py-2 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${nextAction.color}`}
+                  >
+                    <i className={nextAction.icon}></i>{nextAction.label}
+                  </button>
+                )}
+                {ret.status === 'inspecting' && (
+                  <button
+                    onClick={handleAction}
+                    className="flex items-center gap-1.5 px-5 py-2 bg-violet-500 text-white text-sm font-semibold rounded-lg hover:bg-violet-600 cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-checkbox-circle-line"></i>Approve Return
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>

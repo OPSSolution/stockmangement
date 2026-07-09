@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface NewTransferItem {
   productId: string;
   productName: string;
   sku: string;
+  imageUrl?: string | null;
   quantity: number;
   unitPrice: number;
 }
 
 interface FormData {
   id: string;
-  fromWarehouse: 'BM Warehouse' | 'Vendor Warehouse';
-  toWarehouse: 'BM Warehouse' | 'Vendor Warehouse';
+  fromWarehouse: string;
+  toWarehouse: string;
   reason: string;
   notes: string;
   expectedArrival: string;
@@ -24,10 +26,10 @@ interface TransferFormModalProps {
   onSubmit: (data: FormData) => void;
 }
 
-const emptyForm = (): FormData => ({
+const emptyForm = (fromWarehouse = ''): FormData => ({
   id: '',
-  fromWarehouse: 'Vendor Warehouse',
-  toWarehouse: 'BM Warehouse',
+  fromWarehouse,
+  toWarehouse: '',
   reason: '',
   notes: '',
   expectedArrival: '',
@@ -38,16 +40,19 @@ interface ProductOption {
   id: string;
   name: string;
   sku: string;
+  image_url?: string | null;
   stock: number;
   warehouse: string;
 }
 
 export default function TransferFormModal({ onClose, onSubmit }: TransferFormModalProps) {
-  const [form, setForm] = useState<FormData>(emptyForm());
+  const { warehouseScope } = useAuth();
+  const [form, setForm] = useState<FormData>(emptyForm(warehouseScope || ''));
   const [selectedProduct, setSelectedProduct] = useState('');
   const [selectedQty, setSelectedQty] = useState(1);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [products, setProducts] = useState<ProductOption[]>([]);
+  const [warehouses, setWarehouses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   const autoTransferId = useMemo(
@@ -58,13 +63,19 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
   useEffect(() => {
     const fetchProducts = async () => {
       setLoading(true);
-      const { data, error } = await supabase.from('products').select('id, name, sku, stock, warehouse');
+      const { data, error } = await supabase.from('products').select('id, name, sku, image_url, stock, warehouse');
       if (error) console.error(error);
-      else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, stock: p.stock, warehouse: p.warehouse })));
+      else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, stock: p.stock, warehouse: p.warehouse })));
       setLoading(false);
     };
 
+    const fetchWarehouses = async () => {
+      const { data, error } = await supabase.from('warehouses').select('name').order('name', { ascending: true });
+      if (!error && data) setWarehouses(data.map((w) => w.name as string));
+    };
+
     fetchProducts();
+    fetchWarehouses();
   }, []);
 
   useEffect(() => {
@@ -72,6 +83,22 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
       setForm((prev) => ({ ...prev, id: autoTransferId }));
     }
   }, [form.id, autoTransferId]);
+
+  // Default "From Warehouse" to the first available warehouse once loaded,
+  // for admins/unscoped users only — scoped staff are locked to their own.
+  useEffect(() => {
+    if (!warehouseScope && !form.fromWarehouse && warehouses.length > 0) {
+      setForm((prev) => ({ ...prev, fromWarehouse: warehouses[0] }));
+    }
+  }, [warehouses, warehouseScope, form.fromWarehouse]);
+
+  // Default "To Warehouse" to the first warehouse that isn't the source.
+  useEffect(() => {
+    if (form.fromWarehouse && (!form.toWarehouse || form.toWarehouse === form.fromWarehouse)) {
+      const next = warehouses.find((w) => w !== form.fromWarehouse) || '';
+      setForm((prev) => ({ ...prev, toWarehouse: next }));
+    }
+  }, [warehouses, form.fromWarehouse, form.toWarehouse]);
 
   const availableProducts = products.filter(
     (p) => p.warehouse === form.fromWarehouse && p.stock > 0 && !form.items.find((i) => i.productId === p.id)
@@ -84,7 +111,7 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
       ...f,
       items: [
         ...f.items,
-        { productId: product.id, productName: product.name, sku: product.sku, quantity: selectedQty, unitPrice: 0 },
+        { productId: product.id, productName: product.name, sku: product.sku, imageUrl: product.image_url || null, quantity: selectedQty, unitPrice: 0 },
       ],
     }));
     setSelectedProduct('');
@@ -118,7 +145,7 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
           <div>
             <h2 className="text-lg font-bold text-gray-900">Create Transfer Request</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Move stock between BM Warehouse and Vendor Warehouse</p>
+            <p className="text-sm text-gray-500 mt-0.5">Move stock between warehouses</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
             <i className="ri-close-line text-gray-500"></i>
@@ -140,24 +167,36 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1.5">From Warehouse</label>
-              <select
-                value={form.fromWarehouse}
-                onChange={(e) => setForm((f) => ({ ...f, fromWarehouse: e.target.value as typeof f.fromWarehouse, items: [] }))}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer"
-              >
-                <option value="BM Warehouse">BM Warehouse</option>
-                <option value="Vendor Warehouse">Vendor Warehouse</option>
-              </select>
+              {warehouseScope ? (
+                <input
+                  value={warehouseScope}
+                  disabled
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm bg-gray-50 text-gray-500"
+                />
+              ) : (
+                <select
+                  value={form.fromWarehouse}
+                  onChange={(e) => setForm((f) => ({ ...f, fromWarehouse: e.target.value, items: [] }))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer"
+                >
+                  <option value="">Select warehouse…</option>
+                  {warehouses.map((w) => (
+                    <option key={w} value={w}>{w}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1.5">To Warehouse</label>
               <select
                 value={form.toWarehouse}
-                onChange={(e) => setForm((f) => ({ ...f, toWarehouse: e.target.value as typeof f.toWarehouse }))}
+                onChange={(e) => setForm((f) => ({ ...f, toWarehouse: e.target.value }))}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer"
               >
-                <option value="BM Warehouse">BM Warehouse</option>
-                <option value="Vendor Warehouse">Vendor Warehouse</option>
+                <option value="">Select warehouse…</option>
+                {warehouses.filter((w) => w !== form.fromWarehouse).map((w) => (
+                  <option key={w} value={w}>{w}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -250,7 +289,18 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                   <tbody className="divide-y divide-gray-100">
                     {form.items.map((item) => (
                       <tr key={item.productId}>
-                        <td className="px-4 py-2.5 font-medium text-gray-800">{item.productName}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                              {item.imageUrl ? (
+                                <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                              ) : (
+                                <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                              )}
+                            </div>
+                            <span className="font-medium text-gray-800">{item.productName}</span>
+                          </div>
+                        </td>
                         <td className="px-4 py-2.5 text-gray-500 font-mono text-xs">{item.sku}</td>
                         <td className="px-4 py-2.5 text-center text-gray-700">{item.quantity}</td>
                         <td className="px-3 py-2.5 text-right">

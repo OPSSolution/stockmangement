@@ -16,7 +16,7 @@ const emptyForm = {
 export default function WarehousesPage() {
   const navigate = useNavigate();
   const { formatAmount } = useCurrency();
-  const { canEdit, canDelete } = useAuth();
+  const { canEdit, canDelete, warehouseScope } = useAuth();
   const showEdit = canEdit('warehouses');
   const showDelete = canDelete('warehouses');
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -33,7 +33,7 @@ export default function WarehousesPage() {
 
   const load = async () => {
     setLoading(true);
-    const result = await fetchWarehousesWithLiveData();
+    const result = await fetchWarehousesWithLiveData(warehouseScope);
     if (result) {
       setWarehouses(result.warehouses);
       setLiveStats(result.liveStats);
@@ -41,7 +41,7 @@ export default function WarehousesPage() {
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [warehouseScope]);
 
   const liveFor = (name: string | undefined) => liveStats[name ?? ''] ?? emptyLiveStats;
 

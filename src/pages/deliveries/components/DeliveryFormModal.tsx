@@ -12,6 +12,7 @@ interface ProductOption {
   id: string;
   name: string;
   sku: string;
+  image_url?: string | null;
   stock: number;
   warehouse: string;
 }
@@ -21,7 +22,7 @@ const stepOptions: DeliveryStep[] = ['prepare', 'ready', 'in_transit', 'delivere
 const emptyForm = {
   fromWarehouse: '',
   toWarehouse: '',
-  items: [] as { productName: string; sku: string; quantity: number }[],
+  items: [] as { productName: string; sku: string; imageUrl?: string | null; quantity: number }[],
   status: 'prepare' as DeliveryStep,
   estimatedDelivery: '',
   timeline: [] as { step: DeliveryStep; timestamp: string; note: string; completedBy?: string }[],
@@ -55,7 +56,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
 
   useEffect(() => {
     const fetchProducts = async () => {
-      const { data, error } = await supabase.from('products').select('id, name, sku, stock, warehouse');
+      const { data, error } = await supabase.from('products').select('id, name, sku, image_url, stock, warehouse');
       if (!error) setProducts((data || []) as ProductOption[]);
     };
     const fetchWarehouses = async () => {
@@ -115,7 +116,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
       ...prev,
       items: [
         ...prev.items,
-        { productName: product.name, sku: product.sku, quantity: selectedQty },
+        { productName: product.name, sku: product.sku, imageUrl: product.image_url || null, quantity: selectedQty },
       ],
     }));
     setSelectedProductId('');
@@ -167,6 +168,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
     const items = form.items.map((item) => ({
       productName: item.productName,
       sku: item.sku,
+      imageUrl: item.imageUrl || null,
       quantity: item.quantity,
     }));
 
@@ -375,7 +377,18 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                   <tbody className="divide-y divide-gray-100">
                     {form.items.map((item) => (
                       <tr key={`${item.sku}-${item.productName}`}>
-                        <td className="px-3 py-2 text-gray-700">{item.productName}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                              {item.imageUrl ? (
+                                <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                              ) : (
+                                <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                              )}
+                            </div>
+                            <span className="text-gray-700">{item.productName}</span>
+                          </div>
+                        </td>
                         <td className="px-3 py-2 text-gray-500 font-mono text-xs">{item.sku}</td>
                         <td className="px-3 py-2 text-center text-gray-700">{item.quantity}</td>
                         <td className="px-3 py-2 text-right">
