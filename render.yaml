@@ -3,7 +3,7 @@ services:
     name: stockmanagement
     runtime: node
     plan: free
-    buildCommand: npm install --omit=dev
+    buildCommand: npm install && npm run build
     startCommand: NODE_ENV=production npx tsx server/index.ts
     envVars:
       - key: NODE_VERSION
@@ -12,7 +12,7 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
-      - key: SUPABASE_URL
+      - key: VITE_SUPABASE_URL
         sync: false
-      - key: SUPABASE_ANON_KEY
+      - key: VITE_SUPABASE_ANON_KEY
         sync: false
