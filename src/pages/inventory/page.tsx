@@ -74,6 +74,7 @@ export default function InventoryPage() {
   const [categories, setCategories] = useState<string[]>(['Electronics', 'Furniture', 'Accessories', 'Lighting', 'Smart Home']);
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [scopedVendorNames, setScopedVendorNames] = useState<string[]>([]);
+  const [allVendorNames, setAllVendorNames] = useState<string[]>([]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editProduct, setEditProduct] = useState<Product | null>(null);
@@ -117,8 +118,15 @@ export default function InventoryPage() {
       }
     };
 
+    const loadAllVendors = async () => {
+      if (warehouseScope) return;
+      const { data } = await supabase.from('vendors').select('name').order('name', { ascending: true });
+      if (data) setAllVendorNames(data.map((v) => v.name as string));
+    };
+
     loadCategories();
     loadWarehouses();
+    loadAllVendors();
     fetchProducts();
     fetchHistory();
   }, [warehouseScope]);
@@ -189,10 +197,10 @@ export default function InventoryPage() {
 
   const availableVendors = useMemo(() => {
     // Scoped staff only ever see their warehouse's approved vendor list —
-    // not every vendor in the system, unlike the unrestricted admin view.
+    // admins see every vendor in the system, not just ones already on a product.
     if (warehouseScope) return scopedVendorNames;
-    return [...new Set(products.map((p) => p.vendor).filter((v): v is string => !!v))];
-  }, [products, warehouseScope, scopedVendorNames]);
+    return allVendorNames;
+  }, [warehouseScope, scopedVendorNames, allVendorNames]);
 
   const handleSaveProduct = async (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string }) => {
     const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
