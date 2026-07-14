@@ -9,6 +9,10 @@ import apiRouter from './routes/api';
 import rolesRouter, { ensureRolesTable } from './routes/roles';
 import functionsRouter from './routes/functions';
 import { databaseConfigIssue, pool } from './db';
+import { supabaseAdmin } from './lib/supabaseEnv';
+import { dispatchPendingNotifications } from './lib/notificationDispatch';
+import { evaluateAlertRules } from './lib/alertRulesEvaluator';
+import { checkStockAlerts } from './lib/stockAlerts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -60,3 +64,23 @@ if (isProd) {
 app.listen(PORT, () => console.log(`Server running on port ${PORT}${isProd ? '' : ' (development)'}`));
 ensureRolesTable().catch(err => console.error('Failed to ensure roles table:', err.message));
 if (isProd) runMigration();
+
+// Background notification scheduling — this server process stays up
+// continuously on Render, so plain intervals give the settings page's
+// "runs automatically" claims a real backing instead of only firing when
+// someone clicks the manual buttons.
+const admin = supabaseAdmin();
+if (admin) {
+  setInterval(() => {
+    dispatchPendingNotifications(admin).catch(err => console.error('Scheduled dispatch failed:', err.message));
+  }, 5 * 60 * 1000);
+  setInterval(() => {
+    evaluateAlertRules(admin).catch(err => console.error('Scheduled alert rule evaluation failed:', err.message));
+  }, 10 * 60 * 1000);
+  setInterval(() => {
+    checkStockAlerts(admin).catch(err => console.error('Scheduled stock alert check failed:', err.message));
+  }, 5 * 60 * 1000);
+  console.log('Notification scheduler started (dispatch every 5m, rule evaluation every 10m, stock alerts every 5m).');
+} else {
+  console.warn('SUPABASE_SERVICE_ROLE_KEY not set — background notification scheduling is disabled.');
+}

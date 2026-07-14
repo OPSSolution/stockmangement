@@ -270,8 +270,15 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                   <input
                     type="number"
                     min={1}
-                    value={selectedQty}
-                    onChange={(e) => setSelectedQty(Math.max(1, Number(e.target.value) || 1))}
+                    value={selectedQty === 0 ? '' : selectedQty}
+                    onChange={(e) => {
+                      // Don't force a fallback to 1 while typing — that snaps the value
+                      // back on every keystroke (e.g. while backspacing to clear it)
+                      // and fights the user's typing.
+                      const val = e.target.value;
+                      setSelectedQty(val === '' ? 0 : Math.max(0, Number(val) || 0));
+                    }}
+                    placeholder="1"
                     className="w-20 border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-emerald-400"
                   />
                   <button

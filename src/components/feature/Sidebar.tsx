@@ -38,7 +38,7 @@ const managementNavItems: NavItem[] = [
 
 const notificationNavItems: NavItem[] = [
   { label: 'History',   icon: 'ri-history-line',        path: '/notifications/history',   permKey: 'notifications_history' },
-  { label: 'Analytics', icon: 'ri-bar-chart-box-line',  path: '/notifications/analytics', permKey: 'notifications_analytics' },
+  // { label: 'Analytics', icon: 'ri-bar-chart-box-line',  path: '/notifications/analytics', permKey: 'notifications_analytics' },
   { label: 'Settings',  icon: 'ri-notification-3-line', path: '/notifications/settings',  permKey: 'notifications_settings' },
 ];
 

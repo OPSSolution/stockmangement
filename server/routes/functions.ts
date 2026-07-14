@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { generateKeyPairSync } from 'crypto';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { supabaseForToken, supabaseAdmin } from '../lib/supabaseEnv';
+import { evaluateAlertRules } from '../lib/alertRulesEvaluator';
+import { dispatchPendingNotifications } from '../lib/notificationDispatch';
 
 const router = Router();
 
@@ -35,64 +37,17 @@ function groupCount(rows: Array<Record<string, unknown>>, field: string): Record
 // Replaces the Supabase edge function: alert-rules-evaluator
 // Reads/writes Supabase (not the local Postgres pool) — alert_rules, products, and
 // notifications all live in Supabase since that's what the rest of the app uses.
+// Uses the service-role client when available so a rule evaluation triggered by
+// any one user's click (or the background scheduler) still checks every admin's
+// own category thresholds, not just the caller's.
 router.post('/alert-rules-evaluator', async (req: AuthRequest, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
-  const supabase = supabaseForToken(token);
+  const supabase = supabaseAdmin() || supabaseForToken(token);
   if (!supabase) return res.status(503).json({ error: 'Supabase is not configured on the server' });
 
   try {
-    const [rulesRes, productsRes] = await Promise.all([
-      supabase.from('alert_rules').select('*').eq('is_active', true),
-      supabase.from('products').select('*'),
-    ]);
-
-    const rules = rulesRes.data ?? [];
-    const lowStockProducts = (productsRes.data ?? []).filter(
-      (p: any) => Number(p.stock) <= Number(p.low_stock_threshold)
-    );
-    let totalCreated = 0;
-
-    for (const rule of rules) {
-      if (rule.trigger_type !== 'stock_below_threshold') continue;
-
-      for (const product of lowStockProducts) {
-        const threshold = rule.trigger_condition?.threshold ?? product.low_stock_threshold;
-        if (product.stock > threshold) continue;
-
-        // Avoid duplicate notifications within the last hour
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-        const { data: recent } = await supabase
-          .from('notifications')
-          .select('id')
-          .eq('type', rule.notification_type)
-          .contains('data', { product_id: product.id })
-          .gte('created_at', oneHourAgo)
-          .limit(1);
-        if (recent && recent.length > 0) continue;
-
-        const msg = rule.message_template
-          .replace('{{product_name}}', product.name)
-          .replace('{{stock}}', String(product.stock));
-
-        const title = rule.notification_type === 'out_of_stock'
-          ? `Out of Stock: ${product.name}`
-          : `Low Stock: ${product.name}`;
-
-        const { data: admins } = await supabase.from('profiles').select('id').eq('role', 'admin');
-        for (const admin of admins ?? []) {
-          const { error } = await supabase.from('notifications').insert({
-            user_id: admin.id,
-            type: rule.notification_type,
-            title,
-            message: msg,
-            data: { product_id: product.id, product_name: product.name, stock: product.stock },
-          });
-          if (!error) totalCreated++;
-        }
-      }
-    }
-
-    res.json({ total_created: totalCreated });
+    const result = await evaluateAlertRules(supabase);
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -200,6 +155,44 @@ router.post('/report-summary', async (req: AuthRequest, res) => {
   }
 });
 
+// POST /functions/v1/notify-admins  (public — the customer-facing order form
+// has no logged-in user, so it can't read `profiles` under RLS to find who
+// the admins are. Service-role bypasses that; this route only ever creates
+// notifications, never reads/writes anything else, so it's safe unauthenticated.)
+router.post('/notify-admins', async (req, res) => {
+  const { type, title, message, data } = req.body as {
+    type: string; title: string; message: string; data?: Record<string, unknown>;
+  };
+  if (!type || !title || !message) {
+    return res.status(400).json({ success: false, error: 'type, title, and message are required' });
+  }
+
+  const admin = supabaseAdmin();
+  if (!admin) return res.status(503).json({ success: false, error: 'Service role is not configured on the server' });
+
+  try {
+    const { data: admins, error: adminsErr } = await admin.from('profiles').select('id').eq('role', 'admin');
+    if (adminsErr) throw adminsErr;
+    if (!admins || admins.length === 0) return res.json({ success: true, notified: 0 });
+
+    const rows = admins.map((a) => ({
+      user_id: a.id,
+      type,
+      title,
+      message,
+      data: data ?? {},
+      is_read: false,
+      is_emailed: false,
+      is_webhook_sent: false,
+    }));
+    const { error: insertErr } = await admin.from('notifications').insert(rows);
+    if (insertErr) throw insertErr;
+    res.json({ success: true, notified: admins.length });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // POST /functions/v1/get-vapid-public-key
 router.post('/get-vapid-public-key', (_req, res) => {
   const publicKey = process.env.VAPID_PUBLIC_KEY || '';
@@ -207,6 +200,17 @@ router.post('/get-vapid-public-key', (_req, res) => {
     return res.status(404).json({ error: 'VAPID_PUBLIC_KEY not configured in environment' });
   }
   res.json({ publicKey });
+});
+
+// POST /functions/v1/notification-channel-status
+// Reports whether each dispatch channel actually has credentials configured
+// server-side — never returns the secrets themselves — so the settings page
+// can show real status instead of implying every toggle works.
+router.post('/notification-channel-status', (_req, res) => {
+  res.json({
+    emailConfigured: !!process.env.RESEND_API_KEY,
+    pushConfigured: !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY),
+  });
 });
 
 // POST /functions/v1/generate-vapid-keys  (admin only)
@@ -301,22 +305,18 @@ router.post('/webhook-dispatch', authenticate, async (req: AuthRequest, res) => 
 });
 
 // POST /functions/v1/scheduled-dispatch  (authenticated)
+// Actually sends pending notifications out — email via Resend (if
+// RESEND_API_KEY is set), webhooks to any matching active integration, and
+// browser push (if VAPID keys are set) — instead of just marking rows sent.
 router.post('/scheduled-dispatch', authenticate, async (req: AuthRequest, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
-  const supabase = supabaseForToken(token);
+  const supabase = supabaseAdmin() || supabaseForToken(token);
   if (!supabase) return res.status(503).json({ message: 'Supabase is not configured on the server' });
 
   try {
-    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await supabase
-      .from('notifications')
-      .update({ is_emailed: true })
-      .eq('is_emailed', false)
-      .gte('created_at', dayAgo)
-      .select('id');
-    if (error) throw error;
-    const count = data?.length ?? 0;
-    res.json({ message: `Dispatched ${count} pending notification${count !== 1 ? 's' : ''}` });
+    const { emailed, webhooked, pushed } = await dispatchPendingNotifications(supabase);
+    const parts = [`${emailed} email${emailed !== 1 ? 's' : ''}`, `${webhooked} webhook${webhooked !== 1 ? 's' : ''}`, `${pushed} push${pushed !== 1 ? 'es' : ''}`];
+    res.json({ message: `Dispatched: ${parts.join(', ')}`, emailed, webhooked, pushed });
   } catch (err: any) {
     res.status(500).json({ message: 'Dispatch failed: ' + err.message });
   }

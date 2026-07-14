@@ -158,15 +158,6 @@ export default function WarehousesPage() {
         )}
       </div>
 
-      {loading && (
-        <div className="flex items-center justify-center py-12 text-gray-400">
-          <div className="w-8 h-8 flex items-center justify-center mr-3">
-            <i className="ri-loader-4-line animate-spin text-xl"></i>
-          </div>
-          <span className="text-sm">Loading warehouses...</span>
-        </div>
-      )}
-
       {!loading && warehouses.length === 0 && (
         <div className="text-center py-16 text-gray-400">
           <i className="ri-building-2-line text-4xl mb-2 block"></i>
@@ -174,7 +165,7 @@ export default function WarehousesPage() {
         </div>
       )}
 
-      {!loading && warehouses.length > 0 && (
+      {warehouses.length > 0 && (
         <>
           {/* Warehouse cards — click to open full details */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">

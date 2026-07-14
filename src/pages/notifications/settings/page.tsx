@@ -17,7 +17,10 @@ const TRIGGER_TYPES = [
 const NOTIF_TYPES = [
   { value: 'low_stock', label: 'Low Stock' },
   { value: 'out_of_stock', label: 'Out of Stock' },
+  { value: 'new_request', label: 'New Request' },
   { value: 'new_order', label: 'New Order' },
+  { value: 'new_delivery', label: 'New Delivery' },
+  { value: 'new_transfer', label: 'New Transfer' },
   { value: 'return_pending', label: 'Return Pending' },
   { value: 'system', label: 'System' },
 ] as const;
@@ -74,7 +77,6 @@ export default function NotificationSettingsPage() {
 
   // Settings state
   const [emailEnabled, setEmailEnabled] = useState(true);
-  const [smsEnabled, setSmsEnabled] = useState(false);
   const [inAppEnabled, setInAppEnabled] = useState(true);
   const [browserPushEnabled, setBrowserPushEnabled] = useState(true);
   const [thresholds, setThresholds] = useState<Record<string, number>>({});
@@ -82,6 +84,7 @@ export default function NotificationSettingsPage() {
   const [vapidKeys, setVapidKeys] = useState<{ publicKey: string; privateKey: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<ToastState>({ visible: false, message: '', type: 'success' });
+  const [channelStatus, setChannelStatus] = useState<{ emailConfigured: boolean; pushConfigured: boolean } | null>(null);
 
   // Alert rules state
   const [rules, setRules] = useState<AlertRule[]>([]);
@@ -118,12 +121,20 @@ export default function NotificationSettingsPage() {
   useEffect(() => {
     if (settings) {
       setEmailEnabled(settings.email_enabled);
-      setSmsEnabled(settings.sms_enabled);
       setInAppEnabled(settings.in_app_enabled);
       setBrowserPushEnabled(settings.browser_push_enabled);
       setThresholds(settings.category_thresholds || {});
     }
   }, [settings]);
+
+  // Email/push toggles only matter if the server actually has credentials to
+  // send with — check once so the page can say so instead of implying every
+  // toggle is fully wired up.
+  useEffect(() => {
+    api.functions.invoke('notification-channel-status').then(({ data }) => {
+      if (data) setChannelStatus({ emailConfigured: data.emailConfigured, pushConfigured: data.pushConfigured });
+    });
+  }, []);
 
   // Load alert rules for admin
   useEffect(() => {
@@ -171,7 +182,6 @@ export default function NotificationSettingsPage() {
     const payload = {
       user_id: user.id,
       email_enabled: emailEnabled,
-      sms_enabled: smsEnabled,
       in_app_enabled: inAppEnabled,
       browser_push_enabled: browserPushEnabled,
       category_thresholds: thresholds,
@@ -202,7 +212,7 @@ export default function NotificationSettingsPage() {
       data: {},
       is_read: false,
       is_emailed: false,
-      is_sms_sent: false,
+      is_webhook_sent: false,
     });
 
     if (error) {
@@ -577,12 +587,11 @@ export default function NotificationSettingsPage() {
               description="Get alerts sent to your registered email address"
               enabled={emailEnabled}
               onChange={setEmailEnabled}
-            />
-            <ToggleRow
-              label="SMS Notifications"
-              description="Receive text messages for critical alerts"
-              enabled={smsEnabled}
-              onChange={setSmsEnabled}
+              extraAction={
+                channelStatus && !channelStatus.emailConfigured ? (
+                  <span className="text-xs text-amber-600" title="RESEND_API_KEY isn't set on the server yet, so emails won't actually send">Not configured</span>
+                ) : null
+              }
             />
             <ToggleRow
               label="Browser Push Notifications"
@@ -598,7 +607,9 @@ export default function NotificationSettingsPage() {
                 }
               }}
               extraAction={
-                browserPushSupported && browserPushPermission === 'denied' ? (
+                channelStatus && !channelStatus.pushConfigured ? (
+                  <span className="text-xs text-amber-600" title="VAPID keys aren't set on the server yet, so pushes won't actually send">Not configured</span>
+                ) : browserPushSupported && browserPushPermission === 'denied' ? (
                   <span className="text-xs text-red-500">Blocked</span>
                 ) : browserPushSubscribed ? (
                   <span className="text-xs text-emerald-600 font-medium">Active</span>
@@ -1240,7 +1251,7 @@ export default function NotificationSettingsPage() {
         <div className="bg-gray-50 rounded-xl p-4 text-xs text-gray-400 space-y-1">
           <p>
             <i className="ri-information-line mr-1"></i>
-            Scheduled email dispatch runs automatically every 5 minutes.
+            Scheduled email dispatch runs automatically every 5 minutes (needs an email provider configured — see the "Not configured" note above if it isn't yet).
           </p>
           <p>
             <i className="ri-information-line mr-1"></i>

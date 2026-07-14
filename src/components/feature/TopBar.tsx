@@ -25,7 +25,10 @@ function timeAgo(dateStr: string): string {
 const typeMeta: Record<string, { icon: string; color: string; bg: string }> = {
   low_stock: { icon: 'ri-arrow-down-line', color: 'text-amber-500', bg: 'bg-amber-50' },
   out_of_stock: { icon: 'ri-close-circle-line', color: 'text-red-500', bg: 'bg-red-50' },
+  new_request: { icon: 'ri-file-list-3-line', color: 'text-sky-500', bg: 'bg-sky-50' },
   new_order: { icon: 'ri-shopping-cart-line', color: 'text-emerald-500', bg: 'bg-emerald-50' },
+  new_delivery: { icon: 'ri-truck-line', color: 'text-violet-500', bg: 'bg-violet-50' },
+  new_transfer: { icon: 'ri-swap-box-line', color: 'text-indigo-500', bg: 'bg-indigo-50' },
   return_pending: { icon: 'ri-refresh-line', color: 'text-blue-500', bg: 'bg-blue-50' },
   transfer_ready: { icon: 'ri-truck-line', color: 'text-violet-500', bg: 'bg-violet-50' },
   delivery_delayed: { icon: 'ri-time-line', color: 'text-orange-500', bg: 'bg-orange-50' },

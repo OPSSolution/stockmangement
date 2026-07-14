@@ -3,6 +3,7 @@ import type { Product } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { buildOrderInsert, mapProductRow, type OrderCreateDraft } from '../orders/orderCreateUtils';
 import { logAudit } from '@/lib/auditLog';
+import { notifyAdmins } from '@/lib/notifyAdmins';
 
 const emptyDraft: OrderCreateDraft = {
   requestedBy: '',
@@ -54,7 +55,8 @@ export default function PublicOrderFormPage() {
     }
 
     setSubmitting(true);
-    const { error } = await supabase.from('orders').insert(buildOrderInsert(draft, products));
+    const payload = buildOrderInsert(draft, products);
+    const { error } = await supabase.from('orders').insert(payload);
     setSubmitting(false);
 
     if (error) {
@@ -66,6 +68,12 @@ export default function PublicOrderFormPage() {
     setDraft(emptyDraft);
     setStatus({ type: 'success', msg: 'Order submitted. The team will review it soon.' });
     logAudit({ action: 'create', module: 'orders', description: `Public order form submitted by ${draft.customer} (requested by ${draft.requestedBy})` });
+    notifyAdmins(
+      'new_order',
+      'New Order',
+      `${draft.customer} placed an order for ${payload.item_count} item${payload.item_count !== 1 ? 's' : ''} via the public order form.`,
+      { order_id: payload.id }
+    );
   };
 
   return (

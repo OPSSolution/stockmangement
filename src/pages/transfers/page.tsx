@@ -10,6 +10,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { moveStockBetweenWarehouses } from '@/lib/stockDeduction';
 import { logAudit } from '@/lib/auditLog';
 import { exportToCsv } from '@/lib/exportCsv';
+import { notifyAdmins } from '@/lib/notifyAdmins';
 
 type FilterTab = 'all' | TransferStatus;
 
@@ -205,6 +206,12 @@ export default function TransfersPage() {
         completedAt: undefined,
       }, ...prev]);
       logAudit({ action: 'create', module: 'transfers', description: `Created transfer ${newId} (${data.fromWarehouse} → ${data.toWarehouse})`, referenceId: newId });
+      notifyAdmins(
+        'new_transfer',
+        'New Transfer',
+        `Transfer ${newId} requested from ${data.fromWarehouse} to ${data.toWarehouse} (${totalItems} item${totalItems !== 1 ? 's' : ''}).`,
+        { transfer_id: newId }
+      );
     }
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -220,17 +227,7 @@ export default function TransfersPage() {
         </div>
       )}
 
-      {loading && (
-        <div className="flex items-center justify-center py-12 text-gray-400">
-          <div className="w-8 h-8 flex items-center justify-center mr-3">
-            <i className="ri-loader-4-line animate-spin text-xl"></i>
-          </div>
-          <span className="text-sm">Loading transfers...</span>
-        </div>
-      )}
-
-      {!loading && (
-        <>
+      <>
           {/* KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
             {[
@@ -392,7 +389,6 @@ export default function TransfersPage() {
             </div>
           </div>
         </>
-      )}
 
       {/* Modals */}
       {selectedTransfer && (

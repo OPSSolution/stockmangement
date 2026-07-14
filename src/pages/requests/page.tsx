@@ -9,6 +9,7 @@ import { exportToCsv } from '@/lib/exportCsv';
 import { exportRequestAsForm } from '@/lib/exportRequestForm';
 import { logAudit, diffFields } from '@/lib/auditLog';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
+import { notifyAdmins } from '@/lib/notifyAdmins';
 
 interface CustomFieldAnswer {
   key: string;
@@ -409,11 +410,12 @@ export default function RequestsPage() {
     };
 
     const now = new Date().toISOString();
+    const newId = `REQ-${String(Math.floor(Date.now() / 1000) % 100000).padStart(5, '0')}`;
     const { error } = editingReq
       ? await supabase.from('stock_requests').update({ ...payload, updated_at: now }).eq('id', editingReq.id)
       : await supabase.from('stock_requests').insert({
           ...payload,
-          id: `REQ-${String(Math.floor(Date.now() / 1000) % 100000).padStart(5, '0')}`,
+          id: newId,
           submitted_by: requesterIdentity || 'Unknown',
           status: 'pending',
         });
@@ -431,8 +433,13 @@ export default function RequestsPage() {
       setRequests((prev) => prev.map((r) => (r.id === editingReq.id ? { ...r, ...payload, updated_at: now } : r)));
       logAudit({ action: 'update', module: 'requests', description: `Updated request ${editingReq.id}`, referenceId: editingReq.id });
     } else {
-      const newId = `REQ-${String(Math.floor(Date.now() / 1000) % 100000).padStart(5, '0')}`;
       logAudit({ action: 'create', module: 'requests', description: `Created request ${newId} (${payload.total_items} items)`, referenceId: newId });
+      notifyAdmins(
+        'new_request',
+        'New Stock Request',
+        `${payload.requested_by} requested ${payload.total_items} item${payload.total_items !== 1 ? 's' : ''} from ${payload.warehouse}.`,
+        { request_id: newId }
+      );
       const newRequest: StockRequest = {
         ...payload,
         id: newId,
@@ -942,8 +949,15 @@ export default function RequestsPage() {
                   <input
                     type="number"
                     min={1}
-                    value={selectedQty}
-                    onChange={(e) => setSelectedQty(Math.max(1, Number(e.target.value) || 1))}
+                    value={selectedQty === 0 ? '' : selectedQty}
+                    onChange={(e) => {
+                      // Don't force a fallback to 1 while typing — that snaps the value
+                      // back on every keystroke (e.g. while backspacing to clear it)
+                      // and fights the user's typing.
+                      const val = e.target.value;
+                      setSelectedQty(val === '' ? 0 : Math.max(0, Number(val) || 0));
+                    }}
+                    placeholder="1"
                     title="Quantity"
                     className="w-20 border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-emerald-400"
                   />
@@ -1162,11 +1176,7 @@ export default function RequestsPage() {
 
         {/* Table */}
         <div className="overflow-hidden">
-          {loading ? (
-            <div className="py-12 text-center">
-              <i className="ri-loader-4-line animate-spin text-gray-400 text-xl"></i>
-            </div>
-          ) : filtered.length === 0 ? (
+          {filtered.length === 0 ? (
             <div className="py-14 text-center">
               <div className="w-14 h-14 bg-gradient-to-br from-emerald-50 to-emerald-100/60 rounded-full flex items-center justify-center mx-auto mb-3">
                 <i className="ri-inbox-line text-emerald-400 text-2xl"></i>

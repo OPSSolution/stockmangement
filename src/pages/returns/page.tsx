@@ -268,17 +268,7 @@ export default function ReturnsPage() {
         </div>
       )}
 
-      {loading && (
-        <div className="flex items-center justify-center py-12 text-gray-400">
-          <div className="w-8 h-8 flex items-center justify-center mr-3">
-            <i className="ri-loader-4-line animate-spin text-xl"></i>
-          </div>
-          <span className="text-sm">Loading returns...</span>
-        </div>
-      )}
-
-      {!loading && (
-        <>
+      <>
           {/* KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
             {[
@@ -461,7 +451,6 @@ export default function ReturnsPage() {
             </div>
           </div>
         </>
-      )}
 
       {selectedReturn && (
         <ReturnDetailModal

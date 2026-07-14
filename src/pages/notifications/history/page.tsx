@@ -11,7 +11,10 @@ const TYPE_OPTIONS = [
   { value: 'all', label: 'All Types', icon: 'ri-notification-3-line' },
   { value: 'low_stock', label: 'Low Stock', icon: 'ri-arrow-down-line' },
   { value: 'out_of_stock', label: 'Out of Stock', icon: 'ri-close-circle-line' },
+  { value: 'new_request', label: 'New Request', icon: 'ri-file-list-3-line' },
   { value: 'new_order', label: 'New Order', icon: 'ri-shopping-cart-line' },
+  { value: 'new_delivery', label: 'New Delivery', icon: 'ri-truck-line' },
+  { value: 'new_transfer', label: 'New Transfer', icon: 'ri-swap-box-line' },
   { value: 'return_pending', label: 'Return Pending', icon: 'ri-refresh-line' },
   { value: 'transfer_ready', label: 'Transfer Ready', icon: 'ri-truck-line' },
   { value: 'delivery_delayed', label: 'Delivery Delayed', icon: 'ri-time-line' },
@@ -27,7 +30,10 @@ const STATUS_OPTIONS = [
 const typeMeta: Record<string, { icon: string; color: string; bg: string }> = {
   low_stock: { icon: 'ri-arrow-down-line', color: 'text-amber-500', bg: 'bg-amber-50' },
   out_of_stock: { icon: 'ri-close-circle-line', color: 'text-red-500', bg: 'bg-red-50' },
+  new_request: { icon: 'ri-file-list-3-line', color: 'text-sky-500', bg: 'bg-sky-50' },
   new_order: { icon: 'ri-shopping-cart-line', color: 'text-emerald-500', bg: 'bg-emerald-50' },
+  new_delivery: { icon: 'ri-truck-line', color: 'text-violet-500', bg: 'bg-violet-50' },
+  new_transfer: { icon: 'ri-swap-box-line', color: 'text-indigo-500', bg: 'bg-indigo-50' },
   return_pending: { icon: 'ri-refresh-line', color: 'text-blue-500', bg: 'bg-blue-50' },
   transfer_ready: { icon: 'ri-truck-line', color: 'text-violet-500', bg: 'bg-violet-50' },
   delivery_delayed: { icon: 'ri-time-line', color: 'text-orange-500', bg: 'bg-orange-50' },
@@ -252,12 +258,7 @@ export default function NotificationHistoryPage() {
 
         {/* List */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          {loading ? (
-            <div className="py-16 text-center">
-              <i className="ri-loader-4-line animate-spin text-gray-400 text-2xl"></i>
-              <p className="text-sm text-gray-400 mt-2">Loading notifications...</p>
-            </div>
-          ) : paginated.length === 0 ? (
+          {paginated.length === 0 ? (
             <div className="py-16 text-center">
               <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
                 <i className="ri-notification-off-line text-gray-300 text-2xl"></i>

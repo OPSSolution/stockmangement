@@ -11,6 +11,7 @@ import { getReservedQuantities } from '@/lib/stockReservations';
 import { moveStockBetweenWarehouses } from '@/lib/stockDeduction';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
+import { notifyAdmins } from '@/lib/notifyAdmins';
 
 const stepIndex: Record<DeliveryStep, number> = { prepare: 0, ready: 1, in_transit: 2, delivered: 3 };
 
@@ -197,6 +198,12 @@ export default function DeliveriesPage() {
     setShowCreateModal(false);
     showToast('Delivery created successfully.');
     logAudit({ action: 'create', module: 'deliveries', description: `Created delivery ${record.id}`, referenceId: record.id });
+    notifyAdmins(
+      'new_delivery',
+      'New Delivery',
+      `Delivery ${record.id} from ${record.fromWarehouse} to ${record.toWarehouse} has been created.`,
+      { delivery_id: record.id }
+    );
   };
 
   const handleSaveDelivery = async (record: DeliveryRecord) => {
@@ -331,12 +338,7 @@ export default function DeliveriesPage() {
           </div>
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center py-16 text-gray-400">
-            <i className="ri-loader-4-line text-3xl animate-spin mr-2"></i>
-            <span className="text-sm">Loading deliveries...</span>
-          </div>
-        ) : (
+        {(
           <div className="p-5 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
             {filtered.map((delivery) => {
               const cfg = statusConfig[delivery.status];
@@ -470,7 +472,7 @@ export default function DeliveriesPage() {
           </div>
         )}
 
-        {!loading && filtered.length === 0 && (
+        {filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400">
             <div className="w-12 h-12 flex items-center justify-center mb-3">
               <i className="ri-truck-line text-4xl"></i>

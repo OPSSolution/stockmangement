@@ -237,17 +237,11 @@ export default function WarehouseDetailPage() {
     navigate('/warehouses');
   };
 
+  // Render nothing while the warehouse is still loading (rather than a
+  // spinner) — the guard still prevents the "not found" state below from
+  // flashing before the fetch has actually had a chance to resolve.
   if (loading) {
-    return (
-      <DashboardLayout title="Warehouse Details">
-        <div className="flex items-center justify-center py-12 text-gray-400">
-          <div className="w-8 h-8 flex items-center justify-center mr-3">
-            <i className="ri-loader-4-line animate-spin text-xl"></i>
-          </div>
-          <span className="text-sm">Loading warehouse...</span>
-        </div>
-      </DashboardLayout>
-    );
+    return null;
   }
 
   if (notFound || !warehouse) {

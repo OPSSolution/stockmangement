@@ -61,7 +61,10 @@ const TYPE_COLORS: Record<string, string> = {
 const TYPE_LABELS: Record<string, string> = {
   low_stock: 'Low Stock',
   out_of_stock: 'Out of Stock',
+  new_request: 'New Request',
   new_order: 'New Order',
+  new_delivery: 'New Delivery',
+  new_transfer: 'New Transfer',
   return_pending: 'Return Pending',
   transfer_ready: 'Transfer Ready',
   delivery_delayed: 'Delivery Delayed',
@@ -212,12 +215,7 @@ export default function NotificationAnalyticsPage() {
           ))}
         </div>
 
-        {loading ? (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
-            <i className="ri-loader-4-line animate-spin text-gray-400 text-2xl"></i>
-            <p className="text-sm text-gray-400 mt-2">Loading analytics...</p>
-          </div>
-        ) : (
+        {(
           <>
             {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

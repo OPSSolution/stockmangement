@@ -12,6 +12,7 @@ import { buildOrderInsert, buildOrderUpdate, mapOrderToDraft, mapProductRow, typ
 import { getReservedQuantities } from '@/lib/stockReservations';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
+import { notifyAdmins } from '@/lib/notifyAdmins';
 
 type FilterStatus = 'all' | OrderStatus;
 
@@ -172,6 +173,12 @@ export default function OrdersPage() {
       showToast('Order created successfully.');
       await fetchOrders();
       logAudit({ action: 'create', module: 'orders', description: `Created order for ${draft.customer}` });
+      notifyAdmins(
+        'new_order',
+        'New Order',
+        `${draft.customer} placed an order for ${payload.item_count} item${payload.item_count !== 1 ? 's' : ''}.`,
+        { order_id: payload.id }
+      );
     } catch (err) {
       console.error(err);
       showToast('Failed to create order.');
@@ -261,17 +268,7 @@ export default function OrdersPage() {
         </div>
       )}
 
-      {loading && (
-        <div className="flex items-center justify-center py-12 text-gray-400">
-          <div className="w-8 h-8 flex items-center justify-center mr-3">
-            <i className="ri-loader-4-line animate-spin text-xl"></i>
-          </div>
-          <span className="text-sm">Loading orders...</span>
-        </div>
-      )}
-
-      {!loading && (
-        <>
+      <>
           {/* KPI Strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
             {[
@@ -498,7 +495,6 @@ export default function OrdersPage() {
             </div>
           </div>
         </>
-      )}
 
       {selectedOrder && (
         <OrderDetailModal
