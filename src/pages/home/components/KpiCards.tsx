@@ -48,10 +48,11 @@ export default function KpiCards() {
       const ordersQuery = supabase.from('orders').select('status').eq('status', 'pending');
 
       if (warehouseScope) {
-        productsQuery = productsQuery.eq('warehouse', warehouseScope);
-        deliveriesQuery = deliveriesQuery.or(`warehouse.eq.${warehouseScope},destination.eq.${warehouseScope}`);
-        alertsQuery = alertsQuery.eq('warehouse', warehouseScope);
-        transfersQuery = transfersQuery.or(`from_warehouse.eq.${warehouseScope},to_warehouse.eq.${warehouseScope}`);
+        const list = warehouseScope.join(',');
+        productsQuery = productsQuery.in('warehouse', warehouseScope);
+        deliveriesQuery = deliveriesQuery.or(`warehouse.in.(${list}),destination.in.(${list})`);
+        alertsQuery = alertsQuery.in('warehouse', warehouseScope);
+        transfersQuery = transfersQuery.or(`from_warehouse.in.(${list}),to_warehouse.in.(${list})`);
       }
 
       const [{ data: p }, { data: d }, { data: a }, { data: o }, { data: t }] = await Promise.all([

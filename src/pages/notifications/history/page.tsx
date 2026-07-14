@@ -4,6 +4,8 @@ import { supabase } from '@/lib/supabase';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 const TYPE_OPTIONS = [
   { value: 'all', label: 'All Types', icon: 'ri-notification-3-line' },
@@ -128,6 +130,7 @@ export default function NotificationHistoryPage() {
     } else {
       showToast('Read notifications cleared');
       applyFilters();
+      logAudit({ action: 'delete', module: 'notifications', description: 'Cleared all read notifications' });
     }
   };
 
@@ -146,6 +149,21 @@ export default function NotificationHistoryPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => exportToCsv('notifications', filtered, [
+                { header: 'ID', value: (n) => n.id },
+                { header: 'Type', value: (n) => n.type },
+                { header: 'Title', value: (n) => n.title },
+                { header: 'Message', value: (n) => n.message },
+                { header: 'Read', value: (n) => n.is_read ? 'Yes' : 'No' },
+                { header: 'Emailed', value: (n) => n.is_emailed ? 'Yes' : 'No' },
+                { header: 'Created At', value: (n) => n.created_at },
+              ])}
+              className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <i className="ri-download-2-line mr-1"></i>
+              Export
+            </button>
             <button
               onClick={() => navigate('/notifications/settings')}
               className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer"

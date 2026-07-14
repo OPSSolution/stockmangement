@@ -41,7 +41,7 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
   // dispatch) belong to the sending warehouse. Admins can always do either.
   const requiredWarehouse = nextStep === 'delivered' ? delivery.toWarehouse : delivery.fromWarehouse;
   const isReceivingStep = nextStep === 'delivered';
-  const canAdvance = isAdmin || profile?.warehouse === requiredWarehouse;
+  const canAdvance = isAdmin || !!profile?.warehouses.includes(requiredWarehouse);
 
   const handlePhotoPick = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];

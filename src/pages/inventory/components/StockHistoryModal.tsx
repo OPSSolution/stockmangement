@@ -1,5 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Product } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
+import { typeConfig } from './stockHistoryTypeConfig';
+import { getReservationDetailsForProduct, type ReservationDetail } from '@/lib/stockReservations';
 
 interface StockHistoryModalProps {
   product: Product;
@@ -7,17 +10,27 @@ interface StockHistoryModalProps {
   onClose: () => void;
 }
 
-const typeConfig: Record<string, { label: string; icon: string; color: string; bg: string }> = {
-  sale: { label: 'Sale', icon: 'ri-shopping-bag-3-line', color: 'text-rose-600', bg: 'bg-rose-50' },
-  purchase: { label: 'Purchase', icon: 'ri-add-circle-line', color: 'text-emerald-600', bg: 'bg-emerald-50' },
-  transfer_in: { label: 'Transfer In', icon: 'ri-arrow-right-down-line', color: 'text-sky-600', bg: 'bg-sky-50' },
-  transfer_out: { label: 'Transfer Out', icon: 'ri-arrow-right-up-line', color: 'text-violet-600', bg: 'bg-violet-50' },
-  return: { label: 'Return', icon: 'ri-arrow-go-back-line', color: 'text-amber-600', bg: 'bg-amber-50' },
-  adjustment: { label: 'Adjustment', icon: 'ri-equalizer-line', color: 'text-gray-600', bg: 'bg-gray-100' },
+const sourceIcon: Record<ReservationDetail['source'], string> = {
+  Request: 'ri-file-list-3-line',
+  Order: 'ri-shopping-bag-3-line',
+  Transfer: 'ri-swap-box-line',
+  Delivery: 'ri-truck-line',
 };
 
 export default function StockHistoryModal({ product, history, onClose }: StockHistoryModalProps) {
   const productHistory = history.filter((h) => h.productId === product.id);
+  const [reservations, setReservations] = useState<ReservationDetail[]>([]);
+  const [loadingReservations, setLoadingReservations] = useState(true);
+
+  useEffect(() => {
+    setLoadingReservations(true);
+    getReservationDetailsForProduct(product.id).then((data) => {
+      setReservations(data);
+      setLoadingReservations(false);
+    });
+  }, [product.id]);
+
+  const totalReserved = reservations.reduce((sum, r) => sum + r.quantity, 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
@@ -33,7 +46,7 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
         </div>
 
         {/* Stats summary */}
-        <div className="grid grid-cols-3 gap-0 border-b border-gray-100 shrink-0">
+        <div className="grid grid-cols-4 gap-0 border-b border-gray-100 shrink-0">
           {[
             { label: 'Current Stock', value: String(product.stock), icon: 'ri-stack-line', color: 'text-gray-800' },
             {
@@ -48,6 +61,12 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
               icon: 'ri-arrow-up-circle-line',
               color: 'text-rose-600',
             },
+            {
+              label: 'Reserved',
+              value: loadingReservations ? '…' : String(totalReserved),
+              icon: 'ri-time-line',
+              color: totalReserved > 0 ? 'text-amber-600' : 'text-gray-400',
+            },
           ].map((stat) => (
             <div key={stat.label} className="flex flex-col items-center py-4 border-r border-gray-100 last:border-r-0">
               <div className={`w-5 h-5 flex items-center justify-center mb-1`}>
@@ -58,6 +77,32 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
             </div>
           ))}
         </div>
+
+        {/* Reserved breakdown — what's holding stock aside, not yet physically deducted */}
+        {!loadingReservations && reservations.length > 0 && (
+          <div className="px-6 py-3 border-b border-gray-100 bg-amber-50/50 shrink-0">
+            <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+              <i className="ri-error-warning-line"></i>
+              {totalReserved} unit{totalReserved === 1 ? '' : 's'} unavailable — tied up, not yet deducted
+            </p>
+            <div className="space-y-1">
+              {reservations.map((r) => (
+                <div key={`${r.source}-${r.id}`} className="flex items-center justify-between text-sm py-1">
+                  <span className="flex items-center gap-1.5 text-gray-700 min-w-0">
+                    <i className={`${sourceIcon[r.source]} text-gray-400 shrink-0`}></i>
+                    <span className="truncate">{r.source} <span className="font-mono text-xs text-gray-400">{r.id}</span></span>
+                  </span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-white border border-amber-200 text-amber-700 capitalize">
+                      {r.status.replace('_', ' ')}
+                    </span>
+                    <span className="text-xs font-bold text-amber-700">{r.quantity} units</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* History list */}
         <div className="overflow-y-auto flex-1 px-6 py-4 space-y-2">

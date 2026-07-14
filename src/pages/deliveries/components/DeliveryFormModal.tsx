@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { DeliveryRecord, DeliveryStep } from '@/mocks/deliveries';
+import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 
 interface DeliveryFormModalProps {
   delivery?: DeliveryRecord;
@@ -22,7 +23,7 @@ const stepOptions: DeliveryStep[] = ['prepare', 'ready', 'in_transit', 'delivere
 const emptyForm = {
   fromWarehouse: '',
   toWarehouse: '',
-  items: [] as { productName: string; sku: string; imageUrl?: string | null; quantity: number }[],
+  items: [] as { productId?: string; productName: string; sku: string; imageUrl?: string | null; quantity: number }[],
   status: 'prepare' as DeliveryStep,
   estimatedDelivery: '',
   timeline: [] as { step: DeliveryStep; timestamp: string; note: string; completedBy?: string }[],
@@ -48,6 +49,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
   const [selectedQty, setSelectedQty] = useState(1);
   const [imageMode, setImageMode] = useState<'file' | 'url'>('file');
   const [error, setError] = useState('');
+  const [reserved, setReserved] = useState<Record<string, number>>({});
 
   const autoTransferId = useMemo(
     () => `TRF-${String(Math.floor(Date.now() / 1000) % 100000).padStart(5, '0')}`,
@@ -66,7 +68,8 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
 
     fetchProducts();
     fetchWarehouses();
-  }, []);
+    getReservedQuantities(delivery ? { excludeDeliveryId: delivery.id } : {}).then(setReserved);
+  }, [delivery]);
 
   useEffect(() => {
     if (!delivery) {
@@ -111,12 +114,18 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProductId);
     if (!product || selectedQty < 1) return;
+    const available = availableStock(product.stock, reserved, product.id);
+    if (selectedQty > available) {
+      setError(`Only ${available} unit${available === 1 ? '' : 's'} of "${product.name}" available — the rest is tied up in other pending requests/orders/transfers/deliveries.`);
+      return;
+    }
+    setError('');
 
     setForm((prev) => ({
       ...prev,
       items: [
         ...prev.items,
-        { productName: product.name, sku: product.sku, imageUrl: product.image_url || null, quantity: selectedQty },
+        { productId: product.id, productName: product.name, sku: product.sku, imageUrl: product.image_url || null, quantity: selectedQty },
       ],
     }));
     setSelectedProductId('');
@@ -342,7 +351,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                 <option value="">Select inventory item</option>
                 {availableProducts.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ({p.sku}) — {p.stock} in stock
+                    {p.name} ({p.sku}) — {availableStock(p.stock, reserved, p.id)} available
                   </option>
                 ))}
               </select>

@@ -7,6 +7,9 @@ import TransferDetailModal from './components/TransferDetailModal';
 import TransferFormModal from './components/TransferFormModal';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { moveStockBetweenWarehouses } from '@/lib/stockDeduction';
+import { logAudit } from '@/lib/auditLog';
+import { exportToCsv } from '@/lib/exportCsv';
 
 type FilterTab = 'all' | TransferStatus;
 
@@ -18,119 +21,6 @@ const tabs: { key: FilterTab; label: string }[] = [
   { key: 'received', label: 'Received' },
   { key: 'cancelled', label: 'Cancelled' },
 ];
-
-function deriveStatus(stock: number, threshold: number): 'in_stock' | 'low_stock' | 'out_of_stock' {
-  if (stock === 0) return 'out_of_stock';
-  if (stock <= threshold) return 'low_stock';
-  return 'in_stock';
-}
-
-// Moves stock from the source warehouse's product into the destination warehouse's
-// matching product (matched by SKU) — creating it there if it doesn't exist yet —
-// and logs both sides to stock_history so it shows up in each product's history.
-async function fulfillTransfer(transfer: StockTransfer): Promise<{ error: string | null }> {
-  const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
-
-  const { data: allProducts, error: fetchErr } = await supabase.from('products').select('*');
-  if (fetchErr || !allProducts) return { error: fetchErr?.message || 'Failed to load products' };
-
-  let maxNum = allProducts.length > 0
-    ? Math.max(...allProducts.map((p) => parseInt(String(p.id).replace('P', '')) || 0))
-    : 0;
-
-  for (const item of transfer.items) {
-    const sourceProduct = allProducts.find((p) => p.id === item.productId);
-    if (!sourceProduct) continue;
-
-    const newSourceStock = Math.max(0, sourceProduct.stock - item.quantity);
-    const { error: srcErr } = await supabase.from('products').update({
-      stock: newSourceStock,
-      status: deriveStatus(newSourceStock, sourceProduct.low_stock_threshold),
-      last_updated: now,
-    }).eq('id', sourceProduct.id);
-    if (srcErr) return { error: srcErr.message };
-
-    await supabase.from('stock_history').insert({
-      id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      product_id: sourceProduct.id,
-      type: 'transfer_out',
-      quantity: -item.quantity,
-      stock_before: sourceProduct.stock,
-      stock_after: newSourceStock,
-      reference: transfer.id,
-      note: `Transferred to ${transfer.toWarehouse}`,
-      warehouse: sourceProduct.warehouse,
-      user_name: 'Admin',
-      created_at: now,
-    });
-    sourceProduct.stock = newSourceStock;
-
-    const destProduct = allProducts.find((p) => p.warehouse === transfer.toWarehouse && p.sku === sourceProduct.sku);
-
-    if (destProduct) {
-      const newDestStock = destProduct.stock + item.quantity;
-      const { error: destErr } = await supabase.from('products').update({
-        stock: newDestStock,
-        status: deriveStatus(newDestStock, destProduct.low_stock_threshold),
-        last_updated: now,
-      }).eq('id', destProduct.id);
-      if (destErr) return { error: destErr.message };
-
-      await supabase.from('stock_history').insert({
-        id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        product_id: destProduct.id,
-        type: 'transfer_in',
-        quantity: item.quantity,
-        stock_before: destProduct.stock,
-        stock_after: newDestStock,
-        reference: transfer.id,
-        note: `Transferred from ${transfer.fromWarehouse}`,
-        warehouse: destProduct.warehouse,
-        user_name: 'Admin',
-        created_at: now,
-      });
-      destProduct.stock = newDestStock;
-    } else {
-      maxNum += 1;
-      const newId = `P${String(maxNum).padStart(3, '0')}`;
-      const { error: createErr } = await supabase.from('products').insert({
-        id: newId,
-        name: sourceProduct.name,
-        sku: sourceProduct.sku,
-        category: sourceProduct.category,
-        warehouse: transfer.toWarehouse,
-        vendor: sourceProduct.vendor || null,
-        image_url: sourceProduct.image_url || null,
-        stock: item.quantity,
-        low_stock_threshold: sourceProduct.low_stock_threshold,
-        price: sourceProduct.price,
-        product_type: sourceProduct.product_type,
-        status: deriveStatus(item.quantity, sourceProduct.low_stock_threshold),
-        last_updated: now,
-      });
-      if (createErr) return { error: createErr.message };
-
-      await supabase.from('stock_history').insert({
-        id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        product_id: newId,
-        type: 'transfer_in',
-        quantity: item.quantity,
-        stock_before: 0,
-        stock_after: item.quantity,
-        reference: transfer.id,
-        note: `Transferred from ${transfer.fromWarehouse} — new product added to ${transfer.toWarehouse}`,
-        warehouse: transfer.toWarehouse,
-        user_name: 'Admin',
-        created_at: now,
-      });
-
-      allProducts.push({ ...sourceProduct, id: newId, warehouse: transfer.toWarehouse, stock: item.quantity });
-    }
-  }
-
-  return { error: null };
-}
-
 function mapTransfer(row: Record<string, unknown>): StockTransfer {
   return {
     id: row.id as string,
@@ -177,7 +67,10 @@ export default function TransfersPage() {
   const fetchTransfers = async () => {
     setLoading(true);
     let query = supabase.from('transfers').select('*').order('created_at', { ascending: false });
-    if (warehouseScope) query = query.or(`from_warehouse.eq.${warehouseScope},to_warehouse.eq.${warehouseScope}`);
+    if (warehouseScope) {
+      const list = warehouseScope.join(',');
+      query = query.or(`from_warehouse.in.(${list}),to_warehouse.in.(${list})`);
+    }
     const { data, error } = await query;
     if (error) {
       console.error(error);
@@ -215,8 +108,8 @@ export default function TransfersPage() {
     const transfer = transfers.find((t) => t.id === id);
 
     if (status === 'approved' || status === 'in_transit' || status === 'received') {
-      const isReceivingWarehouse = isAdmin || (transfer && warehouseScope === transfer.toWarehouse);
-      const isSendingWarehouse = isAdmin || (transfer && warehouseScope === transfer.fromWarehouse);
+      const isReceivingWarehouse = isAdmin || (transfer && warehouseScope?.includes(transfer.toWarehouse));
+      const isSendingWarehouse = isAdmin || (transfer && warehouseScope?.includes(transfer.fromWarehouse));
       const allowed = status === 'received' ? isReceivingWarehouse : isSendingWarehouse;
       if (!allowed) {
         const warehouse = status === 'received' ? transfer?.toWarehouse : transfer?.fromWarehouse;
@@ -229,7 +122,12 @@ export default function TransfersPage() {
     setStatusChanging(true);
     try {
       if (status === 'received' && transfer) {
-        const { error: fulfillError } = await fulfillTransfer(transfer);
+        const { error: fulfillError } = await moveStockBetweenWarehouses(transfer.items, {
+          fromWarehouse: transfer.fromWarehouse,
+          toWarehouse: transfer.toWarehouse,
+          reference: transfer.id,
+          userName: 'Admin',
+        });
         if (fulfillError) {
           window.alert(`Failed to update inventory: ${fulfillError}`);
           return;
@@ -256,13 +154,13 @@ export default function TransfersPage() {
 
         setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
         setSelectedTransfer((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
+        logAudit({ action: 'update', module: 'transfers', description: `Transfer ${id} ${status.replace('_', ' ')}`, referenceId: id });
       }
     } finally {
       setStatusChanging(false);
     }
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFormSubmit = async (data: any) => {
     const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
     const maxNum = transfers.length > 0 ? Math.max(...transfers.map(t => parseInt(t.id.replace('TRF-', '')) || 0)) : 0;
@@ -306,6 +204,7 @@ export default function TransfersPage() {
         updatedAt: now,
         completedAt: undefined,
       }, ...prev]);
+      logAudit({ action: 'create', module: 'transfers', description: `Created transfer ${newId} (${data.fromWarehouse} → ${data.toWarehouse})`, referenceId: newId });
     }
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -383,6 +282,25 @@ export default function TransfersPage() {
                     className="pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 w-56 placeholder-gray-400"
                   />
                 </div>
+                <button
+                  onClick={() => exportToCsv('transfers', filtered, [
+                    { header: 'ID', value: (t) => t.id },
+                    { header: 'From Warehouse', value: (t) => t.fromWarehouse },
+                    { header: 'To Warehouse', value: (t) => t.toWarehouse },
+                    { header: 'Requested By', value: (t) => t.requestedBy },
+                    { header: 'Approved By', value: (t) => t.approvedBy || '' },
+                    { header: 'Status', value: (t) => t.status },
+                    { header: 'Items', value: (t) => t.items.map((i) => `${i.productName} x${i.quantity}`).join('; ') },
+                    { header: 'Total Items', value: (t) => t.totalItems },
+                    { header: 'Notes', value: (t) => t.notes || '' },
+                    { header: 'Expected Arrival', value: (t) => t.expectedArrival || '' },
+                    { header: 'Created At', value: (t) => t.createdAt },
+                    { header: 'Updated At', value: (t) => t.updatedAt },
+                  ])}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <i className="ri-download-2-line"></i>Export
+                </button>
                 <button
                   onClick={() => setShowForm(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"
@@ -482,8 +400,8 @@ export default function TransfersPage() {
           transfer={selectedTransfer}
           onClose={() => setSelectedTransfer(null)}
           onStatusChange={handleStatusChange}
-          isSendingWarehouse={isAdmin || warehouseScope === selectedTransfer.fromWarehouse}
-          isReceivingWarehouse={isAdmin || warehouseScope === selectedTransfer.toWarehouse}
+          isSendingWarehouse={isAdmin || !!warehouseScope?.includes(selectedTransfer.fromWarehouse)}
+          isReceivingWarehouse={isAdmin || !!warehouseScope?.includes(selectedTransfer.toWarehouse)}
           statusChanging={statusChanging}
         />
       )}

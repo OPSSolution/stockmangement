@@ -18,6 +18,7 @@ import WarehousesPage from "../pages/warehouses/page";
 import WarehouseDetailPage from "../pages/warehouses/detail/page";
 import PromotionsPage from "../pages/promotions/page";
 import TeamsPage from "../pages/teams/page";
+import ActivityLogPage from "../pages/teams/activity-log/page";
 import NotificationAnalyticsPage from "../pages/notifications/analytics/page";
 import NotificationSettingsPage from "../pages/notifications/settings/page";
 import NotificationHistoryPage from "../pages/notifications/history/page";
@@ -108,6 +109,10 @@ const routes: RouteObject[] = [
   {
     path: "/teams",
     element: <ProtectedRoute permKey="teams"><TeamsPage /></ProtectedRoute>,
+  },
+  {
+    path: "/teams/activity-log",
+    element: <ProtectedRoute permKey="teams"><ActivityLogPage /></ProtectedRoute>,
   },
   {
     path: "/requirements",

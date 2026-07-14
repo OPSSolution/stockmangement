@@ -6,6 +6,8 @@ import VendorFormModal from './components/VendorFormModal';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 type FilterTab = 'all' | 'active' | 'inactive' | 'suspended';
 
@@ -74,24 +76,23 @@ export default function VendorsPage() {
     // (the "Approved Vendors" list set on the warehouse detail page) — admins
     // keep the unrestricted, all-vendors view.
     if (warehouseScope) {
-      const { data: whRow, error: whError } = await supabase
+      const { data: whRows, error: whError } = await supabase
         .from('warehouses')
         .select('vendor_names')
-        .eq('name', warehouseScope)
-        .maybeSingle();
+        .in('name', warehouseScope);
       if (whError) {
         console.error(whError);
         setVendors([]);
         setLoading(false);
         return;
       }
-      const vendorNames = (whRow?.vendor_names as string[]) || [];
+      const vendorNames = [...new Set((whRows || []).flatMap((w) => (w.vendor_names as string[]) || []))];
       if (vendorNames.length === 0) {
         setVendors([]);
         setLoading(false);
         return;
       }
-      const { data, error } = await supabase.from('vendors').select('*').in('name', vendorNames);
+      const { data, error } = await supabase.from('vendors').select('*').in('name', vendorNames).order('created_at', { ascending: false });
       if (error) {
         console.error(error);
       } else {
@@ -101,7 +102,7 @@ export default function VendorsPage() {
       return;
     }
 
-    const { data, error } = await supabase.from('vendors').select('*');
+    const { data, error } = await supabase.from('vendors').select('*').order('created_at', { ascending: false });
     if (error) {
       console.error(error);
     } else {
@@ -133,6 +134,7 @@ export default function VendorsPage() {
       const { error } = await supabase.from('vendors').update(payload).eq('id', data.id);
       if (error) { console.error(error); showToast('Failed to update vendor.', 'error'); return; }
       showToast('Vendor updated.');
+      logAudit({ action: 'update', module: 'vendors', description: `Updated vendor "${data.name}"`, referenceId: data.id });
     } else {
       const maxNum = vendors.length > 0 ? Math.max(...vendors.map((v) => parseInt(v.id.replace('V', '')) || 0)) : 0;
       const newId = `V${String(maxNum + 1).padStart(3, '0')}`;
@@ -144,6 +146,7 @@ export default function VendorsPage() {
       });
       if (error) { console.error(error); showToast('Failed to create vendor.', 'error'); return; }
       showToast('Vendor created.');
+      logAudit({ action: 'create', module: 'vendors', description: `Created vendor "${data.name}"`, referenceId: newId });
     }
     setShowForm(false);
     setEditVendor(null);
@@ -159,6 +162,7 @@ export default function VendorsPage() {
     } else {
       showToast('Vendor deleted.');
       setVendors((prev) => prev.filter((v) => v.id !== deleteVendor.id));
+      logAudit({ action: 'delete', module: 'vendors', description: `Deleted vendor "${deleteVendor.name}"`, referenceId: deleteVendor.id });
     }
     setDeleteVendor(null);
   };
@@ -279,6 +283,26 @@ export default function VendorsPage() {
                     <i className="ri-grid-line text-sm"></i>
                   </button>
                 </div>
+                <button
+                  onClick={() => exportToCsv('vendors', filtered, [
+                    { header: 'ID', value: (v) => v.id },
+                    { header: 'Name', value: (v) => v.name },
+                    { header: 'Type', value: (v) => typeLabel[v.type] || v.type },
+                    { header: 'Status', value: (v) => v.status },
+                    { header: 'City', value: (v) => v.city },
+                    { header: 'Country', value: (v) => v.country },
+                    { header: 'Website', value: (v) => v.website || '' },
+                    { header: 'Payment Terms', value: (v) => v.paymentTerms },
+                    { header: 'Total Orders', value: (v) => v.metrics.totalOrders },
+                    { header: 'Fulfillment Rate', value: (v) => v.metrics.fulfillmentRate },
+                    { header: 'On-Time Delivery Rate', value: (v) => v.metrics.onTimeDeliveryRate },
+                    { header: 'Total Purchase Value', value: (v) => v.metrics.totalPurchaseValue },
+                    { header: 'Registered At', value: (v) => v.registeredAt },
+                  ])}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <i className="ri-download-2-line"></i>Export
+                </button>
                 {showEdit && (
                   <button
                     onClick={openNew}

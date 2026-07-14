@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 interface Requirement {
   id: string;
@@ -131,6 +133,12 @@ export default function RequirementsPage() {
       setShowForm(false);
       setEditingReq(null);
       await loadRequirements();
+      logAudit({
+        action: editingReq ? 'update' : 'create',
+        module: 'requirements',
+        description: `${editingReq ? 'Updated' : 'Created'} requirement "${form.title.trim()}"`,
+        referenceId: editingReq?.id,
+      });
     }
   };
 
@@ -147,17 +155,20 @@ export default function RequirementsPage() {
         prev.map((r) => (r.id === req.id ? { ...r, status: newStatus, updated_at: new Date().toISOString() } : r))
       );
       showToast('Status updated');
+      logAudit({ action: 'update', module: 'requirements', description: `Requirement "${req.title}" status → ${newStatus}`, referenceId: req.id });
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Delete this requirement?')) return;
+    const title = requirements.find((r) => r.id === id)?.title || id;
     const { error } = await supabase.from('requirements').delete().eq('id', id);
     if (error) {
       showToast('Failed to delete', 'error');
     } else {
       setRequirements((prev) => prev.filter((r) => r.id !== id));
       showToast('Requirement deleted');
+      logAudit({ action: 'delete', module: 'requirements', description: `Deleted requirement "${title}"`, referenceId: id });
     }
   };
 
@@ -207,13 +218,32 @@ export default function RequirementsPage() {
             <h1 className="text-xl font-bold text-gray-900 tracking-tight">Requirements</h1>
             <p className="text-sm text-gray-400 mt-1">Track and manage system feature requirements</p>
           </div>
-          <button
-            onClick={openNew}
-            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <i className="ri-add-line mr-1"></i>
-            New Requirement
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => exportToCsv('requirements', requirements, [
+                { header: 'ID', value: (r) => r.id },
+                { header: 'Title', value: (r) => r.title },
+                { header: 'Description', value: (r) => r.description || '' },
+                { header: 'Module', value: (r) => r.module },
+                { header: 'Priority', value: (r) => r.priority },
+                { header: 'Status', value: (r) => r.status },
+                { header: 'Created By', value: (r) => r.created_by || '' },
+                { header: 'Created At', value: (r) => r.created_at },
+                { header: 'Updated At', value: (r) => r.updated_at },
+              ])}
+              className="px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <i className="ri-download-2-line mr-1"></i>
+              Export
+            </button>
+            <button
+              onClick={openNew}
+              className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <i className="ri-add-line mr-1"></i>
+              New Requirement
+            </button>
+          </div>
         </div>
 
         {/* Stats */}

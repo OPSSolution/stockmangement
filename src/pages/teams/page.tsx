@@ -1,8 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, MouseEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 type UserRole = 'admin' | 'staff' | 'viewer';
 
@@ -12,9 +15,10 @@ interface TeamMember {
   full_name: string | null;
   role: UserRole;
   phone: string | null;
-  warehouse: string | null;
+  warehouses: string[];
   created_at: string;
   last_sign_in_at: string | null;
+  deleted_at: string | null;
 }
 
 interface ToastState {
@@ -36,13 +40,20 @@ const ROLE_LABELS: Record<UserRole, string> = {
 };
 
 export default function TeamsPage() {
-  const { isAdmin } = useAuth();
+  const navigate = useNavigate();
+  const { isAdmin, user } = useAuth();
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<'active' | 'removed'>('active');
+  const [removingMember, setRemovingMember] = useState<TeamMember | null>(null);
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
+  const [warehouseMenuId, setWarehouseMenuId] = useState<string | null>(null);
+  const [warehouseMenuPosition, setWarehouseMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [showInvite, setShowInvite] = useState(false);
   const [inviteForm, setInviteForm] = useState({
     email: '',
@@ -63,7 +74,7 @@ export default function TeamsPage() {
     setLoading(true);
     const { data: profiles, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role, phone, warehouse, created_at')
+      .select('id, email, full_name, role, phone, warehouses, created_at, deleted_at')
       .order('created_at', { ascending: false });
 
     if (error || !profiles) {
@@ -79,9 +90,10 @@ export default function TeamsPage() {
       full_name: p.full_name,
       role: (p.role as UserRole) || 'viewer',
       phone: p.phone,
-      warehouse: p.warehouse,
+      warehouses: (p.warehouses as string[] | null) || [],
       created_at: p.created_at,
       last_sign_in_at: null,
+      deleted_at: p.deleted_at,
     }));
 
     setMembers(mapped);
@@ -106,21 +118,49 @@ export default function TeamsPage() {
     } else {
       setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, role: newRole } : m)));
       showToast('Role updated');
+      const target = members.find((m) => m.id === memberId);
+      logAudit({ action: 'update', module: 'teams', description: `Changed ${target?.full_name || target?.email || memberId}'s role to ${newRole}`, referenceId: memberId });
     }
   };
 
-  const handleUpdateWarehouse = async (memberId: string, newWarehouse: string) => {
+  const handleUpdateWarehouses = async (memberId: string, newWarehouses: string[]) => {
     if (!isAdmin) {
       showToast('Admin access required', 'error');
       return;
     }
-    const { error } = await supabase.from('profiles').update({ warehouse: newWarehouse || null }).eq('id', memberId);
+    const { error } = await supabase.from('profiles').update({ warehouses: newWarehouses }).eq('id', memberId);
     if (error) {
-      showToast('Failed to update warehouse: ' + error.message, 'error');
+      showToast('Failed to update warehouses: ' + error.message, 'error');
     } else {
-      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, warehouse: newWarehouse || null } : m)));
-      showToast('Warehouse updated');
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, warehouses: newWarehouses } : m)));
+      const target = members.find((m) => m.id === memberId);
+      logAudit({ action: 'update', module: 'teams', description: `Assigned ${target?.full_name || target?.email || memberId} to ${newWarehouses.length ? newWarehouses.join(', ') : 'no warehouse'}`, referenceId: memberId });
     }
+  };
+
+  const toggleMemberWarehouse = (member: TeamMember, warehouse: string) => {
+    const next = member.warehouses.includes(warehouse)
+      ? member.warehouses.filter((w) => w !== warehouse)
+      : [...member.warehouses, warehouse];
+    handleUpdateWarehouses(member.id, next);
+  };
+
+  const handleToggleWarehouseMenu = (memberId: string, event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 208;
+    const menuHeight = Math.min(280, 48 + warehouses.length * 36);
+    const left = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.left));
+    const top = Math.max(8, Math.min(window.innerHeight - menuHeight - 8, rect.bottom + 8));
+
+    if (warehouseMenuId === memberId) {
+      setWarehouseMenuId(null);
+      setWarehouseMenuPosition(null);
+      return;
+    }
+
+    setWarehouseMenuId(memberId);
+    setWarehouseMenuPosition({ left, top });
   };
 
   const handleSaveEdit = async () => {
@@ -131,7 +171,7 @@ export default function TeamsPage() {
         full_name: editingMember.full_name,
         phone: editingMember.phone,
         role: editingMember.role,
-        warehouse: editingMember.warehouse,
+        warehouses: editingMember.warehouses,
       })
       .eq('id', editingMember.id);
 
@@ -146,12 +186,13 @@ export default function TeamsPage() {
                 full_name: editingMember.full_name,
                 phone: editingMember.phone,
                 role: editingMember.role,
-                warehouse: editingMember.warehouse,
+                warehouses: editingMember.warehouses,
               }
             : m
         )
       );
       showToast('Member updated');
+      logAudit({ action: 'update', module: 'teams', description: `Updated member "${editingMember.full_name || editingMember.email}"`, referenceId: editingMember.id });
       setEditingMember(null);
     }
   };
@@ -179,6 +220,7 @@ export default function TeamsPage() {
         showToast(error || data?.error || 'Failed to invite user', 'error');
       } else {
         showToast('User invited successfully');
+        logAudit({ action: 'create', module: 'teams', description: `Invited ${inviteForm.email} as ${inviteForm.role}` });
         setShowInvite(false);
         setInviteForm({ email: '', full_name: '', role: 'staff', phone: '', password: '' });
         fetchMembers();
@@ -190,14 +232,53 @@ export default function TeamsPage() {
     setInviting(false);
   };
 
+  const handleToggleMenu = (memberId: string, event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 160;
+    const menuHeight = 88;
+    const left = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth));
+    const top = Math.max(8, Math.min(window.innerHeight - menuHeight - 8, rect.bottom + 8));
+
+    if (openMenuId === memberId) {
+      setOpenMenuId(null);
+      setMenuPosition(null);
+      return;
+    }
+
+    setOpenMenuId(memberId);
+    setMenuPosition({ left, top });
+  };
+
+  const handleRemoveMember = async (member: TeamMember) => {
+    if (!isAdmin) return;
+    if (member.id === user?.id) {
+      showToast("You can't remove your own account", 'error');
+      return;
+    }
+    const { error } = await supabase.from('profiles').update({ deleted_at: new Date().toISOString() }).eq('id', member.id);
+    if (error) {
+      showToast('Failed to remove member: ' + error.message, 'error');
+    } else {
+      showToast(`${member.full_name || member.email} removed from the team`);
+      setMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, deleted_at: new Date().toISOString() } : m)));
+      logAudit({ action: 'delete', module: 'teams', description: `Removed ${member.full_name || member.email} from the team`, referenceId: member.id });
+    }
+    setRemovingMember(null);
+  };
+
   const filtered = members.filter((m) => {
+    const matchesStatus = statusFilter === 'active' ? !m.deleted_at : !!m.deleted_at;
     const matchesSearch =
       m.email.toLowerCase().includes(search.toLowerCase()) ||
       (m.full_name?.toLowerCase() || '').includes(search.toLowerCase()) ||
       (m.phone?.toLowerCase() || '').includes(search.toLowerCase());
     const matchesRole = roleFilter === 'all' || m.role === roleFilter;
-    return matchesSearch && matchesRole;
+    return matchesStatus && matchesSearch && matchesRole;
   });
+
+  const activeCount = members.filter((m) => !m.deleted_at).length;
+  const removedCount = members.filter((m) => m.deleted_at).length;
 
   const formatDate = (d: string) =>
     new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -210,23 +291,64 @@ export default function TeamsPage() {
           <div>
             <h1 className="text-xl font-bold text-gray-900 tracking-tight">Teams & Users</h1>
             <p className="text-sm text-gray-400 mt-1">
-              {members.length} members · {members.filter((m) => m.role === 'admin').length} admins ·{' '}
-              {members.filter((m) => m.role === 'staff').length} staff
+              {activeCount} members · {members.filter((m) => !m.deleted_at && m.role === 'admin').length} admins ·{' '}
+              {members.filter((m) => !m.deleted_at && m.role === 'staff').length} staff
+              {removedCount > 0 && <> · {removedCount} removed</>}
             </p>
           </div>
-          {isAdmin && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowInvite(true)}
-              className="px-4 py-2.5 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2"
+              onClick={() => exportToCsv('team-members', filtered, [
+                { header: 'ID', value: (m) => m.id },
+                { header: 'Name', value: (m) => m.full_name || '' },
+                { header: 'Email', value: (m) => m.email },
+                { header: 'Role', value: (m) => m.role },
+                { header: 'Phone', value: (m) => m.phone || '' },
+                { header: 'Warehouses', value: (m) => m.warehouses.join('; ') },
+                { header: 'Created At', value: (m) => m.created_at },
+              ])}
+              className="px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2"
             >
-              <i className="ri-user-add-line"></i>
-              Invite Member
+              <i className="ri-download-2-line"></i>
+              Export
             </button>
-          )}
+            {isAdmin && (
+              <button
+                onClick={() => navigate('/teams/activity-log')}
+                className="px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2"
+              >
+                <i className="ri-history-line"></i>
+                Activity Log
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => setShowInvite(true)}
+                className="px-4 py-2.5 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2"
+              >
+                <i className="ri-user-add-line"></i>
+                Invite Member
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Filters */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1 bg-gray-50 rounded-lg p-1">
+            <button
+              onClick={() => setStatusFilter('active')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors ${statusFilter === 'active' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              Active ({activeCount})
+            </button>
+            <button
+              onClick={() => setStatusFilter('removed')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors ${statusFilter === 'removed' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              Removed ({removedCount})
+            </button>
+          </div>
           <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 flex-1 min-w-[200px]">
             <i className="ri-search-line text-gray-400 text-sm"></i>
             <input
@@ -308,7 +430,7 @@ export default function TeamsPage() {
                         </div>
                       </td>
                       <td className="px-5 py-4">
-                        {isAdmin ? (
+                        {isAdmin && !member.deleted_at ? (
                           <select
                             value={member.role}
                             onChange={(e) => handleUpdateRole(member.id, e.target.value as UserRole)}
@@ -325,31 +447,113 @@ export default function TeamsPage() {
                         )}
                       </td>
                       <td className="px-5 py-4">
-                        {isAdmin ? (
-                          <select
-                            value={member.warehouse || ''}
-                            onChange={(e) => handleUpdateWarehouse(member.id, e.target.value)}
-                            className="px-2 py-1 text-xs font-medium rounded-lg border border-gray-200 bg-white focus:outline-none focus:border-emerald-400 cursor-pointer"
-                          >
-                            <option value="">Unassigned</option>
-                            {warehouses.map((w) => <option key={w} value={w}>{w}</option>)}
-                          </select>
+                        {isAdmin && !member.deleted_at ? (
+                          <div className="relative inline-block">
+                            <button
+                              onClick={(event) => handleToggleWarehouseMenu(member.id, event)}
+                              className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-lg border border-gray-200 bg-white hover:bg-gray-50 focus:outline-none focus:border-emerald-400 cursor-pointer max-w-[220px]"
+                            >
+                              {member.warehouses.length === 0 ? (
+                                <span className="text-gray-400">Unassigned</span>
+                              ) : (
+                                <span className="flex items-center gap-1 flex-wrap">
+                                  {member.warehouses.slice(0, 2).map((w) => (
+                                    <span key={w} className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 whitespace-nowrap">{w}</span>
+                                  ))}
+                                  {member.warehouses.length > 2 && (
+                                    <span className="text-gray-400">+{member.warehouses.length - 2}</span>
+                                  )}
+                                </span>
+                              )}
+                              <i className="ri-arrow-down-s-line text-gray-400"></i>
+                            </button>
+                            {warehouseMenuId === member.id && warehouseMenuPosition && (
+                              <div
+                                className="fixed w-52 bg-white border border-gray-100 rounded-2xl shadow-md z-[60] py-1.5 max-h-72 overflow-y-auto"
+                                style={{ left: warehouseMenuPosition.left, top: warehouseMenuPosition.top }}
+                                onClick={(e) => e.stopPropagation()}
+                                onMouseLeave={() => {
+                                  setWarehouseMenuId(null);
+                                  setWarehouseMenuPosition(null);
+                                }}
+                              >
+                                {warehouses.length === 0 ? (
+                                  <p className="px-3 py-2 text-xs text-gray-400">No warehouses found</p>
+                                ) : (
+                                  warehouses.map((w) => (
+                                    <label
+                                      key={w}
+                                      className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={member.warehouses.includes(w)}
+                                        onChange={() => toggleMemberWarehouse(member, w)}
+                                        className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-400 cursor-pointer"
+                                      />
+                                      {w}
+                                    </label>
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </div>
                         ) : (
-                          <span className="text-xs text-gray-500">{member.warehouse || '—'}</span>
+                          <span className="text-xs text-gray-500">{member.warehouses.length ? member.warehouses.join(', ') : '—'}</span>
                         )}
                       </td>
                       <td className="px-5 py-4">
-                        <p className="text-xs text-gray-500">{formatDate(member.created_at)}</p>
+                        {member.deleted_at ? (
+                          <p className="text-xs text-gray-400">Removed {formatDate(member.deleted_at)}</p>
+                        ) : (
+                          <p className="text-xs text-gray-500">{formatDate(member.created_at)}</p>
+                        )}
                       </td>
                       <td className="px-5 py-4 text-right">
-                        {isAdmin && (
-                          <button
-                            onClick={() => setEditingMember(member)}
-                            className="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
-                            title="Edit"
-                          >
-                            <i className="ri-edit-line text-sm"></i>
-                          </button>
+                        {isAdmin && !member.deleted_at && (
+                          <div className="relative inline-flex justify-end">
+                            <button
+                              onClick={(event) => handleToggleMenu(member.id, event)}
+                              className="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+                              title="More actions"
+                            >
+                              <i className="ri-more-2-line text-sm"></i>
+                            </button>
+                            {openMenuId === member.id && menuPosition && (
+                              <div
+                                className="fixed w-40 bg-white border border-gray-100 rounded-2xl shadow-md z-[60] py-1"
+                                style={{ left: menuPosition.left, top: menuPosition.top }}
+                                onClick={(e) => e.stopPropagation()}
+                                onMouseLeave={() => {
+                                  setOpenMenuId(null);
+                                  setMenuPosition(null);
+                                }}
+                              >
+                                <button
+                                  onClick={() => {
+                                    setEditingMember(member);
+                                    setOpenMenuId(null);
+                                    setMenuPosition(null);
+                                  }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                                >
+                                  <i className="ri-edit-line text-gray-400"></i> Edit
+                                </button>
+                                {member.id !== user?.id && (
+                                  <button
+                                    onClick={() => {
+                                      setRemovingMember(member);
+                                      setOpenMenuId(null);
+                                      setMenuPosition(null);
+                                    }}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                                  >
+                                    <i className="ri-user-unfollow-line text-red-400"></i> Remove
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -424,18 +628,36 @@ export default function TeamsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Warehouse</label>
-                <select
-                  value={editingMember.warehouse || ''}
-                  onChange={(e) =>
-                    setEditingMember((prev) => (prev ? { ...prev, warehouse: e.target.value || null } : null))
-                  }
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-emerald-400 bg-white cursor-pointer"
-                >
-                  <option value="">Unassigned</option>
-                  {warehouses.map((w) => <option key={w} value={w}>{w}</option>)}
-                </select>
-                <p className="text-[10px] text-gray-400 mt-1">Controls which warehouse's delivery actions this member can perform.</p>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Warehouses</label>
+                <div className="border border-gray-200 rounded-lg divide-y divide-gray-50 max-h-40 overflow-y-auto">
+                  {warehouses.length === 0 ? (
+                    <p className="px-3 py-2 text-xs text-gray-400">No warehouses found</p>
+                  ) : (
+                    warehouses.map((w) => (
+                      <label key={w} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editingMember.warehouses.includes(w)}
+                          onChange={() =>
+                            setEditingMember((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    warehouses: prev.warehouses.includes(w)
+                                      ? prev.warehouses.filter((x) => x !== w)
+                                      : [...prev.warehouses, w],
+                                  }
+                                : null
+                            )
+                          }
+                          className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-400 cursor-pointer"
+                        />
+                        {w}
+                      </label>
+                    ))
+                  )}
+                </div>
+                <p className="text-[10px] text-gray-400 mt-1">Controls which warehouses' data and delivery actions this member can access. Leave empty to see all warehouses.</p>
               </div>
             </div>
             <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3">
@@ -551,6 +773,37 @@ export default function TeamsPage() {
                     Invite Member
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove Member Confirmation */}
+      {removingMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="px-6 py-5">
+              <div className="w-11 h-11 rounded-full bg-red-50 flex items-center justify-center mb-4">
+                <i className="ri-user-unfollow-line text-red-500 text-lg"></i>
+              </div>
+              <h3 className="text-base font-bold text-gray-900 mb-1">Remove team member?</h3>
+              <p className="text-sm text-gray-500">
+                <span className="font-medium text-gray-700">{removingMember.full_name || removingMember.email}</span> will lose access immediately. Their past activity and records will be kept for audit purposes.
+              </p>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setRemovingMember(null)}
+                className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleRemoveMember(removingMember)}
+                className="px-5 py-2 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 transition-colors cursor-pointer"
+              >
+                Remove Member
               </button>
             </div>
           </div>

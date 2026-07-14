@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Order, VendorSplit, OrderItem } from '@/mocks/orders';
 import OrderStatusBadge from './OrderStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { deductStockForItems } from '@/lib/stockDeduction';
 
 interface OrderDetailModalProps {
   order: Order;
@@ -18,9 +20,13 @@ const vendorStatusColors: Record<string, string> = {
 
 export default function OrderDetailModal({ order, onClose, onUpdateOrder }: OrderDetailModalProps) {
   const { formatAmount } = useCurrency();
+  const { isAdmin, canApprove } = useAuth();
+  const canDecide = isAdmin || canApprove('orders');
   const [splits, setSplits] = useState<VendorSplit[]>(order.vendorSplits);
   const [partialQty, setPartialQty] = useState<Record<string, number>>({});
   const [confirmMsg, setConfirmMsg] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const isPending = order.status === 'pending';
 
   const updateItemStatus = (splitIdx: number, itemId: string, status: OrderItem['status']) => {
     setSplits((prev) =>
@@ -36,22 +42,6 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
     );
   };
 
-  const acceptAllSplit = (splitIdx: number) => {
-    setSplits((prev) =>
-      prev.map((s, si) =>
-        si !== splitIdx ? s : { ...s, status: 'accepted', items: s.items.map((i) => ({ ...i, status: 'accepted' })) }
-      )
-    );
-  };
-
-  const rejectAllSplit = (splitIdx: number) => {
-    setSplits((prev) =>
-      prev.map((s, si) =>
-        si !== splitIdx ? s : { ...s, status: 'rejected', items: s.items.map((i) => ({ ...i, status: 'rejected' })) }
-      )
-    );
-  };
-
   const handlePartialQty = (itemId: string, val: number, max: number) => {
     setPartialQty((prev) => ({ ...prev, [itemId]: Math.min(Math.max(0, val), max) }));
   };
@@ -59,19 +49,75 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
   const computeNewStatus = (s: VendorSplit[]): Order['status'] => {
     const allAccepted = s.every((v) => v.status === 'accepted');
     const allRejected = s.every((v) => v.status === 'rejected');
-    const someAccepted = s.some((v) => v.status === 'accepted');
+    // A split that's itself 'partial' (mixed accept/reject within one vendor) must
+    // also count here — otherwise an order with one partially-decided vendor split
+    // silently falls through to 'pending' even though real decisions were made.
+    const anyDecided = s.some((v) => v.status === 'accepted' || v.status === 'partial');
     if (allAccepted) return 'accepted';
     if (allRejected) return 'rejected';
-    if (someAccepted) return 'partial';
+    if (anyDecided) return 'partial';
     return 'pending';
   };
 
-  const handleConfirm = () => {
-    const newStatus = computeNewStatus(splits);
-    const updated: Order = { ...order, vendorSplits: splits, status: newStatus, updatedAt: new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16) };
+  const handleConfirm = async () => {
+    if (!canDecide) return;
+
+    // Confirming the order is a decision on every item — anything the reviewer
+    // never individually touched (still 'pending') is treated as accepted, so
+    // clicking Confirm without picking through each item still works as a
+    // straightforward "approve this order" action.
+    const resolvedSplits = splits.map((s) => ({
+      ...s,
+      items: s.items.map((i) => (i.status === 'pending' ? { ...i, status: 'accepted' as const } : i)),
+    }));
+    resolvedSplits.forEach((s) => {
+      const allAccepted = s.items.every((i) => i.status === 'accepted');
+      const allRejected = s.items.every((i) => i.status === 'rejected');
+      const someAccepted = s.items.some((i) => i.status === 'accepted');
+      s.status = allAccepted ? 'accepted' : allRejected ? 'rejected' : someAccepted ? 'partial' : 'pending';
+    });
+
+    const newStatus = computeNewStatus(resolvedSplits);
+
+    // Stock only leaves the warehouse for items newly accepted this confirm — already-accepted
+    // items (from a prior confirm) aren't re-deducted, and rejected items never touch stock.
+    const newlyAccepted: { productId: string; quantity: number }[] = [];
+    resolvedSplits.forEach((split, si) => {
+      const prevItems = order.vendorSplits[si]?.items || [];
+      split.items.forEach((item) => {
+        const prevStatus = prevItems.find((i) => i.id === item.id)?.status;
+        if (item.status === 'accepted' && prevStatus !== 'accepted') {
+          newlyAccepted.push({ productId: item.productId, quantity: item.quantity });
+        }
+      });
+    });
+
+    if (newlyAccepted.length > 0) {
+      setConfirming(true);
+      const { error } = await deductStockForItems(newlyAccepted, {
+        reference: order.id,
+        note: `Order ${order.id} accepted`,
+        userName: 'Admin',
+        historyType: 'sale',
+      });
+      setConfirming(false);
+      if (error) {
+        setConfirmMsg('Cannot confirm: ' + error);
+        return;
+      }
+    }
+
+    const updated: Order = { ...order, vendorSplits: resolvedSplits, status: newStatus, updatedAt: new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16) };
     onUpdateOrder(updated);
-    setConfirmMsg(`Order updated to: ${newStatus}`);
-    setTimeout(() => { setConfirmMsg(''); onClose(); }, 1200);
+    onClose();
+  };
+
+  const handleReject = () => {
+    if (!canDecide) return;
+    const rejectedSplits = splits.map((s) => ({ ...s, status: 'rejected' as const, items: s.items.map((i) => ({ ...i, status: 'rejected' as const })) }));
+    const updated: Order = { ...order, vendorSplits: rejectedSplits, status: 'rejected', updatedAt: new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16) };
+    onUpdateOrder(updated);
+    onClose();
   };
 
   return (
@@ -133,16 +179,6 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
                     <p className="text-sm font-semibold text-gray-800">{split.vendor}</p>
                     <p className="text-xs text-gray-400">{split.warehouse}</p>
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                    split.status === 'accepted' ? 'bg-emerald-50 text-emerald-700' :
-                    split.status === 'rejected' ? 'bg-red-50 text-red-600' :
-                    split.status === 'partial' ? 'bg-sky-50 text-sky-700' :
-                    'bg-amber-50 text-amber-700'
-                  }`}>{split.status.charAt(0).toUpperCase() + split.status.slice(1)}</span>
-                  <button onClick={() => acceptAllSplit(si)} className="px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 cursor-pointer whitespace-nowrap">Accept All</button>
-                  <button onClick={() => rejectAllSplit(si)} className="px-2.5 py-1 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 cursor-pointer whitespace-nowrap">Reject All</button>
                 </div>
               </div>
 
@@ -211,8 +247,8 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
         {/* Footer */}
         <div className="px-6 py-4 border-t border-gray-100 shrink-0">
           {confirmMsg && (
-            <div className="mb-3 bg-emerald-50 text-emerald-700 text-xs font-medium px-3 py-2 rounded-lg flex items-center gap-2">
-              <i className="ri-check-double-line"></i> {confirmMsg}
+            <div className={`mb-3 text-xs font-medium px-3 py-2 rounded-lg flex items-center gap-2 ${confirmMsg.startsWith('Cannot confirm') ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'}`}>
+              <i className={confirmMsg.startsWith('Cannot confirm') ? 'ri-error-warning-line' : 'ri-check-double-line'}></i> {confirmMsg}
             </div>
           )}
           <div className="flex items-center justify-between">
@@ -220,17 +256,34 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
               <p className="text-xs text-gray-400">Order Total</p>
               <p className="text-lg font-bold text-gray-900">{formatAmount(order.total)}</p>
             </div>
-            <div className="flex items-center gap-3">
-              <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap">
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirm}
-                className="px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"
-              >
-                Confirm Decisions
-              </button>
-            </div>
+            {isPending && (
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleReject}
+                  disabled={confirming || !canDecide}
+                  title={canDecide ? undefined : "You don't have permission to approve or reject orders"}
+                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${
+                    canDecide
+                      ? 'text-red-600 bg-white border border-red-200 hover:bg-red-50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+                      : 'text-gray-400 bg-gray-100 border border-gray-200 cursor-not-allowed'
+                  }`}
+                >
+                  Reject
+                </button>
+                <button
+                  onClick={handleConfirm}
+                  disabled={confirming || !canDecide}
+                  title={canDecide ? undefined : "You don't have permission to approve or reject orders"}
+                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${
+                    canDecide
+                      ? 'text-white bg-emerald-500 hover:bg-emerald-600 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+                      : 'text-gray-400 bg-gray-200 cursor-not-allowed'
+                  }`}
+                >
+                  {confirming ? 'Confirming...' : 'Confirm Decisions'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

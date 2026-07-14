@@ -9,6 +9,9 @@ import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { buildOrderInsert, buildOrderUpdate, mapOrderToDraft, mapProductRow, type OrderCreateDraft } from './orderCreateUtils';
+import { getReservedQuantities } from '@/lib/stockReservations';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 type FilterStatus = 'all' | OrderStatus;
 
@@ -38,6 +41,8 @@ export default function OrdersPage() {
   const showDelete = canDelete('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [reserved, setReserved] = useState<Record<string, number>>({});
+  const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [search, setSearch] = useState('');
@@ -140,8 +145,9 @@ export default function OrdersPage() {
         console.error(error);
         showToast('Failed to update order.');
       } else {
-        setSelectedOrder(updated);
+        showToast(`Order updated to ${updated.status}.`);
         await fetchOrders();
+        logAudit({ action: 'update', module: 'orders', description: `Order ${updated.id} ${updated.status}`, referenceId: updated.id });
       }
     } catch (err) {
       console.error(err);
@@ -150,6 +156,9 @@ export default function OrdersPage() {
   };
 
   const handleCreateOrder = async (draft: OrderCreateDraft) => {
+    // Close right away instead of waiting on the network round-trip — feedback
+    // comes via the toast once the request actually resolves.
+    setShowCreateModal(false);
     try {
       const payload = buildOrderInsert(draft, products);
       const { error } = await supabase.from('orders').insert(payload);
@@ -160,9 +169,9 @@ export default function OrdersPage() {
         return;
       }
 
-      setShowCreateModal(false);
       showToast('Order created successfully.');
       await fetchOrders();
+      logAudit({ action: 'create', module: 'orders', description: `Created order for ${draft.customer}` });
     } catch (err) {
       console.error(err);
       showToast('Failed to create order.');
@@ -171,13 +180,15 @@ export default function OrdersPage() {
 
   const handleEditOrder = async (draft: OrderCreateDraft) => {
     if (!editingOrder) return;
+    const orderId = editingOrder.id;
+    setEditingOrder(null);
 
     try {
       const updates = buildOrderUpdate(draft, products);
       const { error } = await supabase
         .from('orders')
         .update(updates)
-        .eq('id', editingOrder.id);
+        .eq('id', orderId);
 
       if (error) {
         console.error(error);
@@ -185,9 +196,9 @@ export default function OrdersPage() {
         return;
       }
 
-      setEditingOrder(null);
       showToast('Order updated successfully.');
       await fetchOrders();
+      logAudit({ action: 'update', module: 'orders', description: `Updated order ${orderId}`, referenceId: orderId });
     } catch (err) {
       console.error(err);
       showToast('Failed to save order.');
@@ -209,6 +220,7 @@ export default function OrdersPage() {
 
       showToast('Order deleted.');
       await fetchOrders();
+      logAudit({ action: 'delete', module: 'orders', description: `Deleted order ${order.id}`, referenceId: order.id });
     } catch (err) {
       console.error(err);
       showToast('Failed to delete order.');
@@ -283,43 +295,79 @@ export default function OrdersPage() {
           {/* Main Panel */}
           <div className="bg-white rounded-2xl">
             {/* Toolbar */}
-            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 px-6 py-4 border-b border-gray-100">
-              <div className="flex items-center gap-1 flex-wrap">
-                {filterTabs.map((tab) => (
-                  <button
-                    key={tab.key}
-                    onClick={() => setFilterStatus(tab.key)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer whitespace-nowrap transition-colors ${filterStatus === tab.key ? 'bg-emerald-50 text-emerald-700' : 'text-gray-500 hover:bg-gray-50'}`}
-                  >
-                    {tab.label}
-                    {tab.key !== 'all' && <span className="ml-1 text-gray-400">{counts[tab.key as OrderStatus]}</span>}
-                    {tab.key === 'all' && <span className="ml-1 text-gray-400">{counts.all}</span>}
-                  </button>
-                ))}
+            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 px-6 py-4 border-b border-gray-100">
+              <div className="relative">
+                <div className="w-4 h-4 flex items-center justify-center absolute left-3 top-1/2 -translate-y-1/2">
+                  <i className="ri-search-line text-gray-400 text-sm"></i>
+                </div>
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search order ID or customer..."
+                  className="pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg w-56 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                />
               </div>
               <div className="flex items-center gap-3 flex-wrap">
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value as FilterStatus)}
+                  className="py-2 px-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer text-gray-600"
+                >
+                  {filterTabs.map((tab) => (
+                    <option key={tab.key} value={tab.key}>
+                      {tab.label} ({tab.key === 'all' ? counts.all : counts[tab.key as OrderStatus]})
+                    </option>
+                  ))}
+                </select>
                 <div className="relative">
-                  <div className="w-4 h-4 flex items-center justify-center absolute left-3 top-1/2 -translate-y-1/2">
-                    <i className="ri-search-line text-gray-400 text-sm"></i>
-                  </div>
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search order ID or customer..."
-                    className="pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg w-56 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                  />
+                  <button
+                    onClick={() => setShowActionsMenu((v) => !v)}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-more-2-fill"></i> Actions
+                  </button>
+                  {showActionsMenu && (
+                    <div
+                      onMouseLeave={() => setShowActionsMenu(false)}
+                      className="absolute right-0 top-full mt-2 w-52 bg-white border border-gray-100 rounded-xl shadow-lg z-20 py-1"
+                    >
+                      <button
+                        onClick={() => {
+                          exportToCsv('orders', filtered, [
+                            { header: 'ID', value: (o) => o.id },
+                            { header: 'Requested By', value: (o) => o.requestedBy || '' },
+                            { header: 'Customer', value: (o) => o.customer },
+                            { header: 'Email', value: (o) => o.email },
+                            { header: 'Phone', value: (o) => o.phone },
+                            { header: 'City', value: (o) => o.city },
+                            { header: 'Address', value: (o) => o.address },
+                            { header: 'Status', value: (o) => o.status },
+                            { header: 'Item Count', value: (o) => o.itemCount },
+                            { header: 'Total', value: (o) => o.total },
+                            { header: 'Notes', value: (o) => o.notes || '' },
+                            { header: 'Created At', value: (o) => o.createdAt },
+                            { header: 'Updated At', value: (o) => o.updatedAt },
+                          ]);
+                          setShowActionsMenu(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                      >
+                        <i className="ri-download-2-line text-gray-400"></i> Export CSV
+                      </button>
+                      <button
+                        onClick={() => { handleCopyPublicForm(); setShowActionsMenu(false); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                      >
+                        <i className="ri-link text-gray-400"></i> Public Form
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <button
-                  onClick={() => setShowCreateModal(true)}
+                  onClick={() => { getReservedQuantities().then(setReserved); setShowCreateModal(true); }}
                   className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
                 >
                   <i className="ri-add-line"></i> Create Order
-                </button>
-                <button
-                  onClick={handleCopyPublicForm}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-link"></i> Public Form
                 </button>
               </div>
             </div>
@@ -402,6 +450,7 @@ export default function OrdersPage() {
                                 {showEdit && (
                                   <button
                                     onClick={() => {
+                                      getReservedQuantities({ excludeOrderId: order.id }).then(setReserved);
                                       setEditingOrder(order);
                                       setOpenMenuId(null);
                                       setMenuPosition(null);
@@ -461,6 +510,7 @@ export default function OrdersPage() {
       {editingOrder && (
         <OrderFormModal
           products={products}
+          reserved={reserved}
           initialDraft={mapOrderToDraft(editingOrder)}
           title="Edit Order"
           submitLabel="Save Changes"
@@ -471,6 +521,7 @@ export default function OrdersPage() {
       {showCreateModal && (
         <OrderFormModal
           products={products}
+          reserved={reserved}
           onClose={() => setShowCreateModal(false)}
           onSave={handleCreateOrder}
         />

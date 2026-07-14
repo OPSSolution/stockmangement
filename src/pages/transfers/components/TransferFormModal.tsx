@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 
 interface NewTransferItem {
   productId: string;
@@ -47,12 +48,13 @@ interface ProductOption {
 
 export default function TransferFormModal({ onClose, onSubmit }: TransferFormModalProps) {
   const { warehouseScope } = useAuth();
-  const [form, setForm] = useState<FormData>(emptyForm(warehouseScope || ''));
+  const [form, setForm] = useState<FormData>(emptyForm(warehouseScope?.[0] || ''));
   const [selectedProduct, setSelectedProduct] = useState('');
   const [selectedQty, setSelectedQty] = useState(1);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>([]);
+  const [reserved, setReserved] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
   const autoTransferId = useMemo(
@@ -76,6 +78,7 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
 
     fetchProducts();
     fetchWarehouses();
+    getReservedQuantities().then(setReserved);
   }, []);
 
   useEffect(() => {
@@ -87,8 +90,9 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
   // Default "From Warehouse" to the first available warehouse once loaded,
   // for admins/unscoped users only — scoped staff are locked to their own.
   useEffect(() => {
-    if (!warehouseScope && !form.fromWarehouse && warehouses.length > 0) {
-      setForm((prev) => ({ ...prev, fromWarehouse: warehouses[0] }));
+    if (!form.fromWarehouse) {
+      const first = (warehouseScope || warehouses)[0];
+      if (first) setForm((prev) => ({ ...prev, fromWarehouse: first }));
     }
   }, [warehouses, warehouseScope, form.fromWarehouse]);
 
@@ -107,6 +111,12 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProduct);
     if (!product || selectedQty < 1) return;
+    const available = availableStock(product.stock, reserved, product.id);
+    if (selectedQty > available) {
+      setErrors((e) => ({ ...e, items: `Only ${available} unit${available === 1 ? '' : 's'} of "${product.name}" available — the rest is tied up in other pending requests/orders/transfers.` }));
+      return;
+    }
+    setErrors((e) => { const { items, ...rest } = e; return rest; });
     setForm((f) => ({
       ...f,
       items: [
@@ -167,9 +177,9 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1.5">From Warehouse</label>
-              {warehouseScope ? (
+              {warehouseScope && warehouseScope.length === 1 ? (
                 <input
-                  value={warehouseScope}
+                  value={warehouseScope[0]}
                   disabled
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm bg-gray-50 text-gray-500"
                 />
@@ -180,7 +190,7 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                   className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer"
                 >
                   <option value="">Select warehouse…</option>
-                  {warehouses.map((w) => (
+                  {(warehouseScope || warehouses).map((w) => (
                     <option key={w} value={w}>{w}</option>
                   ))}
                 </select>
@@ -254,7 +264,7 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                   >
                     <option value="">Select product from {form.fromWarehouse}…</option>
                     {availableProducts.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.sku}) — {p.stock} in stock</option>
+                      <option key={p.id} value={p.id}>{p.name} ({p.sku}) — {availableStock(p.stock, reserved, p.id)} available</option>
                     ))}
                   </select>
                   <input

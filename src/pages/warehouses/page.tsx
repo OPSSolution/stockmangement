@@ -7,6 +7,8 @@ import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { fetchWarehousesWithLiveData, type LiveStats, emptyLiveStats } from './warehouseShared';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 const emptyForm = {
   name: '', type: 'owned' as Warehouse['type'], address: '', city: '', country: 'Malaysia',
@@ -93,6 +95,7 @@ export default function WarehousesPage() {
     }
     setShowCreate(false);
     load();
+    logAudit({ action: 'create', module: 'warehouses', description: `Created warehouse "${form.name.trim()}"`, referenceId: id });
   };
 
   const confirmDelete = async () => {
@@ -105,6 +108,7 @@ export default function WarehousesPage() {
       setDeleteError(error.message);
       return;
     }
+    logAudit({ action: 'delete', module: 'warehouses', description: `Deleted warehouse "${deleteTarget.name}"`, referenceId: deleteTarget.id });
     setDeleteTarget(null);
     load();
   };
@@ -124,7 +128,26 @@ export default function WarehousesPage() {
 
   return (
     <DashboardLayout title="Warehouses" subtitle="Click a warehouse to see its full details">
-      <div className="flex items-center justify-end mb-5">
+      <div className="flex items-center justify-end gap-2 mb-5">
+        <button
+          onClick={() => exportToCsv('warehouses', warehouses, [
+            { header: 'ID', value: (w) => w.id },
+            { header: 'Name', value: (w) => w.name },
+            { header: 'Type', value: (w) => w.type },
+            { header: 'City', value: (w) => w.city },
+            { header: 'Country', value: (w) => w.country },
+            { header: 'Manager', value: (w) => w.manager },
+            { header: 'Manager Email', value: (w) => w.managerEmail },
+            { header: 'Manager Phone', value: (w) => w.managerPhone },
+            { header: 'Total Capacity', value: (w) => w.totalCapacity },
+            { header: 'Used Capacity', value: (w) => w.usedCapacity },
+            { header: 'Total SKUs', value: (w) => w.totalSkus },
+            { header: 'Total Units', value: (w) => w.totalUnits },
+          ])}
+          className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+        >
+          <i className="ri-download-2-line"></i> Export
+        </button>
         {showEdit && (
           <button
             onClick={openCreate}

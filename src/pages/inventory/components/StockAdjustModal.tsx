@@ -67,9 +67,9 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl w-full max-w-md mx-4 shadow-xl">
-        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl flex flex-col max-h-[90dvh]">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0">
           <div>
             <h2 className="text-base font-bold text-gray-900">Adjust Stock</h2>
             <p className="text-xs text-gray-400 mt-0.5">{product.name}</p>
@@ -79,7 +79,8 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
+        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-5">
           {/* Current stock display */}
           <div className="bg-gray-50 rounded-xl p-4 flex items-center justify-between">
             <div>
@@ -149,9 +150,16 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Quantity</label>
               <input
                 type="number"
-                value={quantity}
-                onChange={(e) => setQuantity(parseInt(e.target.value) || 0)}
+                value={quantity === 0 ? '' : quantity}
+                onChange={(e) => {
+                  // Don't force a fallback to 0 while typing — with the field starting
+                  // at 0, that snaps the value back on every keystroke (e.g. while
+                  // backspacing to clear it) and fights the user's typing.
+                  const val = e.target.value;
+                  setQuantity(val === '' ? 0 : Math.max(0, Number(val) || 0));
+                }}
                 min={1}
+                placeholder="0"
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
               />
             </div>
@@ -172,6 +180,7 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
                 <i className="ri-error-warning-line"></i> {error}
               </div>
             )}
+        </div>
 
           {/* Sticky footer buttons */}
           <div className="flex items-center gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">

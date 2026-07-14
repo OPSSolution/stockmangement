@@ -3,9 +3,14 @@ import DashboardLayout from '@/components/feature/DashboardLayout';
 import DeliveryStepTracker from './components/DeliveryStepTracker';
 import DeliveryDetailModal from './components/DeliveryDetailModal';
 import DeliveryFormModal from './components/DeliveryFormModal';
-import { deliveryRecords as initialDeliveries, type DeliveryRecord, type DeliveryStep, type DeliveryItem } from '@/mocks/deliveries';
+import { deliveryRecords as initialDeliveries, type DeliveryRecord, type DeliveryStep } from '@/mocks/deliveries';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { parseDeliveryItems, deliveryItemsToDetail } from '@/lib/deliveryItems';
+import { getReservedQuantities } from '@/lib/stockReservations';
+import { moveStockBetweenWarehouses } from '@/lib/stockDeduction';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 const stepIndex: Record<DeliveryStep, number> = { prepare: 0, ready: 1, in_transit: 2, delivered: 3 };
 
@@ -18,26 +23,8 @@ const statusConfig = {
 
 type FilterStatus = 'all' | DeliveryStep;
 
-function parseItems(row: any): DeliveryItem[] {
-  if (Array.isArray(row.items)) return row.items;
-  if (Array.isArray(row.items_detail)) return row.items_detail;
-  if (typeof row.items_detail !== 'string') return [];
-
-  return row.items_detail
-    .split('\n')
-    .map((line: string) => {
-      const [productName = '', sku = '', rawQuantity = '1', imageUrl = ''] = line.split('|');
-      return { productName, sku, quantity: Number(rawQuantity) || 1, imageUrl: imageUrl || null };
-    })
-    .filter((item: DeliveryItem) => item.productName || item.sku);
-}
-
-function itemsToDetail(items: DeliveryItem[]) {
-  return items.map((item) => `${item.productName}|${item.sku}|${item.quantity}|${item.imageUrl || ''}`).join('\n');
-}
-
 function rowToRecord(row: any): DeliveryRecord {
-  const items = parseItems(row);
+  const items = parseDeliveryItems(row);
 
   return {
     id: String(row.id ?? ''),
@@ -45,7 +32,7 @@ function rowToRecord(row: any): DeliveryRecord {
     fromWarehouse: row.from_warehouse ?? row.warehouse ?? '',
     toWarehouse: row.to_warehouse ?? row.destination ?? '',
     items,
-    items_detail: row.items_detail ?? itemsToDetail(items),
+    items_detail: row.items_detail ?? deliveryItemsToDetail(items),
     status: (row.status ?? 'prepare') as DeliveryStep,
     estimatedDelivery: row.estimated_delivery ?? row.estimatedDelivery ?? '',
     timeline: Array.isArray(row.timeline) ? row.timeline : [],
@@ -68,7 +55,7 @@ function recordToRow(record: DeliveryRecord) {
     to_warehouse: record.toWarehouse,
     warehouse: record.fromWarehouse,
     destination: record.toWarehouse,
-    items_detail: record.items_detail || itemsToDetail(record.items),
+    items_detail: record.items_detail || deliveryItemsToDetail(record.items),
     status: record.status,
     estimated_delivery: record.estimatedDelivery,
     timeline: record.timeline,
@@ -169,6 +156,19 @@ export default function DeliveriesPage() {
     const target = deliveries.find((d) => d.id === id);
     if (!target) return;
 
+    // Stock only leaves the source warehouse once a delivery actually arrives —
+    // 'prepare'/'ready'/'in_transit' just reserve it, never touch real stock.
+    if (nextStep === 'delivered') {
+      const { error: moveError } = await moveStockBetweenWarehouses(
+        target.items.map((item) => ({ productId: item.productId || '', quantity: item.quantity })),
+        { fromWarehouse: target.fromWarehouse, toWarehouse: target.toWarehouse, reference: target.id, userName: profile?.full_name || 'Admin' }
+      );
+      if (moveError) {
+        showToast('Cannot mark delivered: ' + moveError);
+        return;
+      }
+    }
+
     const newTimeline = [
       ...target.timeline,
       { step: nextStep, timestamp: now, note, completedBy: profile?.full_name || 'Admin', photoUrl },
@@ -188,6 +188,7 @@ export default function DeliveriesPage() {
       })
     );
     showToast(`Delivery advanced to: ${nextStep.replace('_', ' ')}`);
+    logAudit({ action: 'update', module: 'deliveries', description: `Delivery ${id} advanced to ${nextStep.replace('_', ' ')}`, referenceId: id });
   };
 
   const handleCreateDelivery = async (record: DeliveryRecord) => {
@@ -195,6 +196,7 @@ export default function DeliveriesPage() {
     setDeliveries((prev) => [record, ...prev]);
     setShowCreateModal(false);
     showToast('Delivery created successfully.');
+    logAudit({ action: 'create', module: 'deliveries', description: `Created delivery ${record.id}`, referenceId: record.id });
   };
 
   const handleSaveDelivery = async (record: DeliveryRecord) => {
@@ -203,6 +205,7 @@ export default function DeliveriesPage() {
     if (selectedDelivery?.id === record.id) setSelectedDelivery(record);
     setEditingDelivery(null);
     showToast('Delivery updated successfully.');
+    logAudit({ action: 'update', module: 'deliveries', description: `Updated delivery ${record.id}`, referenceId: record.id });
   };
 
   const handleDeleteDelivery = async (record: DeliveryRecord) => {
@@ -213,6 +216,7 @@ export default function DeliveriesPage() {
     setDeliveries((prev) => prev.filter((d) => d.id !== record.id));
     if (selectedDelivery?.id === record.id) setSelectedDelivery(null);
     showToast('Delivery deleted.');
+    logAudit({ action: 'delete', module: 'deliveries', description: `Deleted delivery ${record.id}`, referenceId: record.id });
   };
 
   const statusOptions: { key: FilterStatus; label: string }[] = [
@@ -264,19 +268,19 @@ export default function DeliveriesPage() {
 
       <div className="bg-white rounded-2xl">
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 px-6 py-4 border-b border-gray-100">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="relative">
-              <div className="w-4 h-4 flex items-center justify-center absolute left-3 top-1/2 -translate-y-1/2">
-                <i className="ri-search-line text-gray-400 text-sm"></i>
-              </div>
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search transfer ID, warehouse..."
-                className="pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg w-60 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-              />
+          <div className="relative">
+            <div className="w-4 h-4 flex items-center justify-center absolute left-3 top-1/2 -translate-y-1/2">
+              <i className="ri-search-line text-gray-400 text-sm"></i>
             </div>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search transfer ID, warehouse..."
+              className="pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg w-60 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+            />
+          </div>
 
+          <div className="flex items-center gap-3 flex-wrap">
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value as FilterStatus)}
@@ -299,14 +303,32 @@ export default function DeliveriesPage() {
                 <option key={warehouse} value={warehouse}>{warehouse}</option>
               ))}
             </select>
-          </div>
 
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
-          >
-            <i className="ri-add-line"></i> Add Delivery
-          </button>
+            <button
+              onClick={() => exportToCsv('deliveries', filtered, [
+                { header: 'ID', value: (d) => d.id },
+                { header: 'From Warehouse', value: (d) => d.fromWarehouse },
+                { header: 'To Warehouse', value: (d) => d.toWarehouse },
+                { header: 'Status', value: (d) => d.status },
+                { header: 'Items', value: (d) => d.items.map((i) => `${i.productName} x${i.quantity}`).join('; ') },
+                { header: 'Driver', value: (d) => d.driver_name || '' },
+                { header: 'Vehicle Plate', value: (d) => d.vehicle_plate || '' },
+                { header: 'Estimated Delivery', value: (d) => d.estimatedDelivery },
+                { header: 'Notes', value: (d) => d.notes || '' },
+                { header: 'Created At', value: (d) => d.created_at },
+                { header: 'Last Update', value: (d) => d.last_update },
+              ])}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
+            >
+              <i className="ri-download-2-line"></i> Export
+            </button>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
+            >
+              <i className="ri-add-line"></i> Add Delivery
+            </button>
+          </div>
         </div>
 
         {loading ? (

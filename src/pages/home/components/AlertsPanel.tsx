@@ -30,7 +30,7 @@ export default function AlertsPanel() {
   useEffect(() => {
     async function fetchAlerts() {
       let query = supabase.from('products').select('*');
-      if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+      if (warehouseScope) query = query.in('warehouse', warehouseScope);
       const { data, error } = await query;
       if (!error && data) {
         const alerts: StockAlert[] = data

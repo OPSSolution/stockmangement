@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../contexts/AuthContext';
 import { useRef, useCallback } from 'react';
-
+222
 type NavItem = {
   label: string;
   icon: string;
@@ -13,15 +13,15 @@ type NavItem = {
 const mainNavItems: NavItem[] = [
   { label: 'Dashboard',  icon: 'ri-dashboard-3-line',     path: '/',           permKey: 'dashboard' },
   { label: 'Inventory',  icon: 'ri-archive-stack-line',   path: '/inventory',  permKey: 'inventory' },
-  { label: 'Requests',   icon: 'ri-file-list-3-line',     path: '/requests',   permKey: 'requests' },
+  { label: 'Warehouses', icon: 'ri-building-2-line',      path: '/warehouses', permKey: 'warehouses' },
+  { label: 'Vendors',    icon: 'ri-store-2-line',         path: '/vendors',    permKey: 'vendors' },
   { label: 'Orders',     icon: 'ri-shopping-bag-3-line',  path: '/orders',     permKey: 'orders' },
   { label: 'Deliveries', icon: 'ri-truck-line',           path: '/deliveries', permKey: 'deliveries' },
-  { label: 'Warehouses', icon: 'ri-building-2-line',      path: '/warehouses', permKey: 'warehouses' },
   { label: 'Transfers',  icon: 'ri-swap-box-line',        path: '/transfers',  permKey: 'transfers' },
+  { label: 'Requests',   icon: 'ri-file-list-3-line',     path: '/requests',   permKey: 'requests' },
   { label: 'Returns',    icon: 'ri-arrow-go-back-line',   path: '/returns',    permKey: 'returns' },
   // { label: 'Purchases',  icon: 'ri-shopping-cart-2-line', path: '/purchases',  permKey: 'purchases' },
   { label: 'Promotions', icon: 'ri-price-tag-3-line',     path: '/promotions', permKey: 'promotions' },
-  { label: 'Vendors',    icon: 'ri-store-2-line',         path: '/vendors',    permKey: 'vendors' },
 ];
 
 const managementNavItems: NavItem[] = [

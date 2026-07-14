@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { logAudit } from '@/lib/auditLog';
 
 interface Category {
   id: string;
@@ -106,12 +107,14 @@ export default function AdminCategoriesPage() {
         .eq('id', editingCat.id);
       if (error) { showToast(error.message, 'error'); return; }
       showToast('Category updated');
+      logAudit({ action: 'update', module: 'categories', description: `Updated category "${catForm.name.trim()}"`, referenceId: editingCat.id });
     } else {
       const id = genId('CAT', categories.map(c => c.id));
       const { error } = await supabase.from('categories')
         .insert({ id, name: catForm.name.trim(), icon: catForm.icon, color: catForm.color, description: catForm.description || null, sort_order: categories.length + 1 });
       if (error) { showToast(error.message, 'error'); return; }
       showToast('Category created');
+      logAudit({ action: 'create', module: 'categories', description: `Created category "${catForm.name.trim()}"`, referenceId: id });
     }
     setShowCatModal(false);
     fetchAll();
@@ -124,6 +127,7 @@ export default function AdminCategoriesPage() {
     showToast('Category deleted');
     if (selectedCat?.id === cat.id) setSelectedCat(null);
     fetchAll();
+    logAudit({ action: 'delete', module: 'categories', description: `Deleted category "${cat.name}"`, referenceId: cat.id });
   };
 
   // ── Sub-category CRUD ────────────────────────────────────────
@@ -148,12 +152,14 @@ export default function AdminCategoriesPage() {
         .eq('id', editingSub.id);
       if (error) { showToast(error.message, 'error'); return; }
       showToast('Sub-category updated');
+      logAudit({ action: 'update', module: 'categories', description: `Updated sub-category "${subForm.name.trim()}"`, referenceId: editingSub.id });
     } else {
       const id = genId('SUB', subCategories.map(s => s.id));
       const { error } = await supabase.from('sub_categories')
         .insert({ id, category_id: selectedCat.id, name: subForm.name.trim(), description: subForm.description || null, sort_order: subsForSelected.length + 1 });
       if (error) { showToast(error.message, 'error'); return; }
       showToast('Sub-category created');
+      logAudit({ action: 'create', module: 'categories', description: `Created sub-category "${subForm.name.trim()}" under "${selectedCat.name}"`, referenceId: id });
     }
     setShowSubModal(false);
     fetchAll();
@@ -165,6 +171,7 @@ export default function AdminCategoriesPage() {
     if (error) { showToast(error.message, 'error'); return; }
     showToast('Sub-category deleted');
     fetchAll();
+    logAudit({ action: 'delete', module: 'categories', description: `Deleted sub-category "${sub.name}"`, referenceId: sub.id });
   };
 
   return (

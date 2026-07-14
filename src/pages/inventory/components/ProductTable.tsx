@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { Product } from '@/mocks/inventory';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { availableStock } from '@/lib/stockReservations';
 
 interface ProductTableProps {
   products: Product[];
+  /** productId -> quantity tied up in pending requests/orders/transfers, not yet physically deducted. */
+  reserved: Record<string, number>;
   onEdit: (product: Product) => void;
   onDelete: (product: Product) => void;
   onAdjust: (product: Product) => void;
@@ -25,12 +28,13 @@ const statusConfig = {
   out_of_stock: { label: 'Out of Stock', cls: 'bg-red-50 text-red-600' },
 };
 
-export default function ProductTable({ products, onEdit, onDelete, onAdjust, onViewHistory }: ProductTableProps) {
+export default function ProductTable({ products, reserved, onEdit, onDelete, onAdjust, onViewHistory }: ProductTableProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const { formatAmount } = useCurrency();
-  const { canEdit, canDelete } = useAuth();
+  const { canEdit, canDelete, canAccess } = useAuth();
   const showEdit = canEdit('inventory');
   const showDelete = canDelete('inventory');
+  const showAdjust = canAccess('inventory_stock_adjust');
 
   return (
     <div className="overflow-x-auto">
@@ -52,6 +56,8 @@ export default function ProductTable({ products, onEdit, onDelete, onAdjust, onV
           {products.map((p) => {
             const stockPct = Math.min(100, (p.stock / Math.max(p.lowStockThreshold * 4, 1)) * 100);
             const barColor = p.status === 'in_stock' ? 'bg-emerald-400' : p.status === 'low_stock' ? 'bg-amber-400' : 'bg-red-400';
+            const reservedQty = reserved[p.id] || 0;
+            const available = availableStock(p.stock, reserved, p.id);
             return (
               <tr key={p.id} className="hover:bg-gray-50/50 transition-colors">
                 <td className="py-3 px-4">
@@ -88,6 +94,11 @@ export default function ProductTable({ products, onEdit, onDelete, onAdjust, onV
                       <div className={`h-full rounded-full ${barColor}`} style={{ width: `${stockPct}%` }}></div>
                     </div>
                     <span className="text-xs text-gray-400">min {p.lowStockThreshold}</span>
+                    {reservedQty > 0 && (
+                      <span className="text-xs text-amber-600 font-medium" title={`${reservedQty} tied up in pending requests/orders/transfers`}>
+                        {available} available
+                      </span>
+                    )}
                   </div>
                 </td>
                 <td className="py-3 px-4 text-right font-medium text-gray-800">{formatAmount(p.price)}</td>
@@ -99,13 +110,15 @@ export default function ProductTable({ products, onEdit, onDelete, onAdjust, onV
                 <td className="py-3 px-4 text-xs text-gray-400 whitespace-nowrap">{p.lastUpdated}</td>
                 <td className="py-3 px-4 relative">
                   <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => onAdjust(p)}
-                      className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-emerald-50 text-gray-400 hover:text-emerald-600 transition-colors cursor-pointer"
-                      title="Adjust Stock"
-                    >
-                      <i className="ri-equalizer-line text-sm"></i>
-                    </button>
+                    {showAdjust && (
+                      <button
+                        onClick={() => onAdjust(p)}
+                        className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-emerald-50 text-gray-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                        title="Adjust Stock"
+                      >
+                        <i className="ri-equalizer-line text-sm"></i>
+                      </button>
+                    )}
                     <button
                       onClick={() => onViewHistory(p)}
                       className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-sky-50 text-gray-400 hover:text-sky-600 transition-colors cursor-pointer"

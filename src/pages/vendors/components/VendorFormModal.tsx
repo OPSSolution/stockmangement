@@ -94,11 +94,15 @@ export default function VendorFormModal({ vendor, onClose, onSave }: Props) {
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Status</label>
-                <select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as Vendor['status'] }))} className={inputClass}>
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
-                  <option value="suspended">Suspended</option>
-                </select>
+                {vendor ? (
+                  <select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as Vendor['status'] }))} className={inputClass}>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                    {form.status === 'suspended' && <option value="suspended">Suspended (legacy)</option>}
+                  </select>
+                ) : (
+                  <input value="Active" disabled className={`${inputClass} bg-gray-50 text-gray-500`} />
+                )}
               </div>
               <div className="md:col-span-2">
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Address</label>

@@ -8,6 +8,8 @@ import PurchaseFormModal from './components/PurchaseFormModal';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 type FilterTab = 'all' | PurchaseStatus;
 
@@ -70,7 +72,7 @@ export default function PurchasesPage() {
   const fetchPurchases = async () => {
     setLoading(true);
     let query = supabase.from('purchases').select('*').order('created_at', { ascending: false });
-    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    if (warehouseScope) query = query.in('warehouse', warehouseScope);
     const { data, error } = await query;
     if (error) {
       console.error(error);
@@ -139,10 +141,10 @@ export default function PurchasesPage() {
         const refreshed = (await supabase.from('purchases').select('*').eq('id', id).single()).data;
         if (refreshed) setSelectedPO(mapPurchase(refreshed));
       }
+      logAudit({ action: 'update', module: 'purchases', description: `Purchase order ${id} ${status}`, referenceId: id });
     }
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFormSubmit = async (data: any) => {
     const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
     const subtotal = data.items.reduce((s: number, i: { orderedQty: number; unitCost: number }) => s + i.orderedQty * i.unitCost, 0);
@@ -176,6 +178,7 @@ export default function PurchasesPage() {
       setShowForm(false);
       setSuccessMsg('Purchase order submitted!');
       await fetchPurchases();
+      logAudit({ action: 'create', module: 'purchases', description: `Created purchase order ${newId} for ${data.vendor}`, referenceId: newId });
     }
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -253,6 +256,28 @@ export default function PurchasesPage() {
                     className="pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 w-56 placeholder-gray-400"
                   />
                 </div>
+                <button
+                  onClick={() => exportToCsv('purchases', filtered, [
+                    { header: 'ID', value: (p) => p.id },
+                    { header: 'Vendor', value: (p) => p.vendor },
+                    { header: 'Vendor Contact', value: (p) => p.vendorContact },
+                    { header: 'Vendor Email', value: (p) => p.vendorEmail },
+                    { header: 'Warehouse', value: (p) => p.warehouse },
+                    { header: 'Status', value: (p) => p.status },
+                    { header: 'Items', value: (p) => p.items.map((i) => `${i.productName} x${i.orderedQty}`).join('; ') },
+                    { header: 'Total Items', value: (p) => p.totalItems },
+                    { header: 'Subtotal', value: (p) => p.subtotal },
+                    { header: 'Tax', value: (p) => p.tax },
+                    { header: 'Total', value: (p) => p.total },
+                    { header: 'Requested By', value: (p) => p.requestedBy },
+                    { header: 'Approved By', value: (p) => p.approvedBy || '' },
+                    { header: 'Created At', value: (p) => p.createdAt },
+                    { header: 'Updated At', value: (p) => p.updatedAt },
+                  ])}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <i className="ri-download-2-line"></i>Export
+                </button>
                 <button
                   onClick={() => setShowForm(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"

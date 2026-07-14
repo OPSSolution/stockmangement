@@ -64,7 +64,7 @@ export default function RecentActivity() {
       .order('created_at', { ascending: false })
       .limit(PAGE_SIZE);
     if (activeFilter) query = query.eq('type', activeFilter);
-    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    if (warehouseScope) query = query.in('warehouse', warehouseScope);
     const { data, error } = await query;
     if (!error && data) {
       setActivities(data as Activity[]);
@@ -85,7 +85,7 @@ export default function RecentActivity() {
       .order('created_at', { ascending: false })
       .range(activities.length, activities.length + PAGE_SIZE - 1);
     if (filter) query = query.eq('type', filter);
-    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    if (warehouseScope) query = query.in('warehouse', warehouseScope);
     const { data, error } = await query;
     if (!error && data) {
       setActivities(prev => [...prev, ...data as Activity[]]);

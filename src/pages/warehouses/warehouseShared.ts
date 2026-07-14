@@ -67,10 +67,10 @@ const monthLabel = (d: Date) => d.toLocaleDateString('en-US', { month: 'short' }
 // live per-warehouse stats — replacing the static seeded totals on the warehouses
 // table with numbers that reflect what's actually happening right now.
 export async function fetchWarehousesWithLiveData(
-  scopeWarehouseName?: string | null
+  scopeWarehouseNames?: string[] | null
 ): Promise<{ warehouses: Warehouse[]; liveStats: Record<string, LiveStats> } | null> {
   let warehousesQuery = supabase.from('warehouses').select('*');
-  if (scopeWarehouseName) warehousesQuery = warehousesQuery.eq('name', scopeWarehouseName);
+  if (scopeWarehouseNames && scopeWarehouseNames.length > 0) warehousesQuery = warehousesQuery.in('name', scopeWarehouseNames);
 
   const [
     { data: whRows, error },

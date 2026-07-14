@@ -1,6 +1,7 @@
 export type DeliveryStep = 'prepare' | 'ready' | 'in_transit' | 'delivered';
 
 export interface DeliveryItem {
+  productId?: string;
   productName: string;
   sku: string;
   imageUrl?: string | null;

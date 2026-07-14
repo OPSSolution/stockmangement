@@ -6,6 +6,8 @@ import PromotionStatusBadge from './components/PromotionStatusBadge';
 import PromotionFormModal from './components/PromotionFormModal';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 type FilterTab = 'all' | PromotionStatus;
 
@@ -123,10 +125,10 @@ export default function PromotionsPage() {
       setSuccessMsg(msgs[newStatus] ?? 'Updated.');
       setTimeout(() => setSuccessMsg(''), 3000);
       await fetchPromotions();
+      logAudit({ action: 'update', module: 'promotions', description: `Promotion ${id} ${newStatus}`, referenceId: id });
     }
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFormSubmit = async (data: any) => {
     const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
     const maxNum = promos.length > 0 ? Math.max(...promos.map(p => parseInt(p.id.replace('PROMO-', '')) || 0)) : 0;
@@ -162,6 +164,7 @@ export default function PromotionsPage() {
       setShowForm(false);
       setSuccessMsg('Promotion created and scheduled!');
       await fetchPromotions();
+      logAudit({ action: 'create', module: 'promotions', description: `Created promotion "${data.name}"`, referenceId: newId });
     }
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -249,6 +252,25 @@ export default function PromotionsPage() {
                     className="pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 w-52 placeholder-gray-400"
                   />
                 </div>
+                <button
+                  onClick={() => exportToCsv('promotions', filtered, [
+                    { header: 'ID', value: (p) => p.id },
+                    { header: 'Name', value: (p) => p.name },
+                    { header: 'Type', value: (p) => typeLabels[p.type] },
+                    { header: 'Status', value: (p) => p.status },
+                    { header: 'Description', value: (p) => p.description },
+                    { header: 'Discount Value', value: (p) => p.discountValue },
+                    { header: 'Usage Count', value: (p) => p.usageCount },
+                    { header: 'Max Usage Count', value: (p) => p.maxUsageCount ?? '' },
+                    { header: 'Start Date', value: (p) => p.startDate },
+                    { header: 'End Date', value: (p) => p.endDate },
+                    { header: 'Total Revenue', value: (p) => p.totalRevenue },
+                    { header: 'Total Units Sold', value: (p) => p.totalUnitsSold },
+                  ])}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <i className="ri-download-2-line"></i>Export
+                </button>
                 <button
                   onClick={() => setShowForm(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"

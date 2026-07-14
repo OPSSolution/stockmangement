@@ -43,7 +43,10 @@ export default function DeliveryStatus() {
   useEffect(() => {
     async function fetchDeliveries() {
       let query = supabase.from('deliveries').select('*').order('created_at', { ascending: false }).limit(5);
-      if (warehouseScope) query = query.or(`warehouse.eq.${warehouseScope},destination.eq.${warehouseScope}`);
+      if (warehouseScope) {
+        const list = warehouseScope.join(',');
+        query = query.or(`warehouse.in.(${list}),destination.in.(${list})`);
+      }
       const { data, error } = await query;
       if (!error && data) {
         setDeliveries(data as Delivery[]);

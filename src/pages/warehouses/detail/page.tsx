@@ -5,6 +5,7 @@ import { type Warehouse, type WarehouseStaff } from '@/mocks/warehouses';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { logAudit } from '@/lib/auditLog';
 import {
   fetchWarehousesWithLiveData, fetchWarehouseProductsAndActivity,
   type LiveStats, emptyLiveStats, shiftColor,
@@ -159,6 +160,7 @@ export default function WarehouseDetailPage() {
       notes: infoForm.notes || undefined,
     });
     setEditingInfo(false);
+    logAudit({ action: 'update', module: 'warehouses', description: `Updated warehouse "${warehouse.name}" info`, referenceId: warehouse.id });
   };
 
   const openEditStaff = () => {
@@ -189,6 +191,7 @@ export default function WarehouseDetailPage() {
     }
     setWarehouse({ ...warehouse, staff: cleaned });
     setEditingStaff(false);
+    logAudit({ action: 'update', module: 'warehouses', description: `Updated staff list for "${warehouse.name}" (${cleaned.length} staff)`, referenceId: warehouse.id });
   };
 
   const openEditVendors = () => {
@@ -217,6 +220,7 @@ export default function WarehouseDetailPage() {
     }
     setWarehouse({ ...warehouse, vendorNames: vendorsDraft });
     setEditingVendors(false);
+    logAudit({ action: 'update', module: 'warehouses', description: `Updated approved vendor list for "${warehouse.name}"`, referenceId: warehouse.id });
   };
 
   const confirmDelete = async () => {
@@ -229,6 +233,7 @@ export default function WarehouseDetailPage() {
       setDeleteError(error.message);
       return;
     }
+    logAudit({ action: 'delete', module: 'warehouses', description: `Deleted warehouse "${warehouse.name}"`, referenceId: warehouse.id });
     navigate('/warehouses');
   };
 

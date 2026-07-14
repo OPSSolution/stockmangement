@@ -4,7 +4,7 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-type PagePermission = { view: boolean; edit: boolean; delete: boolean };
+type PagePermission = { view: boolean; edit: boolean; delete: boolean; approve: boolean };
 
 const PAGE_KEYS = [
   'dashboard', 'inventory', 'requests', 'orders', 'deliveries', 'warehouses', 'transfers',
@@ -17,12 +17,12 @@ const PAGE_KEYS = [
 // applying the given edit/delete defaults to every page it can view.
 function buildPermissions(
   viewablePages: readonly string[],
-  { edit = false, del = false }: { edit?: boolean; del?: boolean } = {}
+  { edit = false, del = false, approve = false }: { edit?: boolean; del?: boolean; approve?: boolean } = {}
 ): Record<string, PagePermission> {
   const perms: Record<string, PagePermission> = {};
   for (const key of PAGE_KEYS) {
     const view = viewablePages.includes(key);
-    perms[key] = { view, edit: view && edit, delete: view && del };
+    perms[key] = { view, edit: view && edit, delete: view && del, approve: view && approve };
   }
   return perms;
 }
@@ -32,7 +32,7 @@ const DEFAULT_ROLES = [
     id: 'admin',
     name: 'Admin',
     description: 'Full access to all pages',
-    permissions: buildPermissions(PAGE_KEYS, { edit: true, del: true }),
+    permissions: buildPermissions(PAGE_KEYS, { edit: true, del: true, approve: true }),
     is_system: true,
   },
   {
@@ -43,7 +43,9 @@ const DEFAULT_ROLES = [
       ['dashboard', 'inventory', 'requests', 'orders', 'deliveries', 'warehouses', 'transfers',
        'returns', 'purchases', 'promotions', 'vendors', 'reports',
        'notifications_history', 'notifications_settings'],
-      { edit: true, del: false }
+      // approve is off by default for staff — an admin opts individual roles into
+      // approving requests from the Roles editor, it isn't granted automatically.
+      { edit: true, del: false, approve: false }
     ),
     is_system: true,
   },
@@ -76,10 +78,12 @@ async function migrateLegacyPermissions() {
           view: value,
           edit: value && row.id !== 'viewer',
           delete: value && row.id === 'admin',
+          approve: value && row.id === 'admin',
         };
       } else if (value && typeof value === 'object') {
         const v = value as Partial<PagePermission>;
-        upgraded[key] = { view: !!v.view, edit: !!v.edit, delete: !!v.delete };
+        if (v.approve === undefined) changed = true;
+        upgraded[key] = { view: !!v.view, edit: !!v.edit, delete: !!v.delete, approve: !!v.approve };
       }
     }
 
@@ -106,7 +110,7 @@ async function backfillMissingPageKeys() {
     // custom roles get a safe "no access until an admin opts in" default.
     const knownDefaults = defaultsById.get(row.id);
     for (const key of missing) {
-      perms[key] = knownDefaults?.[key] ?? { view: false, edit: false, delete: false };
+      perms[key] = knownDefaults?.[key] ?? { view: false, edit: false, delete: false, approve: false };
     }
     await pool.query('UPDATE roles SET permissions = $1 WHERE id = $2', [JSON.stringify(perms), row.id]);
   }

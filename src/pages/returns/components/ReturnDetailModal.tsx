@@ -1,12 +1,18 @@
-import { useState } from 'react';
-import type { ReturnRequest, ReturnStatus, ReturnCondition, ReturnDecision } from '@/mocks/returns';
+import { useEffect, useMemo, useState } from 'react';
+import type { ReturnRequest, ReturnStatus, ReturnCondition } from '@/mocks/returns';
 import ReturnStatusBadge from './ReturnStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { supabase } from '@/lib/supabase';
+import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 
 interface Props {
   ret: ReturnRequest;
+  /** Every return on the same request, oldest first (including this one) — powers the Return History list. */
+  history?: ReturnRequest[];
+  onSelectReturn?: (ret: ReturnRequest) => void;
   onClose: () => void;
   onUpdate: (id: string, updates: Partial<ReturnRequest>) => void;
+  onCreateFollowUp: (requestId: string) => void;
 }
 
 const conditionOptions: { value: ReturnCondition; label: string; color: string }[] = [
@@ -17,94 +23,120 @@ const conditionOptions: { value: ReturnCondition; label: string; color: string }
   { value: 'defective', label: 'Defective', color: 'text-red-700 bg-red-50 border-red-200' },
 ];
 
-const decisionOptions: { value: ReturnDecision; label: string; icon: string; color: string }[] = [
-  { value: 'restock', label: 'Restock', icon: 'ri-archive-stack-line', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-  { value: 'discard', label: 'Discard', icon: 'ri-delete-bin-line', color: 'text-red-600 bg-red-50 border-red-200' },
-  { value: 'pending', label: 'Pending', icon: 'ri-time-line', color: 'text-gray-600 bg-gray-100 border-gray-200' },
-];
-
 const reasonLabels: Record<string, string> = {
-  wrong_item: 'Wrong Item Received',
-  damaged: 'Item Arrived Damaged',
-  defective: 'Product Defective',
-  not_as_described: 'Not As Described',
-  changed_mind: 'Customer Changed Mind',
+  photoshoot: 'Used for Photoshoot/Project',
+  excess: 'Excess / Not Used',
+  damaged: 'Damaged During Use',
+  consignment: 'Borrowed (Consignment)',
   other: 'Other',
-};
-
-const refundMethodLabels: Record<string, string> = {
-  original_payment: 'Original Payment Method',
-  store_credit: 'Store Credit',
-  bank_transfer: 'Bank Transfer',
-  none: 'No Refund',
 };
 
 const nextStatusMap: Partial<Record<ReturnStatus, { status: ReturnStatus; label: string; icon: string; color: string }>> = {
   pending: { status: 'inspecting', label: 'Start Inspection', icon: 'ri-search-eye-line', color: 'bg-sky-500 hover:bg-sky-600' },
   inspecting: { status: 'approved', label: 'Approve Return', icon: 'ri-checkbox-circle-line', color: 'bg-violet-500 hover:bg-violet-600' },
-  approved: { status: 'refunded', label: 'Mark as Refunded', icon: 'ri-refund-2-line', color: 'bg-teal-500 hover:bg-teal-600' },
 };
 
-export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
+interface RequestProgressItem {
+  productId: string;
+  productName: string;
+  sku: string;
+  imageUrl?: string | null;
+  requestedQty: number;
+  returnedQty: number;
+}
+
+export default function ReturnDetailModal({ ret, history, onSelectReturn, onClose, onUpdate, onCreateFollowUp }: Props) {
   const { formatAmount } = useCurrency();
   const [items, setItems] = useState(ret.items);
   const [inspectionNotes, setInspectionNotes] = useState(ret.inspectionNotes ?? '');
   const [assignedTo] = useState(ret.assignedTo ?? 'Admin');
+  const [progress, setProgress] = useState<RequestProgressItem[] | null>(null);
+
+  // Always show how much of the source request has been claimed by a return so
+  // far (this one plus any others) and how much is still outstanding — this is
+  // what tells staff whether more returns are needed for this request.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProgress() {
+      // These two queries are independent — run them together instead of one
+      // after the other, which was roughly doubling how long the modal took
+      // to show its content.
+      const [{ data: reqRow }, claimedMap] = await Promise.all([
+        supabase.from('stock_requests').select('items').eq('id', ret.requestId).maybeSingle(),
+        getClaimedReturnQuantities(ret.requestId),
+      ]);
+      const requestedItems = (reqRow?.items as { productId: string; productName: string; sku: string; imageUrl?: string | null; quantity: number }[]) || [];
+      if (!cancelled) {
+        setProgress(requestedItems.map((i) => ({
+          productId: i.productId,
+          productName: i.productName,
+          sku: i.sku,
+          imageUrl: i.imageUrl,
+          requestedQty: i.quantity,
+          returnedQty: Math.min(i.quantity, claimedMap[i.productId] || 0),
+        })));
+      }
+    }
+    loadProgress();
+    return () => { cancelled = true; };
+  }, [ret.requestId]);
 
   const setCondition = (idx: number, condition: ReturnCondition) => {
     setItems((prev) => prev.map((item, i) => i === idx ? { ...item, condition } : item));
   };
 
-  const setDecision = (idx: number, decision: ReturnDecision) => {
-    setItems((prev) => prev.map((item, i) => i === idx ? { ...item, decision } : item));
-  };
-
   const nextAction = nextStatusMap[ret.status];
+  const isEditable = ret.status === 'pending' || ret.status === 'inspecting';
+  const totalRequested = progress?.reduce((s, i) => s + i.requestedQty, 0) ?? 0;
+  const totalReturned = progress?.reduce((s, i) => s + i.returnedQty, 0) ?? 0;
+  const unitsLeft = totalRequested - totalReturned;
+
+  // For each return in the history, work out — per product — how many were
+  // returned in that specific event and how many were still outstanding right
+  // after it, by walking the history oldest-first and accumulating as we go.
+  const historyBreakdown = useMemo(() => {
+    if (!history || !progress) return [];
+    const requestedByProduct: Record<string, number> = {};
+    progress.forEach((p) => { requestedByProduct[p.productId] = p.requestedQty; });
+    const runningTotal: Record<string, number> = {};
+    return history.map((h) => ({
+      ret: h,
+      items: h.items.map((item) => {
+        runningTotal[item.productId] = (runningTotal[item.productId] || 0) + item.quantity;
+        const requested = requestedByProduct[item.productId] ?? 0;
+        return {
+          productName: item.productName,
+          quantity: item.quantity,
+          notYet: Math.max(0, requested - runningTotal[item.productId]),
+        };
+      }),
+    }));
+  }, [history, progress]);
 
   const handleAction = () => {
     if (!nextAction) return;
-    const newStatus = nextAction.status;
-    const restockedItems = items.filter((i) => i.decision === 'restock');
-    const isFullyDecided = newStatus === 'approved' && items.every((i) => i.decision && i.decision !== 'pending');
-
-    if (newStatus === 'approved' && !isFullyDecided) return;
-
-    const updates: Partial<ReturnRequest> = {
-      status: newStatus,
+    const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
+    onUpdate(ret.id, {
+      status: nextAction.status,
       items,
       inspectionNotes: inspectionNotes || undefined,
       assignedTo,
-      updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
-    };
-
-    if (newStatus === 'refunded') {
-      updates.completedAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
-      if (restockedItems.length > 0) updates.status = 'restocked';
-    }
-
-    onUpdate(ret.id, updates);
+      updatedAt: now,
+    });
     onClose();
   };
 
-  const handleFinalizeRestocked = () => {
-    onUpdate(ret.id, { status: 'restocked', completedAt: new Date().toISOString().slice(0, 16).replace('T', ' '), updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') });
+  const finalize = (status: 'restocked' | 'discarded') => {
+    const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
+    onUpdate(ret.id, {
+      status,
+      items,
+      inspectionNotes: inspectionNotes || undefined,
+      completedAt: now,
+      updatedAt: now,
+    });
     onClose();
   };
-
-  const handleFinalizeDiscarded = () => {
-    onUpdate(ret.id, { status: 'discarded', completedAt: new Date().toISOString().slice(0, 16).replace('T', ' '), updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') });
-    onClose();
-  };
-
-  const handleComplete = () => {
-    onUpdate(ret.id, { status: 'returned', completedAt: new Date().toISOString().slice(0, 16).replace('T', ' '), updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' ') });
-    onClose();
-  };
-
-  // Request-linked returns skip the customer-return inspection/condition workflow —
-  // just a single "Complete" action that closes both the return and the source request.
-  const isLinked = !!ret.requestId;
-  const isEditable = !isLinked && (ret.status === 'pending' || ret.status === 'inspecting');
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -117,9 +149,9 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
               <ReturnStatusBadge status={ret.status} />
             </div>
             <p className="text-sm text-gray-500 mt-1">
-              Order <span className="font-medium text-gray-700">{ret.orderId}</span>
+              Request <span className="font-medium text-gray-700 font-mono">{ret.requestId}</span>
               <span className="mx-2 text-gray-300">·</span>
-              <span className="font-medium text-gray-700">{ret.customer}</span>
+              <span className="font-medium text-gray-700">{ret.returnedBy}</span>
             </p>
           </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer ml-4">
@@ -128,23 +160,84 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
         </div>
 
         <div className="px-6 py-5 space-y-6">
+          {/* Return History — the date/time of every return submitted against
+              this request, so multiple partial returns don't need separate
+              table rows to tell them apart. */}
+          {historyBreakdown.length > 1 && (
+            <div>
+              <p className="text-sm font-semibold text-gray-700 mb-2">Return History</p>
+              <div className="border border-gray-100 rounded-xl divide-y divide-gray-50 overflow-hidden">
+                {[...historyBreakdown].reverse().map(({ ret: h, items: breakdown }) => {
+                  const isCurrent = h.id === ret.id;
+                  return (
+                    <button
+                      key={h.id}
+                      type="button"
+                      onClick={() => !isCurrent && onSelectReturn?.(h)}
+                      className={`w-full px-3 py-2 text-sm text-left transition-colors ${
+                        isCurrent ? 'bg-emerald-50/60 cursor-default' : 'hover:bg-gray-50 cursor-pointer'
+                      }`}
+                    >
+                      <div className={`flex items-center justify-between gap-3 ${isCurrent ? 'font-medium text-emerald-700' : 'text-gray-700'}`}>
+                        <span>{h.createdAt}</span>
+                        <ReturnStatusBadge status={h.status} />
+                      </div>
+                      <div className="mt-1 space-y-0.5">
+                        {breakdown.map((b) => (
+                          <p key={b.productName} className="text-xs text-gray-500">
+                            {b.productName} — Returned <span className="font-medium text-gray-800">{b.quantity}</span>
+                            <span className="mx-1 text-gray-300">·</span>
+                            Not yet <span className={`font-medium ${b.notYet > 0 ? 'text-amber-600' : 'text-gray-800'}`}>{b.notYet}</span>
+                          </p>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Request Progress — how much of the source request has been returned
+              so far (across every return on it), and what's left. */}
+          {progress && progress.length > 0 && (
+            <div className="border border-gray-100 rounded-xl divide-y divide-gray-50 overflow-hidden">
+              {progress.map((p) => {
+                const left = p.requestedQty - p.returnedQty;
+                return (
+                  <div key={p.productId} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                    <span className="text-gray-700 truncate">{p.productName}</span>
+                    <span className="text-gray-500 shrink-0">
+                      Returned <span className="font-medium text-gray-800">{p.returnedQty}</span>
+                      <span className="mx-1 text-gray-300">·</span>
+                      Not yet <span className={`font-medium ${left > 0 ? 'text-amber-600' : 'text-gray-800'}`}>{left}</span>
+                    </span>
+                  </div>
+                );
+              })}
+              {unitsLeft > 0 && (
+                <button
+                  onClick={() => onCreateFollowUp(ret.requestId)}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+                >
+                  <i className="ri-add-line"></i>Start Next Return
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Info Grid */}
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Customer</p>
-              <div className="flex justify-between"><span className="text-gray-500">Name</span><span className="font-medium text-gray-800">{ret.customer}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Email</span><span className="text-gray-700 text-xs">{ret.email}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Phone</span><span className="text-gray-700 text-xs">{ret.phone}</span></div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Returned By</p>
+              <div className="flex justify-between"><span className="text-gray-500">Staff</span><span className="font-medium text-gray-800">{ret.returnedBy}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Warehouse</span><span className="text-gray-700">{ret.warehouse}</span></div>
-              {ret.requestId && (
-                <div className="flex justify-between"><span className="text-gray-500">Linked Request</span><span className="font-mono text-xs text-emerald-700">{ret.requestId}</span></div>
-              )}
+              <div className="flex justify-between"><span className="text-gray-500">Linked Request</span><span className="font-mono text-xs text-emerald-700">{ret.requestId}</span></div>
             </div>
             <div className="bg-gray-50 rounded-lg p-4 space-y-2">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Return Details</p>
-              <div className="flex justify-between"><span className="text-gray-500">Reason</span><span className="font-medium text-gray-800 text-xs text-right max-w-[120px]">{reasonLabels[ret.reason]}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Refund Method</span><span className="text-gray-700 text-xs text-right max-w-[120px]">{refundMethodLabels[ret.refundMethod]}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Refund Amount</span><span className="font-bold text-gray-900">{formatAmount(ret.refundAmount)}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Reason</span><span className="font-medium text-gray-800 text-xs text-right max-w-[140px]">{reasonLabels[ret.reason]}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Stock Value</span><span className="font-bold text-gray-900">{formatAmount(ret.totalValue)}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Submitted</span><span className="text-gray-700 text-xs">{ret.createdAt}</span></div>
               {ret.completedAt && <div className="flex justify-between"><span className="text-gray-500">Completed</span><span className="text-emerald-700 text-xs font-medium">{ret.completedAt}</span></div>}
             </div>
@@ -158,7 +251,7 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
             </div>
           )}
 
-          {/* Items + Condition + Decision */}
+          {/* Items + Condition */}
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-3">Returned Items</p>
             <div className="space-y-3">
@@ -181,53 +274,27 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
                     <p className="text-sm font-bold text-gray-900 tracking-tight">{formatAmount(item.quantity * item.unitPrice)}</p>
                   </div>
 
-                  {isEditable && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <p className="text-xs font-medium text-gray-600 mb-1.5">Condition</p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {conditionOptions.map((opt) => (
-                            <button
-                              key={opt.value}
-                              onClick={() => setCondition(idx, opt.value)}
-                              className={`px-2.5 py-1 text-xs font-medium rounded-full border cursor-pointer transition-all ${item.condition === opt.value ? opt.color : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <p className="text-xs font-medium text-gray-600 mb-1.5">Decision</p>
-                        <div className="flex gap-1.5">
-                          {decisionOptions.map((opt) => (
-                            <button
-                              key={opt.value}
-                              onClick={() => setDecision(idx, opt.value)}
-                              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border cursor-pointer transition-all ${item.decision === opt.value ? opt.color : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
-                            >
-                              <i className={opt.icon}></i>{opt.label}
-                            </button>
-                          ))}
-                        </div>
+                  {isEditable ? (
+                    <div>
+                      <p className="text-xs font-medium text-gray-600 mb-1.5">Condition</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {conditionOptions.map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => setCondition(idx, opt.value)}
+                            className={`px-2.5 py-1 text-xs font-medium rounded-full border cursor-pointer transition-all ${item.condition === opt.value ? opt.color : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
                       </div>
                     </div>
-                  )}
-
-                  {!isEditable && (
-                    <div className="flex items-center gap-3 mt-1">
-                      {item.condition && (
-                        <span className={`px-2.5 py-1 text-xs font-medium rounded-full border ${conditionOptions.find((c) => c.value === item.condition)?.color ?? 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-                          {conditionOptions.find((c) => c.value === item.condition)?.label}
-                        </span>
-                      )}
-                      {item.decision && item.decision !== 'pending' && (
-                        <span className={`flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-full border ${item.decision === 'restock' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
-                          <i className={item.decision === 'restock' ? 'ri-archive-stack-line' : 'ri-delete-bin-line'}></i>
-                          {item.decision === 'restock' ? 'Restock' : 'Discard'}
-                        </span>
-                      )}
-                    </div>
+                  ) : (
+                    item.condition && (
+                      <span className={`px-2.5 py-1 text-xs font-medium rounded-full border ${conditionOptions.find((c) => c.value === item.condition)?.color ?? 'bg-gray-100 text-gray-600 border-gray-200'}`}>
+                        {conditionOptions.find((c) => c.value === item.condition)?.label}
+                      </span>
+                    )
                   )}
                 </div>
               ))}
@@ -261,16 +328,16 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100">
           <div className="flex gap-2">
-            {!isLinked && ret.status === 'approved' && (
+            {ret.status === 'approved' && (
               <>
                 <button
-                  onClick={handleFinalizeRestocked}
+                  onClick={() => finalize('restocked')}
                   className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
                 >
                   <i className="ri-archive-stack-line"></i>Mark Restocked
                 </button>
                 <button
-                  onClick={handleFinalizeDiscarded}
+                  onClick={() => finalize('discarded')}
                   className="flex items-center gap-1.5 px-4 py-2 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 cursor-pointer whitespace-nowrap"
                 >
                   <i className="ri-delete-bin-line"></i>Mark Discarded
@@ -282,34 +349,13 @@ export default function ReturnDetailModal({ ret, onClose, onUpdate }: Props) {
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap">
               Close
             </button>
-            {isLinked ? (
-              ret.status !== 'returned' && (
-                <button
-                  onClick={handleComplete}
-                  className="flex items-center gap-1.5 px-5 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-check-double-line"></i>Complete — Mark Returned
-                </button>
-              )
-            ) : (
-              <>
-                {nextAction && ret.status !== 'approved' && (
-                  <button
-                    onClick={handleAction}
-                    className={`flex items-center gap-1.5 px-5 py-2 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${nextAction.color}`}
-                  >
-                    <i className={nextAction.icon}></i>{nextAction.label}
-                  </button>
-                )}
-                {ret.status === 'inspecting' && (
-                  <button
-                    onClick={handleAction}
-                    className="flex items-center gap-1.5 px-5 py-2 bg-violet-500 text-white text-sm font-semibold rounded-lg hover:bg-violet-600 cursor-pointer whitespace-nowrap"
-                  >
-                    <i className="ri-checkbox-circle-line"></i>Approve Return
-                  </button>
-                )}
-              </>
+            {nextAction && (
+              <button
+                onClick={handleAction}
+                className={`flex items-center gap-1.5 px-5 py-2 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${nextAction.color}`}
+              >
+                <i className={nextAction.icon}></i>{nextAction.label}
+              </button>
             )}
           </div>
         </div>

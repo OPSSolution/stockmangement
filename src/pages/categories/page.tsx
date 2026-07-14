@@ -4,6 +4,8 @@ import DashboardLayout from '@/components/feature/DashboardLayout';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import CategoriesFormModal from '../inventory/components/CategoriesFormModal';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 interface CategoryItem {
   id: string;
@@ -42,6 +44,7 @@ export default function CategoriesPage() {
         console.error('Failed to update category:', error);
         return;
       }
+      logAudit({ action: 'update', module: 'categories', description: `Renamed category "${editingCategory.name}" to "${cleanName}"`, referenceId: editingCategory.id });
     } else {
       const id = globalThis.crypto?.randomUUID?.() ?? `cat-${Date.now()}`;
       const { error } = await supabase.from('categories').insert({ id, name: cleanName });
@@ -49,6 +52,7 @@ export default function CategoriesPage() {
         console.error('Failed to create category:', error);
         return;
       }
+      logAudit({ action: 'create', module: 'categories', description: `Created category "${cleanName}"`, referenceId: id });
     }
 
     await fetchCategories();
@@ -63,6 +67,7 @@ export default function CategoriesPage() {
       return;
     }
     await fetchCategories();
+    logAudit({ action: 'delete', module: 'categories', description: `Deleted category "${item.name}"`, referenceId: item.id });
   };
 
   const categoryCount = useMemo(() => categories.length, [categories]);
@@ -82,6 +87,15 @@ export default function CategoriesPage() {
               className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
             >
               Back to Inventory
+            </button>
+            <button
+              onClick={() => exportToCsv('categories', categories, [
+                { header: 'ID', value: (c) => c.id },
+                { header: 'Name', value: (c) => c.name },
+              ])}
+              className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer"
+            >
+              <i className="ri-download-2-line mr-1"></i>Export
             </button>
             <button
               onClick={() => { setEditingCategory(null); setIsModalOpen(true); }}

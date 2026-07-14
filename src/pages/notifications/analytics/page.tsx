@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { useNavigate } from 'react-router-dom';
+import { exportToCsv } from '@/lib/exportCsv';
 import {
   BarChart,
   Bar,
@@ -78,21 +79,19 @@ export default function NotificationAnalyticsPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
 
-    // Summary via RPC
-    const { data: summaryData } = await supabase.rpc('get_notification_summary', {
-      days_back: daysBack,
-    });
+    // These three queries are independent of each other — run them together
+    // instead of one after another, which was tripling the wait before the
+    // page had anything to show.
+    const sinceDay = new Date(Date.now() - daysBack * 86400000).toISOString().split('T')[0];
+    const [{ data: summaryData }, { data: daily }, { data: typeRows }] = await Promise.all([
+      supabase.rpc('get_notification_summary', { days_back: daysBack }),
+      supabase.from('notification_analytics').select('*').gte('day', sinceDay).order('day', { ascending: true }),
+      supabase.from('notification_analytics').select('type, total, read_count, emailed_count, sms_count, webhook_count').gte('day', sinceDay),
+    ]);
 
     if (summaryData && Array.isArray(summaryData) && summaryData.length > 0) {
       setSummary(summaryData[0] as unknown as SummaryData);
     }
-
-    // Daily breakdown
-    const { data: daily } = await supabase
-      .from('notification_analytics')
-      .select('*')
-      .gte('day', new Date(Date.now() - daysBack * 86400000).toISOString().split('T')[0])
-      .order('day', { ascending: true });
 
     if (daily) {
       // Aggregate per day across all types
@@ -111,12 +110,6 @@ export default function NotificationAnalyticsPage() {
       }
       setDailyData(Array.from(dayMap.values()));
     }
-
-    // Type breakdown
-    const { data: typeRows } = await supabase
-      .from('notification_analytics')
-      .select('type, total, read_count, emailed_count, sms_count, webhook_count')
-      .gte('day', new Date(Date.now() - daysBack * 86400000).toISOString().split('T')[0]);
 
     if (typeRows) {
       const typeMap = new Map<string, { total: number; read: number; emailed: number; sms: number; webhook: number }>();
@@ -175,6 +168,20 @@ export default function NotificationAnalyticsPage() {
               <option value={30}>Last 30 days</option>
               <option value={90}>Last 90 days</option>
             </select>
+            <button
+              onClick={() => exportToCsv('notification-analytics', dailyData, [
+                { header: 'Day', value: (d) => d.day },
+                { header: 'Total', value: (d) => d.total },
+                { header: 'Read', value: (d) => d.read },
+                { header: 'Emailed', value: (d) => d.emailed },
+                { header: 'SMS', value: (d) => d.sms },
+                { header: 'Webhook', value: (d) => d.webhook },
+              ])}
+              className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <i className="ri-download-2-line mr-1"></i>
+              Export
+            </button>
             <button
               onClick={() => navigate('/notifications/history')}
               className="px-4 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer"

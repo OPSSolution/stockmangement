@@ -2,9 +2,12 @@ import { useState, useEffect } from 'react';
 import type { Product } from '@/mocks/inventory';
 import type { OrderCreateDraft } from '../orderCreateUtils';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { availableStock } from '@/lib/stockReservations';
 
 interface OrderFormModalProps {
   products: Product[];
+  /** productId -> quantity already tied up in other pending requests/orders/transfers. */
+  reserved: Record<string, number>;
   initialDraft?: OrderCreateDraft;
   title?: string;
   submitLabel?: string;
@@ -23,7 +26,7 @@ const emptyDraft: OrderCreateDraft = {
   lines: [{ productId: '', quantity: 1 }],
 };
 
-export default function OrderFormModal({ products, initialDraft, title = 'Create Order', submitLabel = 'Create Order', onClose, onSave }: OrderFormModalProps) {
+export default function OrderFormModal({ products, reserved, initialDraft, title = 'Create Order', submitLabel = 'Create Order', onClose, onSave }: OrderFormModalProps) {
   const { formatAmount } = useCurrency();
   const [draft, setDraft] = useState<OrderCreateDraft>(initialDraft ?? emptyDraft);
   const [error, setError] = useState('');
@@ -54,6 +57,18 @@ export default function OrderFormModal({ products, initialDraft, title = 'Create
     }
     if (!draft.lines.some((line) => line.productId && Number(line.quantity) > 0)) {
       setError('Please add at least one product.');
+      return;
+    }
+    const overCommitted = draft.lines.find((line) => {
+      if (!line.productId) return false;
+      const product = products.find((p) => p.id === line.productId);
+      if (!product) return false;
+      return Number(line.quantity) > availableStock(product.stock, reserved, product.id);
+    });
+    if (overCommitted) {
+      const product = products.find((p) => p.id === overCommitted.productId);
+      const available = product ? availableStock(product.stock, reserved, product.id) : 0;
+      setError(`Only ${available} unit${available === 1 ? '' : 's'} of "${product?.name}" available — the rest is tied up in other pending requests/orders/transfers.`);
       return;
     }
     setError('');
@@ -97,12 +112,12 @@ export default function OrderFormModal({ products, initialDraft, title = 'Create
                 <div key={index} className="grid grid-cols-[1fr_80px_32px] gap-2">
                   <select value={line.productId} onChange={(e) => updateLine(index, 'productId', e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200">
                     <option value="">Select product</option>
-                    {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.stock} available)</option>)}
+                    {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({availableStock(p.stock, reserved, p.id)} available)</option>)}
                   </select>
                   <input
                     type="number"
                     min={1}
-                    max={product?.stock || undefined}
+                    max={product ? availableStock(product.stock, reserved, product.id) : undefined}
                     value={line.quantity}
                     onChange={(e) => updateLine(index, 'quantity', e.target.value === '' ? '' : parseInt(e.target.value))}
                     onBlur={() => {

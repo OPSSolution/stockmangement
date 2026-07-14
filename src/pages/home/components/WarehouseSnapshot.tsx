@@ -25,7 +25,7 @@ export default function WarehouseSnapshot() {
   useEffect(() => {
     async function fetchProducts() {
       let query = supabase.from('products').select('*');
-      if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+      if (warehouseScope) query = query.in('warehouse', warehouseScope);
       const { data, error } = await query;
       if (!error && data) {
         setProducts(data as Product[]);
@@ -67,7 +67,7 @@ export default function WarehouseSnapshot() {
       <div className="px-5 py-4 border-b border-gray-100 shrink-0">
         <h3 className="text-sm font-bold text-gray-900 tracking-tight">Warehouse Snapshot</h3>
         <p className="text-xs text-gray-400 mt-0.5">
-          {warehouseScope ? warehouseScope : 'All warehouses comparison'}
+          {warehouseScope ? warehouseScope.join(', ') : 'All warehouses comparison'}
         </p>
       </div>
       <div className={`flex-1 min-h-0 overflow-y-auto content-start p-4 grid gap-3 [&>*:last-child:nth-child(odd)]:col-span-2 ${warehouseStats.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>

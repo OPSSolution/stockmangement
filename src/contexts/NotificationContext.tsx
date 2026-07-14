@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, useCallback, type React
 import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
 import { useServiceWorker, urlBase64ToUint8Array } from '@/hooks/useServiceWorker';
+import { logAudit } from '@/lib/auditLog';
 
 export interface Notification {
   id: string;
@@ -154,6 +155,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
       if (!error) {
         setBrowserPushSubscribed(true);
+        logAudit({ action: 'create', module: 'notifications', description: 'Enabled browser push notifications' });
         return true;
       }
       return false;
@@ -173,6 +175,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           await supabase.from('push_subscriptions').delete().eq('user_id', userData.user.id);
         }
         setBrowserPushSubscribed(false);
+        logAudit({ action: 'delete', module: 'notifications', description: 'Disabled browser push notifications' });
         return true;
       }
       return false;
@@ -292,11 +295,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const markAllAsRead = useCallback(async () => {
     await supabase.from('notifications').update({ is_read: true }).eq('is_read', false);
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    logAudit({ action: 'update', module: 'notifications', description: 'Marked all notifications as read' });
   }, []);
 
   const deleteNotification = useCallback(async (id: string) => {
     await supabase.from('notifications').delete().eq('id', id);
     setNotifications((prev) => prev.filter((n) => n.id !== id));
+    logAudit({ action: 'delete', module: 'notifications', description: 'Deleted a notification', referenceId: id });
   }, []);
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;

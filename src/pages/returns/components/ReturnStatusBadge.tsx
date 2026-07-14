@@ -6,8 +6,6 @@ const config: Record<ReturnStatus, { label: string; classes: string; icon: strin
   approved: { label: 'Approved', classes: 'bg-violet-50 text-violet-700 border border-violet-200', icon: 'ri-checkbox-circle-line' },
   restocked: { label: 'Restocked', classes: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: 'ri-archive-stack-line' },
   discarded: { label: 'Discarded', classes: 'bg-red-50 text-red-600 border border-red-200', icon: 'ri-delete-bin-line' },
-  refunded: { label: 'Refunded', classes: 'bg-teal-50 text-teal-700 border border-teal-200', icon: 'ri-refund-2-line' },
-  returned: { label: 'Returned', classes: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: 'ri-check-double-line' },
 };
 
 export default function ReturnStatusBadge({ status }: { status: ReturnStatus }) {

@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useNotifications } from '@/contexts/NotificationContext';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
+import { logAudit } from '@/lib/auditLog';
 
 const CATEGORIES = ['Electronics', 'Furniture', 'Lighting', 'Smart Home', 'Accessories'] as const;
 const TRIGGER_TYPES = [
@@ -186,6 +187,7 @@ export default function NotificationSettingsPage() {
     } else {
       showToast('Notification settings saved successfully');
       await refresh();
+      logAudit({ action: 'update', module: 'notifications', description: 'Updated notification settings' });
     }
 
     setSaving(false);
@@ -207,6 +209,7 @@ export default function NotificationSettingsPage() {
       showToast('Failed to send test: ' + error.message, 'error');
     } else {
       showToast('Test notification sent! Check your bell icon.');
+      logAudit({ action: 'create', module: 'notifications', description: 'Sent a test notification' });
     }
   };
 
@@ -237,6 +240,7 @@ export default function NotificationSettingsPage() {
       } else {
         setVapidKeys({ publicKey: data.publicKey, privateKey: data.privateKey });
         showToast('VAPID keys generated! Copy the private key to your Supabase secrets.');
+        logAudit({ action: 'create', module: 'notifications', description: 'Generated new VAPID keys' });
       }
     } catch (err) {
       showToast('Failed to generate VAPID keys: ' + (err as Error).message, 'error');
@@ -332,6 +336,12 @@ export default function NotificationSettingsPage() {
       setEditingRule(null);
       const { data } = await supabase.from('alert_rules').select('*').order('created_at', { ascending: false });
       if (data) setRules(data as AlertRule[]);
+      logAudit({
+        action: editingRule ? 'update' : 'create',
+        module: 'notifications',
+        description: `${editingRule ? 'Updated' : 'Created'} alert rule "${ruleForm.name.trim()}"`,
+        referenceId: editingRule?.id,
+      });
     }
   };
 
@@ -347,16 +357,19 @@ export default function NotificationSettingsPage() {
       setRules((prev) =>
         prev.map((r) => (r.id === rule.id ? { ...r, is_active: !r.is_active } : r))
       );
+      logAudit({ action: 'update', module: 'notifications', description: `${rule.is_active ? 'Disabled' : 'Enabled'} alert rule "${rule.name}"`, referenceId: rule.id });
     }
   };
 
   const handleDeleteRule = async (ruleId: string) => {
+    const ruleName = rules.find((r) => r.id === ruleId)?.name || ruleId;
     const { error } = await supabase.from('alert_rules').delete().eq('id', ruleId);
     if (error) {
       showToast('Failed to delete rule', 'error');
     } else {
       setRules((prev) => prev.filter((r) => r.id !== ruleId));
       showToast('Rule deleted');
+      logAudit({ action: 'delete', module: 'notifications', description: `Deleted alert rule "${ruleName}"`, referenceId: ruleId });
     }
   };
 
@@ -419,6 +432,12 @@ export default function NotificationSettingsPage() {
       setEditingWebhook(null);
       const { data } = await supabase.from('webhook_configs').select('*').order('created_at', { ascending: false });
       if (data) setWebhooks(data as WebhookConfig[]);
+      logAudit({
+        action: editingWebhook ? 'update' : 'create',
+        module: 'notifications',
+        description: `${editingWebhook ? 'Updated' : 'Created'} webhook "${webhookForm.name}"`,
+        referenceId: editingWebhook?.id,
+      });
     }
   };
 
@@ -434,16 +453,19 @@ export default function NotificationSettingsPage() {
       setWebhooks((prev) =>
         prev.map((w) => (w.id === wh.id ? { ...w, is_active: !w.is_active } : w))
       );
+      logAudit({ action: 'update', module: 'notifications', description: `${wh.is_active ? 'Disabled' : 'Enabled'} webhook "${wh.name}"`, referenceId: wh.id });
     }
   };
 
   const handleDeleteWebhook = async (whId: string) => {
+    const whName = webhooks.find((w) => w.id === whId)?.name || whId;
     const { error } = await supabase.from('webhook_configs').delete().eq('id', whId);
     if (error) {
       showToast('Failed to delete webhook', 'error');
     } else {
       setWebhooks((prev) => prev.filter((w) => w.id !== whId));
       showToast('Webhook deleted');
+      logAudit({ action: 'delete', module: 'notifications', description: `Deleted webhook "${whName}"`, referenceId: whId });
     }
   };
 
@@ -464,6 +486,7 @@ export default function NotificationSettingsPage() {
         showToast('Webhook test failed — check your URL and secret', 'error');
       } else {
         showToast(`Test sent to ${PROVIDER_LABELS[wh.provider]} successfully`);
+        logAudit({ action: 'create', module: 'notifications', description: `Sent test webhook to "${wh.name}"`, referenceId: wh.id });
       }
     } catch (err) {
       showToast('Webhook test failed: ' + (err as Error).message, 'error');
@@ -1191,6 +1214,7 @@ export default function NotificationSettingsPage() {
                 body: {},
               });
               showToast(data?.message || 'Manual dispatch triggered');
+              logAudit({ action: 'update', module: 'notifications', description: 'Manually triggered alert dispatch' });
             }}
             className="px-5 py-2.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer"
           >
@@ -1203,6 +1227,7 @@ export default function NotificationSettingsPage() {
                   body: {},
                 });
                 showToast(`Evaluated ${data?.evaluated || 0} rules, created ${data?.total_created || 0} notifications`);
+                logAudit({ action: 'update', module: 'notifications', description: `Manually evaluated alert rules (${data?.total_created || 0} notifications created)` });
               }}
               className="px-5 py-2.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer"
             >

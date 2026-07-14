@@ -5,6 +5,7 @@ import ProductTable from './components/ProductTable';
 import ProductFormModal from './components/ProductFormModal';
 import StockAdjustModal from './components/StockAdjustModal';
 import StockHistoryModal from './components/StockHistoryModal';
+import StockActivityReportModal from './components/StockActivityReportModal';
 import DeleteConfirmModal from './components/DeleteConfirmModal';
 import { Product } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
@@ -12,6 +13,9 @@ import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit, diffFields } from '@/lib/auditLog';
 
 const CATEGORY_STORAGE_KEY = 'inventory_categories';
 
@@ -60,9 +64,11 @@ function mapHistory(row: Record<string, unknown>): StockHistoryEntry {
 export default function InventoryPage() {
   const navigate = useNavigate();
   const { formatAmount } = useCurrency();
-  const { warehouseScope } = useAuth();
+  const { warehouseScope, canAccess } = useAuth();
+  const canAdjustStock = canAccess('inventory_stock_adjust');
   const [searchParams, setSearchParams] = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
+  const [reserved, setReserved] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<StockHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -80,6 +86,8 @@ export default function InventoryPage() {
   const [editProduct, setEditProduct] = useState<Product | null>(null);
   const [adjustProduct, setAdjustProduct] = useState<Product | null>(null);
   const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [deleteProduct, setDeleteProduct] = useState<Product | null>(null);
 
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
@@ -110,11 +118,15 @@ export default function InventoryPage() {
 
     const loadWarehouses = async () => {
       let query = supabase.from('warehouses').select('name, vendor_names').order('name', { ascending: true });
-      if (warehouseScope) query = query.eq('name', warehouseScope);
+      if (warehouseScope) query = query.in('name', warehouseScope);
       const { data } = await query;
       if (data) {
         setWarehouses(data.map((w) => w.name as string));
-        if (warehouseScope) setScopedVendorNames((data[0]?.vendor_names as string[]) || []);
+        if (warehouseScope) {
+          const merged = new Set<string>();
+          data.forEach((w) => ((w.vendor_names as string[]) || []).forEach((v) => merged.add(v)));
+          setScopedVendorNames([...merged]);
+        }
       }
     };
 
@@ -129,6 +141,7 @@ export default function InventoryPage() {
     loadAllVendors();
     fetchProducts();
     fetchHistory();
+    getReservedQuantities().then(setReserved);
   }, [warehouseScope]);
 
   // Auto-open add modal when navigated with ?action=add
@@ -145,18 +158,18 @@ export default function InventoryPage() {
     const restockId = searchParams.get('restock');
     if (restockId && products.length > 0) {
       const target = products.find((p) => p.id === restockId);
-      if (target) {
+      if (target && canAdjustStock) {
         setAdjustProduct(target);
-        searchParams.delete('restock');
-        setSearchParams(searchParams, { replace: true });
       }
+      searchParams.delete('restock');
+      setSearchParams(searchParams, { replace: true });
     }
-  }, [products, searchParams, setSearchParams]);
+  }, [products, searchParams, setSearchParams, canAdjustStock]);
 
   const fetchProducts = async () => {
     setLoading(true);
     let query = supabase.from('products').select('*').order('last_updated', { ascending: false });
-    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    if (warehouseScope) query = query.in('warehouse', warehouseScope);
     const { data, error } = await query;
     if (error) {
       console.error(error);
@@ -169,7 +182,7 @@ export default function InventoryPage() {
 
   const fetchHistory = async () => {
     let query = supabase.from('stock_history').select('*').order('created_at', { ascending: false });
-    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    if (warehouseScope) query = query.in('warehouse', warehouseScope);
     const { data, error } = await query;
     if (error) console.error(error);
     else setHistory((data || []).map(mapHistory));
@@ -205,6 +218,7 @@ export default function InventoryPage() {
   const handleSaveProduct = async (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string }) => {
     const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
     const status = deriveStatus(data.stock, data.lowStockThreshold);
+    const before = data.id ? products.find((p) => p.id === data.id) : undefined;
 
     if (data.id) {
       const { error } = await supabase.from('products').update({
@@ -228,6 +242,29 @@ export default function InventoryPage() {
       } else {
         showToast('Product updated successfully.');
         setProducts((prev) => prev.map((p) => (p.id === data.id ? { ...p, ...data, id: data.id as string, status, lastUpdated: now } : p)));
+        const fieldChanges = before ? diffFields(before, { ...data, status, lastUpdated: now }, [
+          { key: 'name', label: 'Name' },
+          { key: 'sku', label: 'SKU' },
+          { key: 'category', label: 'Category' },
+          { key: 'warehouse', label: 'Warehouse' },
+          { key: 'vendor', label: 'Vendor' },
+          { key: 'stock', label: 'Stock' },
+          { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
+          { key: 'price', label: 'Price' },
+          { key: 'status', label: 'Status' },
+        ]) : [];
+        // Image URLs (often long data URIs) aren't readable as raw before/after
+        // text, so this is logged as a plain "changed" flag instead of the values.
+        if (before && (before.imageUrl || '') !== (data.imageUrl || '')) {
+          fieldChanges.push({ field: 'Image', from: before.imageUrl ? 'Previous photo' : 'No photo', to: data.imageUrl ? 'New photo' : 'No photo' });
+        }
+        logAudit({
+          action: 'update',
+          module: 'inventory',
+          description: `Updated product "${data.name}" (${data.sku})`,
+          referenceId: data.id,
+          changes: fieldChanges,
+        });
       }
     } else {
       const maxNum = products.length > 0 ? Math.max(...products.map(p => parseInt(p.id.replace('P', '')) || 0)) : 0;
@@ -255,6 +292,7 @@ export default function InventoryPage() {
       } else {
         showToast('Product added successfully.');
         setProducts((prev) => [{ ...data, id: newId, status, lastUpdated: now }, ...prev]);
+        logAudit({ action: 'create', module: 'inventory', description: `Created product "${data.name}" (${data.sku})`, referenceId: newId });
       }
     }
     setEditProduct(null);
@@ -305,6 +343,13 @@ export default function InventoryPage() {
       ...prev,
     ]);
     setAdjustProduct(null);
+    logAudit({
+      action: 'update',
+      module: 'inventory',
+      description: `Adjusted stock for "${target.name}" (${delta > 0 ? '+' : ''}${delta})`,
+      referenceId: productId,
+      changes: [{ field: 'Stock', from: target.stock, to: newStock }],
+    });
 
     // Real-time low-stock alert pipeline trigger
     if (newStock <= target.lowStockThreshold) {
@@ -334,6 +379,7 @@ export default function InventoryPage() {
     } else {
       showToast('Product deleted.', 'error');
       setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
+      logAudit({ action: 'delete', module: 'inventory', description: `Deleted product "${deleteProduct.name}" (${deleteProduct.sku})`, referenceId: deleteProduct.id });
     }
     setDeleteProduct(null);
   };
@@ -454,12 +500,55 @@ export default function InventoryPage() {
                   {formatAmount(totalValue)}
                 </div> */}
 
-                <button
-                  onClick={() => navigate('/categories')}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
-                >
-                  Manage Categories
-                </button>
+                <div className="relative">
+                  <button
+                    onClick={() => setShowActionsMenu((v) => !v)}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-more-2-fill"></i> Actions
+                  </button>
+                  {showActionsMenu && (
+                    <div
+                      onMouseLeave={() => setShowActionsMenu(false)}
+                      className="absolute right-0 top-full mt-2 w-52 bg-white border border-gray-100 rounded-xl shadow-lg z-20 py-1"
+                    >
+                      <button
+                        onClick={() => { navigate('/categories'); setShowActionsMenu(false); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                      >
+                        <i className="ri-price-tag-2-line text-gray-400"></i> Manage Categories
+                      </button>
+                      <button
+                        onClick={() => { setShowReportModal(true); setShowActionsMenu(false); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                      >
+                        <i className="ri-file-chart-line text-gray-400"></i> Stock Report
+                      </button>
+                      <button
+                        onClick={() => {
+                          exportToCsv('products', filtered, [
+                            { header: 'ID', value: (p) => p.id },
+                            { header: 'Name', value: (p) => p.name },
+                            { header: 'SKU', value: (p) => p.sku },
+                            { header: 'Category', value: (p) => p.category },
+                            { header: 'Warehouse', value: (p) => p.warehouse },
+                            { header: 'Vendor', value: (p) => p.vendor || '' },
+                            { header: 'Stock', value: (p) => p.stock },
+                            { header: 'Available', value: (p) => availableStock(p.stock, reserved, p.id) },
+                            { header: 'Low Stock Threshold', value: (p) => p.lowStockThreshold },
+                            { header: 'Price', value: (p) => p.price },
+                            { header: 'Status', value: (p) => p.status },
+                            { header: 'Last Updated', value: (p) => p.lastUpdated },
+                          ]);
+                          setShowActionsMenu(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                      >
+                        <i className="ri-download-2-line text-gray-400"></i> Export CSV
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 <button
                   onClick={() => setShowAddModal(true)}
@@ -473,6 +562,7 @@ export default function InventoryPage() {
             {/* Table */}
             <ProductTable
               products={filtered}
+              reserved={reserved}
               onEdit={(p) => setEditProduct(p)}
               onDelete={(p) => setDeleteProduct(p)}
               onAdjust={(p) => setAdjustProduct(p)}
@@ -529,6 +619,14 @@ export default function InventoryPage() {
           product={deleteProduct}
           onClose={() => setDeleteProduct(null)}
           onConfirm={handleDelete}
+        />
+      )}
+      {showReportModal && (
+        <StockActivityReportModal
+          products={products}
+          history={history}
+          warehouses={availableWarehouses}
+          onClose={() => setShowReportModal(false)}
         />
       )}
     </DashboardLayout>

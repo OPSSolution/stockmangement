@@ -44,7 +44,7 @@ export default function StockTable() {
   useEffect(() => {
     async function fetchProducts() {
       let query = supabase.from('products').select('*');
-      if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+      if (warehouseScope) query = query.in('warehouse', warehouseScope);
       const { data, error } = await query;
       if (!error && data) {
         setProducts(

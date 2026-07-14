@@ -65,7 +65,7 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
         const names = data.map((w) => w.name as string);
         setWarehouses(names);
         setWarehouseVendors(Object.fromEntries(data.map((w) => [w.name as string, (w.vendor_names as string[]) || []])));
-        setForm((prev) => (prev.warehouse ? prev : { ...prev, warehouse: warehouseScope || names[0] }));
+        setForm((prev) => (prev.warehouse ? prev : { ...prev, warehouse: warehouseScope?.[0] || names[0] }));
       }
     };
     loadWarehouses();
@@ -191,9 +191,9 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Warehouse</label>
-              {warehouseScope ? (
+              {warehouseScope && warehouseScope.length === 1 ? (
                 <input
-                  value={warehouseScope}
+                  value={warehouseScope[0]}
                   disabled
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500"
                 />
@@ -204,7 +204,7 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
                   onChange={handleChange}
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
                 >
-                  {warehouses.map((w) => <option key={w}>{w}</option>)}
+                  {(warehouseScope || warehouses).map((w) => <option key={w}>{w}</option>)}
                 </select>
               )}
             </div>

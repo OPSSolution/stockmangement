@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { logAudit } from '@/lib/auditLog';
 
 export type TemplateFieldType = 'text' | 'number' | 'date' | 'textarea' | 'select' | 'checkbox' | 'product';
 
@@ -167,6 +168,7 @@ export default function RequestTemplatesPage() {
         .eq('id', editingTpl.id);
       if (error) { showToast(error.message, 'error'); return; }
       showToast('Template updated.');
+      logAudit({ action: 'update', module: 'request_templates', description: `Updated request template "${tplForm.name.trim()}"`, referenceId: editingTpl.id });
     } else {
       const id = uniqueSlug(slugify(tplForm.name), templates.map((t) => t.id));
       const { error } = await supabase.from('request_form_templates')
@@ -174,6 +176,7 @@ export default function RequestTemplatesPage() {
       if (error) { showToast(error.message, 'error'); return; }
       showToast('Template created.');
       setSelectedId(id);
+      logAudit({ action: 'create', module: 'request_templates', description: `Created request template "${tplForm.name.trim()}"`, referenceId: id });
     }
     setShowTplModal(false);
     fetchAll();
@@ -186,6 +189,7 @@ export default function RequestTemplatesPage() {
     showToast('Template deleted.');
     if (selectedId === tpl.id) setSelectedId(null);
     fetchAll();
+    logAudit({ action: 'delete', module: 'request_templates', description: `Deleted request template "${tpl.name}"`, referenceId: tpl.id });
   };
 
   // ── Field CRUD (within the selected template) ───────────────
@@ -206,7 +210,7 @@ export default function RequestTemplatesPage() {
     setShowFieldModal(true);
   };
 
-  const commitFields = async (nextFields: TemplateField[], successMsg: string) => {
+  const commitFields = async (nextFields: TemplateField[], successMsg: string, fieldLabel?: string, fieldAction?: 'create' | 'update') => {
     if (!selected) return;
     const { error } = await supabase.from('request_form_templates')
       .update({ fields: nextFields, updated_at: new Date().toISOString() })
@@ -215,13 +219,21 @@ export default function RequestTemplatesPage() {
     showToast(successMsg);
     setShowFieldModal(false);
     fetchAll();
+    if (fieldLabel && fieldAction) {
+      logAudit({
+        action: fieldAction,
+        module: 'request_templates',
+        description: `${fieldAction === 'create' ? 'Added' : 'Updated'} field "${fieldLabel}" on template "${selected.name}"`,
+        referenceId: selected.id,
+      });
+    }
   };
 
   const addPresetField = (preset: (typeof PRESET_FIELDS)[number]) => {
     if (!selected) return;
     const key = uniqueSlug(slugify(preset.label), selected.fields.map((f) => f.key));
     const nextField: TemplateField = { key, label: preset.label, type: preset.type, required: false, ...(preset.options ? { options: preset.options } : {}) };
-    commitFields([...selected.fields, nextField], 'Field added.');
+    commitFields([...selected.fields, nextField], 'Field added.', preset.label, 'create');
   };
 
   const saveField = async () => {
@@ -239,12 +251,13 @@ export default function RequestTemplatesPage() {
       ? selected.fields.map((f, i) => (i === editingFieldIndex ? nextField : f))
       : [...selected.fields, nextField];
 
-    commitFields(nextFields, editingFieldIndex !== null ? 'Field updated.' : 'Field added.');
+    commitFields(nextFields, editingFieldIndex !== null ? 'Field updated.' : 'Field added.', fieldForm.label.trim(), editingFieldIndex !== null ? 'update' : 'create');
   };
 
   const deleteField = async (index: number) => {
     if (!selected) return;
-    if (!confirm(`Remove the "${selected.fields[index].label}" field?`)) return;
+    const fieldLabel = selected.fields[index].label;
+    if (!confirm(`Remove the "${fieldLabel}" field?`)) return;
     const nextFields = selected.fields.filter((_, i) => i !== index);
     const { error } = await supabase.from('request_form_templates')
       .update({ fields: nextFields, updated_at: new Date().toISOString() })
@@ -252,6 +265,7 @@ export default function RequestTemplatesPage() {
     if (error) { showToast(error.message, 'error'); return; }
     showToast('Field removed.');
     fetchAll();
+    logAudit({ action: 'delete', module: 'request_templates', description: `Removed field "${fieldLabel}" from template "${selected.name}"`, referenceId: selected.id });
   };
 
   const moveField = async (index: number, direction: -1 | 1) => {

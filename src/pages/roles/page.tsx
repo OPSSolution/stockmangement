@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { useAuth, normalizePerm, type PagePermission } from '@/contexts/AuthContext';
+import { exportToCsv } from '@/lib/exportCsv';
+import { logAudit } from '@/lib/auditLog';
 
 function getToken() {
   return localStorage.getItem('sm_access_token');
@@ -18,7 +20,7 @@ async function rolesApi(path: string, method = 'GET', body?: unknown) {
   return res.json();
 }
 
-type PageAction = 'edit' | 'delete';
+type PageAction = 'edit' | 'delete' | 'approve';
 
 interface PageDef {
   key: string;
@@ -34,7 +36,10 @@ const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
     pages: [
       { key: 'dashboard',  label: 'Dashboard',  icon: 'ri-dashboard-3-line',     actions: [] },
       { key: 'inventory',  label: 'Inventory',  icon: 'ri-archive-stack-line',   actions: ['edit', 'delete'] },
-      { key: 'orders',     label: 'Orders',     icon: 'ri-shopping-bag-3-line',  actions: ['edit', 'delete'] },
+      { key: 'inventory_stock_adjust', label: 'Stock Adjust', icon: 'ri-equalizer-line', actions: [] },
+      { key: 'categories', label: 'Categories', icon: 'ri-price-tag-2-line',     actions: ['edit', 'delete'] },
+      { key: 'requests',   label: 'Requests',   icon: 'ri-file-list-3-line',     actions: ['edit', 'delete', 'approve'] },
+      { key: 'orders',     label: 'Orders',     icon: 'ri-shopping-bag-3-line',  actions: ['edit', 'delete', 'approve'] },
       { key: 'deliveries', label: 'Deliveries', icon: 'ri-truck-line',           actions: ['edit', 'delete'] },
       { key: 'warehouses', label: 'Warehouses', icon: 'ri-building-2-line',      actions: ['edit', 'delete'] },
       { key: 'transfers',  label: 'Transfers',  icon: 'ri-swap-box-line',        actions: [] },
@@ -64,7 +69,6 @@ const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
   {
     group: 'Admin',
     pages: [
-      { key: 'categories', label: 'Categories', icon: 'ri-price-tag-2-line', actions: ['edit', 'delete'] },
       { key: 'request_templates', label: 'Request Templates', icon: 'ri-file-list-2-line', actions: ['edit', 'delete'] },
     ],
   },
@@ -85,7 +89,7 @@ interface Role {
 
 const defaultPermissions = (): Permissions => {
   const perms: Permissions = {};
-  ALL_PAGES.forEach(p => { perms[p.key] = { view: false, edit: false, delete: false }; });
+  ALL_PAGES.forEach(p => { perms[p.key] = { view: false, edit: false, delete: false, approve: false }; });
   return perms;
 };
 
@@ -134,7 +138,7 @@ export default function RolesPage() {
     setModalOpen(true);
   };
 
-  // Toggling view off also clears edit/delete for that page; toggling it on doesn't grant anything else.
+  // Toggling view off also clears edit/delete/approve for that page; toggling it on doesn't grant anything else.
   const toggleView = (key: string) =>
     setForm(f => {
       const current = f.permissions[key];
@@ -143,7 +147,7 @@ export default function RolesPage() {
         ...f,
         permissions: {
           ...f.permissions,
-          [key]: nextView ? { ...current, view: true } : { view: false, edit: false, delete: false },
+          [key]: nextView ? { ...current, view: true } : { view: false, edit: false, delete: false, approve: false },
         },
       };
     });
@@ -166,7 +170,7 @@ export default function RolesPage() {
     setForm(f => {
       const perms = { ...f.permissions };
       group.pages.forEach(p => {
-        perms[p.key] = allOn ? { view: false, edit: false, delete: false } : { view: true, edit: false, delete: false };
+        perms[p.key] = allOn ? { view: false, edit: false, delete: false, approve: false } : { view: true, edit: false, delete: false, approve: false };
       });
       return { ...f, permissions: perms };
     });
@@ -181,12 +185,14 @@ export default function RolesPage() {
         description: form.description || null,
         permissions: form.permissions,
       });
+      logAudit({ action: 'update', module: 'roles', description: `Updated role "${form.name}"`, referenceId: editRole.id });
     } else {
       await rolesApi('/', 'POST', {
         name: form.name,
         description: form.description || null,
         permissions: form.permissions,
       });
+      logAudit({ action: 'create', module: 'roles', description: `Created role "${form.name}"` });
     }
     setSaving(false);
     setModalOpen(false);
@@ -194,9 +200,11 @@ export default function RolesPage() {
   };
 
   const confirmDelete = async (id: string) => {
+    const roleName = roles.find((r) => r.id === id)?.name || id;
     await rolesApi(`/${id}`, 'DELETE');
     setDeleteConfirm(null);
     loadRoles();
+    logAudit({ action: 'delete', module: 'roles', description: `Deleted role "${roleName}"`, referenceId: id });
   };
 
   const permCount = (perms: Record<string, boolean | Partial<PagePermission>>) =>
@@ -212,12 +220,38 @@ export default function RolesPage() {
             <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Roles</h1>
             <p className="text-sm text-gray-500 mt-0.5">Control which pages each role can view, edit, and delete</p>
           </div>
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors cursor-pointer"
-          >
-            <i className="ri-add-line"></i> Create Role
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => exportToCsv('roles', roles, [
+                { header: 'ID', value: (r) => r.id },
+                { header: 'Name', value: (r) => r.name },
+                { header: 'Description', value: (r) => r.description || '' },
+                { header: 'System Role', value: (r) => r.is_system ? 'Yes' : 'No' },
+                { header: 'Pages Granted', value: (r) => permCount(r.permissions) },
+                {
+                  header: 'Permissions',
+                  value: (r) => ALL_PAGES
+                    .filter((p) => normalizePerm(r.permissions[p.key]).view)
+                    .map((p) => {
+                      const perm = normalizePerm(r.permissions[p.key]);
+                      const flags = [perm.edit && 'edit', perm.delete && 'delete', perm.approve && 'approve'].filter(Boolean).join('+');
+                      return flags ? `${p.label} (${flags})` : p.label;
+                    })
+                    .join('; '),
+                },
+                { header: 'Created At', value: (r) => r.created_at },
+              ])}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors cursor-pointer"
+            >
+              <i className="ri-download-2-line"></i> Export
+            </button>
+            <button
+              onClick={openCreate}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors cursor-pointer"
+            >
+              <i className="ri-add-line"></i> Create Role
+            </button>
+          </div>
         </div>
 
         {/* Roles list */}
@@ -439,6 +473,19 @@ export default function RolesPage() {
                                         }`}
                                       >
                                         <i className="ri-delete-bin-line mr-1"></i>Delete
+                                      </button>
+                                    )}
+                                    {page.actions.includes('approve') && (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleAction(page.key, 'approve')}
+                                        disabled={!perm.view}
+                                        title={`Allow this role to approve/reject pending ${page.label.toLowerCase()}`}
+                                        className={`text-xs font-medium px-2 py-1 rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                                          perm.approve ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                                        }`}
+                                      >
+                                        <i className="ri-checkbox-circle-line mr-1"></i>Approve
                                       </button>
                                     )}
                                   </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Product } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { buildOrderInsert, mapProductRow, type OrderCreateDraft } from '../orders/orderCreateUtils';
+import { logAudit } from '@/lib/auditLog';
 
 const emptyDraft: OrderCreateDraft = {
   requestedBy: '',
@@ -64,6 +65,7 @@ export default function PublicOrderFormPage() {
 
     setDraft(emptyDraft);
     setStatus({ type: 'success', msg: 'Order submitted. The team will review it soon.' });
+    logAudit({ action: 'create', module: 'orders', description: `Public order form submitted by ${draft.customer} (requested by ${draft.requestedBy})` });
   };
 
   return (

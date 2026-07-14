@@ -3,6 +3,12 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { isReservedFieldLabel, type RequestFormTemplate, type TemplateField } from '@/pages/admin/request-templates/page';
+import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
+import { deductStockForItems } from '@/lib/stockDeduction';
+import { exportToCsv } from '@/lib/exportCsv';
+import { exportRequestAsForm } from '@/lib/exportRequestForm';
+import { logAudit, diffFields } from '@/lib/auditLog';
+import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 
 interface CustomFieldAnswer {
   key: string;
@@ -69,6 +75,9 @@ interface StockRequest {
   template_name: string | null;
   /** Self-contained snapshot of that template's extra field answers. */
   custom_fields: CustomFieldAnswer[];
+  /** Supporting document (PO, photo, etc.) required when submitting a request. */
+  referral_document_url: string | null;
+  referral_document_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -150,15 +159,17 @@ function defaultValueForField(field: TemplateField): string | number | boolean {
 }
 
 export default function RequestsPage() {
-  const { profile, isAdmin, warehouseScope, canEdit, canDelete } = useAuth();
+  const { profile, isAdmin, warehouseScope, canEdit, canDelete, canApprove } = useAuth();
   const canSubmit = canEdit('requests');
   const canHardDelete = canDelete('requests');
+  const canApproveRequests = isAdmin || canApprove('requests');
   const requesterIdentity = profile?.full_name || profile?.email;
 
   const [requests, setRequests] = useState<StockRequest[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [templates, setTemplates] = useState<RequestFormTemplate[]>([]);
+  const [reserved, setReserved] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
 
@@ -166,13 +177,14 @@ export default function RequestsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingReq, setEditingReq] = useState<StockRequest | null>(null);
   const [viewingReq, setViewingReq] = useState<StockRequest | null>(null);
-  const [form, setForm] = useState(emptyForm(warehouseScope || ''));
+  const [form, setForm] = useState(emptyForm(warehouseScope?.[0] || ''));
   const [selectedProduct, setSelectedProduct] = useState('');
   const [selectedQty, setSelectedQty] = useState(1);
   const [selectedPackageWeight, setSelectedPackageWeight] = useState('');
   const [selectedUnit, setSelectedUnit] = useState('pcs');
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [uploadingApproval, setUploadingApproval] = useState(false);
 
   const [reviewedByInput, setReviewedByInput] = useState('');
   const [reviewedBy2Input, setReviewedBy2Input] = useState('');
@@ -181,6 +193,10 @@ export default function RequestsPage() {
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
+  const [exportingForm, setExportingForm] = useState(false);
+
+  /** Per-product quantity already claimed by a return linked to the currently-viewed request. */
+  const [returnProgress, setReturnProgress] = useState<Record<string, number>>({});
 
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -191,7 +207,7 @@ export default function RequestsPage() {
   const loadRequests = useCallback(async () => {
     setLoading(true);
     let query = supabase.from('stock_requests').select('*').order('created_at', { ascending: false });
-    if (warehouseScope) query = query.eq('warehouse', warehouseScope);
+    if (warehouseScope) query = query.in('warehouse', warehouseScope);
     const { data, error } = await query;
     if (!error && data) {
       setRequests(
@@ -216,8 +232,8 @@ export default function RequestsPage() {
       let productsQuery = supabase.from('products').select('id, name, sku, image_url, stock, low_stock_threshold, warehouse');
       let warehousesQuery = supabase.from('warehouses').select('name').order('name', { ascending: true });
       if (warehouseScope) {
-        productsQuery = productsQuery.eq('warehouse', warehouseScope);
-        warehousesQuery = warehousesQuery.eq('name', warehouseScope);
+        productsQuery = productsQuery.in('warehouse', warehouseScope);
+        warehousesQuery = warehousesQuery.in('name', warehouseScope);
       }
       const [{ data: p }, { data: w }] = await Promise.all([productsQuery, warehousesQuery]);
       if (p) setProducts(p as ProductOption[]);
@@ -240,6 +256,14 @@ export default function RequestsPage() {
     setApprovedByInput(viewingReq?.approved_by || '');
   }, [viewingReq?.id]);
 
+  useEffect(() => {
+    if (viewingReq?.needs_return) {
+      getClaimedReturnQuantities(viewingReq.id).then(setReturnProgress);
+    } else {
+      setReturnProgress({});
+    }
+  }, [viewingReq?.id, viewingReq?.needs_return]);
+
   const availableProducts = useMemo(
     () => products.filter((p) => p.warehouse === form.warehouse && !form.items.find((i) => i.productId === p.id)),
     [products, form.warehouse, form.items]
@@ -249,12 +273,13 @@ export default function RequestsPage() {
 
   const openNew = () => {
     setEditingReq(null);
-    setForm(emptyForm(warehouseScope || warehouses[0] || ''));
+    setForm(emptyForm(warehouseScope?.[0] || warehouses[0] || ''));
     setSelectedProduct('');
     setSelectedQty(1);
     setSelectedPackageWeight('');
     setSelectedUnit('pcs');
     setFormError(null);
+    getReservedQuantities().then(setReserved);
     if (activeTemplates.length > 0) {
       setShowTemplatePicker(true);
       return;
@@ -298,12 +323,19 @@ export default function RequestsPage() {
     setSelectedPackageWeight('');
     setSelectedUnit('pcs');
     setFormError(null);
+    getReservedQuantities({ excludeRequestId: req.id }).then(setReserved);
     setShowForm(true);
   };
 
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProduct);
     if (!product || selectedQty < 1) return;
+    const available = availableStock(product.stock, reserved, product.id);
+    if (selectedQty > available) {
+      setFormError(`Only ${available} unit${available === 1 ? '' : 's'} of "${product.name}" available — the rest is tied up in other pending requests/orders/transfers.`);
+      return;
+    }
+    setFormError(null);
     const packageWeight = selectedPackageWeight ? Number(selectedPackageWeight) : null;
     const totalKg = packageWeight ? Math.round(packageWeight * selectedQty * 100) / 100 : null;
     setForm((f) => ({
@@ -397,10 +429,13 @@ export default function RequestsPage() {
 
     if (editingReq) {
       setRequests((prev) => prev.map((r) => (r.id === editingReq.id ? { ...r, ...payload, updated_at: now } : r)));
+      logAudit({ action: 'update', module: 'requests', description: `Updated request ${editingReq.id}`, referenceId: editingReq.id });
     } else {
+      const newId = `REQ-${String(Math.floor(Date.now() / 1000) % 100000).padStart(5, '0')}`;
+      logAudit({ action: 'create', module: 'requests', description: `Created request ${newId} (${payload.total_items} items)`, referenceId: newId });
       const newRequest: StockRequest = {
         ...payload,
-        id: `REQ-${String(Math.floor(Date.now() / 1000) % 100000).padStart(5, '0')}`,
+        id: newId,
         submitted_by: requesterIdentity || 'Unknown',
         status: 'pending',
         fulfillment_type: null,
@@ -413,6 +448,8 @@ export default function RequestsPage() {
         approved_at: null,
         review_note: null,
         return_reason: null,
+        referral_document_url: null,
+        referral_document_name: null,
         created_at: now,
         updated_at: now,
       };
@@ -427,29 +464,154 @@ export default function RequestsPage() {
     else {
       showToast('Request deleted.');
       setRequests((prev) => prev.filter((r) => r.id !== req.id));
+      logAudit({ action: 'delete', module: 'requests', description: `Deleted request ${req.id}`, referenceId: req.id });
     }
   };
 
   const handleStatusChange = async (req: StockRequest, status: StockRequest['status']) => {
+    if (status === 'rejected' && !canApproveRequests) return;
+
     let returnReason: string | null = null;
+    let reviewNote: string | null = req.review_note;
     if (status === 'returned') {
       const note = window.prompt('Why is this stock being returned?');
       if (note === null) return; // user cancelled the prompt
       returnReason = note.trim() || null;
     }
+    if (status === 'rejected') {
+      const note = window.prompt('Why is this request being rejected? (optional)');
+      if (note === null) return; // user cancelled the prompt
+      reviewNote = note.trim() || null;
+    }
 
     const now = new Date().toISOString();
-    const { error } = await supabase
-      .from('stock_requests')
-      .update({ status, return_reason: returnReason, updated_at: now })
-      .eq('id', req.id);
+    const update = { status, return_reason: returnReason, review_note: reviewNote, updated_at: now };
+    const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
     if (error) {
       showToast('Failed to update status: ' + error.message, 'error');
       return;
     }
     showToast(`Status updated to ${STATUS_META[status].label}.`);
-    setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, status, return_reason: returnReason, updated_at: now } : prev));
-    setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, status, return_reason: returnReason, updated_at: now } : r)));
+    setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, ...update } : prev));
+    setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, ...update } : r)));
+    logAudit({ action: 'update', module: 'requests', description: `Request ${req.id} ${status}`, referenceId: req.id });
+  };
+
+  // Approving requires attaching the referral document at the moment of approval —
+  // this is the one place that document gets set, not at request submission.
+  const handleApprove = async (req: StockRequest, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    if (!canApproveRequests) return;
+
+    setUploadingApproval(true);
+    const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const path = `${Date.now()}-${safeName}`;
+    const { error: uploadError } = await supabase.storage.from('request_documents').upload(path, file, { cacheControl: '3600', upsert: true });
+    if (uploadError) {
+      setUploadingApproval(false);
+      showToast('Failed to upload document: ' + uploadError.message, 'error');
+      return;
+    }
+    const { data } = supabase.storage.from('request_documents').getPublicUrl(path);
+
+    // Stock only leaves the warehouse once a request is actually approved —
+    // rejecting or cancelling a request never touches real stock.
+    const { error: deductError } = await deductStockForItems(req.items, {
+      reference: req.id,
+      note: `Approved request ${req.id}`,
+      userName: requesterIdentity || 'Admin',
+      historyType: 'adjustment',
+    });
+    if (deductError) {
+      setUploadingApproval(false);
+      showToast('Cannot approve: ' + deductError, 'error');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const update = {
+      status: 'approved' as const,
+      referral_document_url: data.publicUrl,
+      referral_document_name: file.name,
+      approved_by: requesterIdentity || 'Admin',
+      approved_at: now,
+      updated_at: now,
+    };
+    const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
+    setUploadingApproval(false);
+    if (error) {
+      showToast('Failed to approve: ' + error.message, 'error');
+      return;
+    }
+    showToast('Request approved — stock deducted.');
+    setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, ...update } : prev));
+    setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, ...update } : r)));
+    logAudit({ action: 'update', module: 'requests', description: `Approved request ${req.id}`, referenceId: req.id });
+  };
+
+  const exportRequestDetails = async (req: StockRequest) => {
+    const template = req.template_id ? templates.find((t) => t.id === req.template_id) : null;
+    if (template) {
+      setExportingForm(true);
+      try {
+        await exportRequestAsForm(
+          {
+            id: req.id,
+            reference: req.reference,
+            date_of_receive: req.date_of_receive,
+            requested_by: req.requested_by,
+            items: req.items,
+            needs_return: req.needs_return,
+            reason: req.reason,
+            reason_tags: req.reason_tags,
+            reviewed_by: req.reviewed_by,
+            reviewed_at: req.reviewed_at,
+            reviewed_by_2: req.reviewed_by_2,
+            reviewed_at_2: req.reviewed_at_2,
+            approved_by: req.approved_by,
+            approved_at: req.approved_at,
+          },
+          { name: template.name, logo_url: template.logo_url }
+        );
+      } catch (err) {
+        console.error(err);
+        showToast('Failed to export form.', 'error');
+      } finally {
+        setExportingForm(false);
+      }
+      return;
+    }
+
+    exportToCsv(`request-${req.id}`, req.items, [
+      { header: 'Request ID', value: () => req.id },
+      { header: 'Warehouse', value: () => req.warehouse },
+      { header: 'Requested By', value: () => req.requested_by },
+      { header: 'Submitted By', value: () => req.submitted_by },
+      { header: 'Priority', value: () => req.priority },
+      { header: 'Status', value: () => req.status },
+      { header: 'Reference', value: () => req.reference || '' },
+      { header: 'Date of Receive', value: () => req.date_of_receive || '' },
+      { header: 'Reason', value: () => req.reason || '' },
+      { header: 'Reason Tags', value: () => req.reason_tags.join('; ') },
+      { header: 'Product', value: (i) => i.productName },
+      { header: 'SKU', value: (i) => i.sku },
+      { header: 'Quantity', value: (i) => i.quantity },
+      { header: 'Unit', value: (i) => i.unit || '' },
+      { header: 'Package Weight (kg)', value: (i) => i.packageWeight ?? '' },
+      { header: 'Total Kg', value: (i) => i.totalKg ?? '' },
+      { header: 'Template', value: () => req.template_name || '' },
+      { header: 'Custom Fields', value: () => req.custom_fields.map((f) => `${f.label}: ${f.type === 'checkbox' ? (f.value ? 'Yes' : 'No') : f.value}`).join('; ') },
+      { header: 'Referral Document', value: () => req.referral_document_url || '' },
+      { header: 'Reviewed By', value: () => req.reviewed_by || '' },
+      { header: 'Reviewed By (2)', value: () => req.reviewed_by_2 || '' },
+      { header: 'Approved By', value: () => req.approved_by || '' },
+      { header: 'Rejection/Review Note', value: () => req.review_note || '' },
+      { header: 'Return Reason', value: () => req.return_reason || '' },
+      { header: 'Created At', value: () => req.created_at },
+      { header: 'Updated At', value: () => req.updated_at },
+    ]);
   };
 
   const handleSaveSignatures = async (req: StockRequest) => {
@@ -478,6 +640,17 @@ export default function RequestsPage() {
     showToast('Signatures updated.');
     setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, ...update } as StockRequest : prev));
     setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, ...update } as StockRequest : r)));
+    logAudit({
+      action: 'update',
+      module: 'requests',
+      description: `Updated signatures on request ${req.id}`,
+      referenceId: req.id,
+      changes: diffFields(req, { ...req, ...update }, [
+        { key: 'reviewed_by', label: 'Reviewed By' },
+        { key: 'reviewed_by_2', label: 'Reviewed By (2)' },
+        { key: 'approved_by', label: 'Approved By' },
+      ]),
+    });
   };
 
   const handleToggleMenu = (reqId: string, event: MouseEvent<HTMLButtonElement>) => {
@@ -514,72 +687,87 @@ export default function RequestsPage() {
   ];
 
   return (
-    <DashboardLayout title="Stock Requests" subtitle="Log stock requests coming in for your warehouse">
-      <div className="max-w-5xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Stock Requests</h1>
-            <p className="text-sm text-gray-400 mt-1">
-              {warehouseScope ? `Requests logged for ${warehouseScope}` : 'Requests logged across all warehouses'}
-            </p>
-          </div>
-          {canSubmit && (
-            <button
-              onClick={openNew}
-              className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap cursor-pointer"
-            >
-              <i className="ri-add-line mr-1"></i>
-              New Request
-            </button>
-          )}
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+    <DashboardLayout
+      title="Stock Requests"
+      subtitle={warehouseScope ? `Requests logged for ${warehouseScope.join(', ')}` : 'Requests logged across all warehouses'}
+    >
+      <>
+        {/* KPI Strip */}
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-5">
           {[
-            { label: 'Total Requests', value: stats.total, icon: 'ri-file-list-3-line', iconBg: 'from-gray-50 to-gray-100/60', iconColor: 'text-gray-500' },
-            { label: 'Pending', value: stats.pending, icon: 'ri-time-line', iconBg: 'from-amber-50 to-amber-100/60', iconColor: 'text-amber-500' },
-            { label: 'Cancelled', value: stats.cancelled, icon: 'ri-forbid-line', iconBg: 'from-gray-50 to-gray-100/60', iconColor: 'text-gray-400' },
-          ].map((s) => (
-            <div
-              key={s.label}
-              className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col gap-3 hover:shadow-md hover:-translate-y-0.5 hover:border-emerald-200 transition-all duration-200"
-            >
-              <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${s.iconBg} flex items-center justify-center`}>
-                <i className={`${s.icon} ${s.iconColor} text-lg`}></i>
+            { label: 'Total Requests', value: stats.total, icon: 'ri-file-list-3-line', color: 'text-gray-800', bg: 'bg-gray-100' },
+            { label: 'Pending', value: stats.pending, icon: 'ri-time-line', color: 'text-amber-700', bg: 'bg-amber-50' },
+            { label: 'Cancelled', value: stats.cancelled, icon: 'ri-forbid-line', color: 'text-gray-500', bg: 'bg-gray-100' },
+          ].map((kpi) => (
+            <div key={kpi.label} className="bg-white rounded-xl px-5 py-4 flex items-center gap-4">
+              <div className={`w-10 h-10 flex items-center justify-center rounded-lg ${kpi.bg}`}>
+                <i className={`${kpi.icon} ${kpi.color} text-lg`}></i>
               </div>
               <div>
-                <p className="text-2xl font-bold text-gray-900 tracking-tight">{s.value}</p>
-                <p className="text-xs font-semibold text-gray-500 mt-0.5">{s.label}</p>
+                <p className="text-xl font-bold text-gray-900 tracking-tight">{kpi.value}</p>
+                <p className="text-xs text-gray-400">{kpi.label}</p>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Tabs */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {tabs.map((t) => {
-              const count = t.key === 'all' ? requests.length : requests.filter((r) => r.status === t.key).length;
-              const active = activeTab === t.key;
-              return (
+        {/* Main panel */}
+        <div className="bg-white rounded-2xl">
+          {/* Toolbar */}
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 px-6 py-4 border-b border-gray-100">
+            <div className="flex flex-wrap items-center gap-2">
+              {tabs.map((t) => {
+                const count = t.key === 'all' ? requests.length : requests.filter((r) => r.status === t.key).length;
+                const active = activeTab === t.key;
+                return (
+                  <button
+                    key={t.key}
+                    onClick={() => setActiveTab(t.key)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+                      active ? 'bg-emerald-50 text-emerald-700' : 'text-gray-500 hover:bg-gray-50'
+                    }`}
+                  >
+                    {t.label}
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${active ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => exportToCsv('requests', filtered, [
+                  { header: 'ID', value: (r) => r.id },
+                  { header: 'Warehouse', value: (r) => r.warehouse },
+                  { header: 'Requested By', value: (r) => r.requested_by },
+                  { header: 'Submitted By', value: (r) => r.submitted_by },
+                  { header: 'Priority', value: (r) => r.priority },
+                  { header: 'Status', value: (r) => r.status },
+                  { header: 'Total Items', value: (r) => r.total_items },
+                  { header: 'Total Kg', value: (r) => r.total_kg },
+                  { header: 'Reason', value: (r) => r.reason || '' },
+                  { header: 'Reference', value: (r) => r.reference || '' },
+                  { header: 'Approved By', value: (r) => r.approved_by || '' },
+                  { header: 'Created At', value: (r) => r.created_at },
+                  { header: 'Updated At', value: (r) => r.updated_at },
+                ])}
+                className="px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <i className="ri-download-2-line mr-1"></i>
+                Export
+              </button>
+              {canSubmit && (
                 <button
-                  key={t.key}
-                  onClick={() => setActiveTab(t.key)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-                    active ? 'bg-emerald-50 text-emerald-700' : 'text-gray-500 hover:bg-gray-50'
-                  }`}
+                  onClick={openNew}
+                  className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap cursor-pointer"
                 >
-                  {t.label}
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${active ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'}`}>
-                    {count}
-                  </span>
+                  <i className="ri-add-line mr-1"></i>
+                  New Request
                 </button>
-              );
-            })}
+              )}
+            </div>
           </div>
-        </div>
 
         {/* Template picker — choose which company's form to fill out */}
         {showTemplatePicker && (
@@ -664,9 +852,9 @@ export default function RequestsPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">Warehouse</label>
-                  {warehouseScope ? (
+                  {warehouseScope && warehouseScope.length === 1 ? (
                     <input
-                      value={warehouseScope}
+                      value={warehouseScope[0]}
                       disabled
                       className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500"
                     />
@@ -677,7 +865,7 @@ export default function RequestsPage() {
                       className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-emerald-400 bg-white"
                     >
                       <option value="">Select warehouse…</option>
-                      {warehouses.map((w) => (
+                      {(warehouseScope || warehouses).map((w) => (
                         <option key={w} value={w}>{w}</option>
                       ))}
                     </select>
@@ -730,7 +918,7 @@ export default function RequestsPage() {
                   >
                     <option value="">{form.warehouse ? `Select product from ${form.warehouse}…` : 'Select a warehouse first'}</option>
                     {availableProducts.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.sku}) — {p.stock} in stock</option>
+                      <option key={p.id} value={p.id}>{p.name} ({p.sku}) — {availableStock(p.stock, reserved, p.id)} available</option>
                     ))}
                   </select>
                   <input
@@ -973,7 +1161,7 @@ export default function RequestsPage() {
         )}
 
         {/* Table */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="overflow-hidden">
           {loading ? (
             <div className="py-12 text-center">
               <i className="ri-loader-4-line animate-spin text-gray-400 text-xl"></i>
@@ -1122,12 +1310,18 @@ export default function RequestsPage() {
             );
           })()}
         </div>
-      </div>
+        </div>
+      </>
 
       {/* View Details modal */}
       {viewingReq && (() => {
         const priorityMeta = PRIORITIES.find((p) => p.value === viewingReq.priority) || PRIORITIES[2];
-        const canChangeStatus = isAdmin || viewingReq.submitted_by === requesterIdentity;
+        const isOwnRequest = viewingReq.submitted_by === requesterIdentity;
+        const isPending = viewingReq.status === 'pending';
+        // Pending requests need an explicit Approve/Reject decision from an admin (or a role
+        // an admin has granted "approve" to) — the submitter can no longer self-approve.
+        // Once decided, admins/owners can still move it through fulfilled/cancelled/returned below.
+        const canChangeStatus = !isPending && (isAdmin || isOwnRequest);
 
         return (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setViewingReq(null)}>
@@ -1153,7 +1347,7 @@ export default function RequestsPage() {
                 </button>
               </div>
 
-              {/* Status + Priority */}
+              {/* Status + tags */}
               <div className="px-6 flex items-center gap-2 flex-wrap">
                 {canChangeStatus ? (
                   <select
@@ -1173,11 +1367,16 @@ export default function RequestsPage() {
                 <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${priorityMeta.color}`}>
                   <i className="ri-flag-2-fill mr-1 text-[10px]"></i>{priorityMeta.label} priority
                 </span>
-                {viewingReq.needs_return && viewingReq.status !== 'returned' && (
-                  <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-50 text-amber-600">
-                    <i className="ri-arrow-go-back-line mr-1 text-[10px]"></i>Needs Return
-                  </span>
-                )}
+                {viewingReq.needs_return && viewingReq.status !== 'returned' && (() => {
+                  const totalRequested = viewingReq.items.reduce((s, i) => s + i.quantity, 0);
+                  const totalReturned = viewingReq.items.reduce((s, i) => s + (returnProgress[i.productId] || 0), 0);
+                  return (
+                    <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-50 text-amber-600">
+                      <i className="ri-arrow-go-back-line mr-1 text-[10px]"></i>
+                      Needs Return{totalReturned > 0 ? ` — ${totalReturned}/${totalRequested} returned` : ''}
+                    </span>
+                  );
+                })()}
                 {viewingReq.template_name && (() => {
                   const tplLogo = templates.find((t) => t.id === viewingReq.template_id)?.logo_url;
                   return (
@@ -1191,6 +1390,49 @@ export default function RequestsPage() {
                   );
                 })()}
               </div>
+
+              {/* Pending decision */}
+              {isPending && (canApproveRequests || isOwnRequest) && (
+                <div className="mx-6 mt-3 px-4 py-3 rounded-xl bg-amber-50/60 border border-amber-100 flex items-center justify-between gap-3 flex-wrap">
+                  <span className="text-xs font-semibold text-amber-700 flex items-center gap-1.5">
+                    <i className="ri-time-line"></i> Awaiting decision
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {canApproveRequests && (
+                      <>
+                        <label
+                          title="Approving requires attaching a referral document"
+                          className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white transition-colors ${uploadingApproval ? 'opacity-60 cursor-not-allowed' : 'hover:bg-emerald-600 cursor-pointer'}`}
+                        >
+                          <i className={uploadingApproval ? 'ri-loader-4-line animate-spin' : 'ri-checkbox-circle-line'}></i>
+                          {uploadingApproval ? 'Uploading…' : 'Approve'}
+                          <input
+                            type="file"
+                            accept="image/*,.pdf,.doc,.docx"
+                            className="hidden"
+                            disabled={uploadingApproval}
+                            onChange={(e) => handleApprove(viewingReq, e)}
+                          />
+                        </label>
+                        <button
+                          onClick={() => handleStatusChange(viewingReq, 'rejected')}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
+                        >
+                          <i className="ri-close-circle-line"></i>Reject
+                        </button>
+                      </>
+                    )}
+                    {isOwnRequest && (
+                      <button
+                        onClick={() => handleStatusChange(viewingReq, 'cancelled')}
+                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors cursor-pointer"
+                      >
+                        Cancel Request
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Key stats */}
               <div className="grid grid-cols-2 gap-3 px-6 mt-4">
@@ -1232,6 +1474,25 @@ export default function RequestsPage() {
                 )}
               </div>
 
+              {/* Referral document */}
+              {viewingReq.referral_document_url && (
+                <div className="px-6 mt-3">
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Referral Document</p>
+                  <a
+                    href={viewingReq.referral_document_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2.5 rounded-xl border border-gray-100 px-4 py-3 hover:bg-gray-50 transition-colors"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                      <i className="ri-file-text-line text-sky-500"></i>
+                    </div>
+                    <span className="text-sm font-medium text-sky-600 truncate">{viewingReq.referral_document_name || 'View document'}</span>
+                    <i className="ri-external-link-line text-gray-300 ml-auto shrink-0"></i>
+                  </a>
+                </div>
+              )}
+
               {/* Itemized product list */}
               <div className="px-6 mt-3">
                 <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Products</p>
@@ -1257,6 +1518,16 @@ export default function RequestsPage() {
                       <div className="text-right flex-shrink-0 ml-3">
                         <span className="text-sm font-bold text-gray-700">×{item.quantity}</span>
                         {item.totalKg ? <p className="text-xs text-gray-400">{item.totalKg} Kg</p> : null}
+                        {viewingReq.needs_return && (() => {
+                          const returnedQty = returnProgress[item.productId] || 0;
+                          const remainingQty = Math.max(0, item.quantity - returnedQty);
+                          return (
+                            <p className={`text-[10px] mt-0.5 ${remainingQty === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                              {returnedQty > 0 ? `${returnedQty} returned · ` : ''}
+                              {remainingQty === 0 ? 'fully returned' : `${remainingQty} remaining`}
+                            </p>
+                          );
+                        })()}
                       </div>
                     </div>
                   ))}
@@ -1365,6 +1636,19 @@ export default function RequestsPage() {
                 )}
               </div>
 
+              {/* Rejection reason */}
+              {viewingReq.status === 'rejected' && viewingReq.review_note && (
+                <div className="px-6 mt-3">
+                  <div className="rounded-xl bg-red-50/60 border border-red-100 px-4 py-3 flex gap-2.5">
+                    <i className="ri-close-circle-line text-red-400 text-base"></i>
+                    <div>
+                      <p className="text-[10px] font-semibold text-red-400 uppercase tracking-wide">Rejection Reason</p>
+                      <p className="text-sm text-gray-700 mt-0.5">{viewingReq.review_note}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Return reason */}
               {viewingReq.status === 'returned' && viewingReq.return_reason && (
                 <div className="px-6 mt-3">
@@ -1386,6 +1670,17 @@ export default function RequestsPage() {
                 <span className="flex items-center gap-1.5">
                   <i className="ri-refresh-line"></i> Updated {new Date(viewingReq.updated_at).toLocaleString()}
                 </span>
+              </div>
+
+              {/* Actions */}
+              <div className="px-6 pb-5">
+                <button
+                  onClick={() => exportRequestDetails(viewingReq)}
+                  disabled={exportingForm}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <i className={exportingForm ? 'ri-loader-4-line animate-spin' : 'ri-download-2-line'}></i> {exportingForm ? 'Exporting…' : 'Export'}
+                </button>
               </div>
             </div>
           </div>

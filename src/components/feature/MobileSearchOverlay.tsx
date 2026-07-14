@@ -58,10 +58,10 @@ const searchIndex: SearchResult[] = (() => {
     results.push({
       id: r.id,
       type: 'return',
-      title: `${r.id} — ${r.customer}`,
-      subtitle: `${r.orderId} · ${formatUSD(r.refundAmount)} · ${r.items[0].productName}`,
+      title: `${r.id} — ${r.returnedBy}`,
+      subtitle: `${r.requestId} · ${formatUSD(r.totalValue)} · ${r.items[0].productName}`,
       badge: r.status.charAt(0).toUpperCase() + r.status.slice(1),
-      badgeColor: r.status === 'refunded' ? 'text-teal-600 bg-teal-50' : r.status === 'pending' ? 'text-amber-600 bg-amber-50' : 'text-gray-600 bg-gray-100',
+      badgeColor: r.status === 'restocked' ? 'text-teal-600 bg-teal-50' : r.status === 'pending' ? 'text-amber-600 bg-amber-50' : 'text-gray-600 bg-gray-100',
       path: '/returns',
     });
   });
