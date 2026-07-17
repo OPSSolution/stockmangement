@@ -323,7 +323,14 @@ export default function TransfersPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {filtered.length === 0 ? (
+                  {loading ? (
+                    <tr>
+                      <td colSpan={8} className="px-5 py-12 text-center text-sm text-gray-400">
+                        <i className="ri-loader-4-line animate-spin text-2xl block mb-2"></i>
+                        Loading transfers…
+                      </td>
+                    </tr>
+                  ) : filtered.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-5 py-12 text-center text-sm text-gray-400">
                         <i className="ri-swap-box-line text-3xl block mb-2"></i>

@@ -480,7 +480,12 @@ export default function OrdersPage() {
               </table>
             </div>
 
-            {filtered.length === 0 && (
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                <i className="ri-loader-4-line animate-spin text-3xl mb-3"></i>
+                <p className="text-sm">Loading orders…</p>
+              </div>
+            ) : filtered.length === 0 && (
               <div className="flex flex-col items-center justify-center py-16 text-gray-400">
                 <div className="w-12 h-12 flex items-center justify-center mb-3">
                   <i className="ri-shopping-bag-3-line text-4xl"></i>

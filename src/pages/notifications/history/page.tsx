@@ -258,7 +258,12 @@ export default function NotificationHistoryPage() {
 
         {/* List */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          {paginated.length === 0 ? (
+          {loading ? (
+            <div className="py-16 text-center">
+              <i className="ri-loader-4-line animate-spin text-2xl text-gray-300"></i>
+              <p className="text-sm text-gray-500 font-medium mt-3">Loading notifications…</p>
+            </div>
+          ) : paginated.length === 0 ? (
             <div className="py-16 text-center">
               <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
                 <i className="ri-notification-off-line text-gray-300 text-2xl"></i>

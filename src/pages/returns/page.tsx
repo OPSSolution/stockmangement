@@ -10,6 +10,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
 import { getCompletedReturnQuantities } from '@/lib/returnProgress';
+import { restockReturnedItems } from '@/lib/stockDeduction';
 
 type FilterTab = 'all' | ReturnStatus;
 
@@ -72,7 +73,7 @@ function toDbReturn(ret: ReturnRequest): Record<string, unknown> {
 
 export default function ReturnsPage() {
   const { formatAmount } = useCurrency();
-  const { canEdit, canDelete, warehouseScope } = useAuth();
+  const { canEdit, canDelete, warehouseScope, profile } = useAuth();
   const showEdit = canEdit('returns');
   const showDelete = canDelete('returns');
   const [returns, setReturns] = useState<ReturnRequest[]>([]);
@@ -85,6 +86,9 @@ export default function ReturnsPage() {
   const [deleteReturn, setDeleteReturn] = useState<ReturnRequest | null>(null);
   const [successMsg, setSuccessMsg] = useState('');
   const [presetRequestId, setPresetRequestId] = useState<string | null>(null);
+  // Which specific action is in flight — lets the form show a loading state only
+  // on the button that was actually clicked, not every button at once.
+  const [savingAction, setSavingAction] = useState<ReturnStatus | null>(null);
 
   useEffect(() => {
     fetchReturns();
@@ -156,6 +160,26 @@ export default function ReturnsPage() {
     totalRestockedValue: returns.filter((r) => r.status === 'restocked').reduce((s, r) => s + r.totalValue, 0),
   }), [returns]);
 
+  // A request can be closed out by several partial returns over time — only flip
+  // it to 'returned' once every requested unit has been resolved by a return that
+  // has itself reached a terminal state (restocked or discarded). Safe to call
+  // repeatedly — it only ever re-checks and re-confirms the same outcome.
+  const closeRequestIfFullyReturned = async (requestId: string, returnId: string) => {
+    const { data: reqRow } = await supabase.from('stock_requests').select('items').eq('id', requestId).maybeSingle();
+    const requestedItems = (reqRow?.items as { productId: string; quantity: number }[]) || [];
+    const completed = await getCompletedReturnQuantities(requestId);
+    const fullyReturned = requestedItems.length > 0 && requestedItems.every((i) => (completed[i.productId] || 0) >= i.quantity);
+
+    if (fullyReturned) {
+      const { error: reqError } = await supabase.from('stock_requests').update({
+        status: 'returned',
+        return_reason: `Fully returned via ${returnId}`,
+        updated_at: new Date().toISOString(),
+      }).eq('id', requestId);
+      if (reqError) console.error('Failed to mark linked request as returned:', reqError);
+    }
+  };
+
   const handleUpdate = async (id: string, updates: Partial<ReturnRequest>) => {
     const dbUpdates: Record<string, unknown> = {};
     if (updates.status) dbUpdates.status = updates.status;
@@ -181,26 +205,9 @@ export default function ReturnsPage() {
         setTimeout(() => setSuccessMsg(''), 3000);
       }
 
-      // A request can be closed out by several partial returns over time — only
-      // flip it to 'returned' once every requested unit has been resolved by a
-      // return that has itself reached a terminal state (restocked or discarded).
       if (newStatus === 'restocked' || newStatus === 'discarded') {
         const requestId = returns.find((r) => r.id === id)?.requestId;
-        if (requestId) {
-          const { data: reqRow } = await supabase.from('stock_requests').select('items').eq('id', requestId).maybeSingle();
-          const requestedItems = (reqRow?.items as { productId: string; quantity: number }[]) || [];
-          const completed = await getCompletedReturnQuantities(requestId);
-          const fullyReturned = requestedItems.length > 0 && requestedItems.every((i) => (completed[i.productId] || 0) >= i.quantity);
-
-          if (fullyReturned) {
-            const { error: reqError } = await supabase.from('stock_requests').update({
-              status: 'returned',
-              return_reason: `Fully returned via ${id}`,
-              updated_at: new Date().toISOString(),
-            }).eq('id', requestId);
-            if (reqError) console.error('Failed to mark linked request as returned:', reqError);
-          }
-        }
+        if (requestId) await closeRequestIfFullyReturned(requestId, id);
       }
 
       await fetchReturns();
@@ -217,29 +224,64 @@ export default function ReturnsPage() {
       (returns.length > 0 ? Math.max(...returns.map((r) => Number(r.id.replace(/\D/g, '')) || 0)) : 0) + 1
     ).padStart(4, '0')}`;
 
+    // Buttons show a loading state for exactly the essential work (restock + the
+    // return row itself) — once that's done we close and show the alert right
+    // away. Everything after that (closing out the linked request, refetching the
+    // list, audit log) happens in the background without holding up the UI.
+    setSavingAction(ret.status);
+
+    // Confirming (status 'restocked') is the one save path that touches real stock —
+    // guard against re-running it on a return that was already restocked by an
+    // earlier save, which would double-add the same units.
+    const previousStatus = ret.id ? returns.find((r) => r.id === ret.id)?.status : undefined;
+    if (ret.status === 'restocked' && previousStatus !== 'restocked') {
+      const { error: restockError } = await restockReturnedItems(
+        ret.items.map((i) => ({ productId: i.productId, quantity: i.quantity, condition: i.condition, note: ret.inspectionNotes })),
+        { reference: nextId, userName: profile?.full_name || profile?.email || 'Admin' }
+      );
+      if (restockError) {
+        setSavingAction(null);
+        setSuccessMsg('Failed to restock: ' + restockError);
+        setTimeout(() => setSuccessMsg(''), 4000);
+        return;
+      }
+    }
+
     const payload = toDbReturn({ ...ret, id: nextId });
     const request = ret.id
       ? supabase.from('returns').update(payload).eq('id', ret.id)
       : supabase.from('returns').insert(payload);
 
     const { error } = await request;
+    setSavingAction(null);
+
     if (error) {
       console.error(error);
       setSuccessMsg('Failed to save return.');
-    } else {
-      setSuccessMsg(ret.id ? 'Return updated.' : 'Return created.');
-      setShowForm(false);
-      setEditReturn(null);
-      setPresetRequestId(null);
-      await fetchReturns();
-      logAudit({
-        action: ret.id ? 'update' : 'create',
-        module: 'returns',
-        description: ret.id ? `Updated return ${nextId}` : `Created return ${nextId} for request ${ret.requestId}`,
-        referenceId: nextId,
-      });
+      setTimeout(() => setSuccessMsg(''), 3000);
+      return;
     }
+
+    const statusMessages: Partial<Record<ReturnStatus, string>> = {
+      restocked: 'Return confirmed — stock updated.',
+      discarded: 'Return rejected.',
+    };
+    setShowForm(false);
+    setEditReturn(null);
+    setPresetRequestId(null);
+    setSuccessMsg(statusMessages[ret.status] ?? (ret.id ? 'Return updated.' : 'Return created.'));
     setTimeout(() => setSuccessMsg(''), 3000);
+
+    if (ret.status === 'restocked' || ret.status === 'discarded') {
+      await closeRequestIfFullyReturned(ret.requestId, nextId);
+    }
+    await fetchReturns();
+    logAudit({
+      action: ret.id ? 'update' : 'create',
+      module: 'returns',
+      description: ret.id ? `Updated return ${nextId}` : `Created return ${nextId} for request ${ret.requestId}`,
+      referenceId: nextId,
+    });
   };
 
   const handleDeleteReturn = async () => {
@@ -361,7 +403,14 @@ export default function ReturnsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {groupedRows.length === 0 ? (
+                  {loading ? (
+                    <tr>
+                      <td colSpan={8} className="px-5 py-12 text-center text-sm text-gray-400">
+                        <i className="ri-loader-4-line animate-spin text-2xl block mb-2"></i>
+                        Loading returns…
+                      </td>
+                    </tr>
+                  ) : groupedRows.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-5 py-12 text-center text-sm text-gray-400">
                         <i className="ri-arrow-go-back-line text-3xl block mb-2"></i>
@@ -419,7 +468,7 @@ export default function ReturnsPage() {
                               >
                                 <i className={['pending', 'inspecting', 'approved'].includes(r.status) ? 'ri-play-circle-line' : 'ri-eye-line'}></i>
                               </button>
-                              {group.length === 1 && showEdit && (
+                              {group.length === 1 && showEdit && !['restocked', 'discarded'].includes(r.status) && (
                                 <button
                                   onClick={() => setEditReturn(r)}
                                   className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 cursor-pointer"
@@ -428,11 +477,11 @@ export default function ReturnsPage() {
                                   <i className="ri-edit-line"></i>
                                 </button>
                               )}
-                              {group.length === 1 && showDelete && (
+                              {showDelete && (
                                 <button
                                   onClick={() => setDeleteReturn(r)}
                                   className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 cursor-pointer"
-                                  title="Delete return"
+                                  title={group.length > 1 ? 'Delete this submission (most recent of this request)' : 'Delete return'}
                                 >
                                   <i className="ri-delete-bin-line"></i>
                                 </button>
@@ -468,6 +517,7 @@ export default function ReturnsPage() {
           presetRequestId={!editReturn ? presetRequestId ?? undefined : undefined}
           onClose={() => { setShowForm(false); setEditReturn(null); setPresetRequestId(null); }}
           onSave={handleSaveReturn}
+          submittingAction={savingAction}
         />
       )}
       {deleteReturn && (

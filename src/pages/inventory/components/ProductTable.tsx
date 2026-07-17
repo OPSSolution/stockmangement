@@ -57,7 +57,8 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
             const stockPct = Math.min(100, (p.stock / Math.max(p.lowStockThreshold * 4, 1)) * 100);
             const barColor = p.status === 'in_stock' ? 'bg-emerald-400' : p.status === 'low_stock' ? 'bg-amber-400' : 'bg-red-400';
             const reservedQty = reserved[p.id] || 0;
-            const available = availableStock(p.stock, reserved, p.id);
+            const onHoldQty = p.onHoldStock || 0;
+            const available = availableStock(p.stock, reserved, p.id, onHoldQty);
             return (
               <tr key={p.id} className="hover:bg-gray-50/50 transition-colors">
                 <td className="py-3 px-4">
@@ -94,8 +95,8 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
                       <div className={`h-full rounded-full ${barColor}`} style={{ width: `${stockPct}%` }}></div>
                     </div>
                     <span className="text-xs text-gray-400">min {p.lowStockThreshold}</span>
-                    {reservedQty > 0 && (
-                      <span className="text-xs text-amber-600 font-medium" title={`${reservedQty} tied up in pending requests/orders/transfers`}>
+                    {(reservedQty > 0 || onHoldQty > 0) && (
+                      <span className="text-xs text-amber-600 font-medium" title={`${reservedQty} tied up in pending requests/orders/transfers${onHoldQty > 0 ? `, ${onHoldQty} on hold (unusable)` : ''}`}>
                         {available} available
                       </span>
                     )}

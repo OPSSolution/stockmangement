@@ -272,7 +272,12 @@ export default function PromotionsPage() {
 
             {/* Promotions List */}
             <div className="divide-y divide-gray-100">
-              {filtered.length === 0 ? (
+              {loading ? (
+                <div className="py-16 text-center text-sm text-gray-400">
+                  <i className="ri-loader-4-line animate-spin text-2xl block mb-2"></i>
+                  Loading promotions…
+                </div>
+              ) : filtered.length === 0 ? (
                 <div className="py-16 text-center text-sm text-gray-400">
                   <i className="ri-price-tag-3-line text-3xl block mb-2"></i>
                   No promotions found

@@ -9,6 +9,8 @@ export interface Product {
   vendor?: string;
   imageUrl?: string;
   stock: number;
+  /** Units physically on hand but flagged unusable (e.g. damaged returns) — included in `stock`, excluded from what's available to request/sell/transfer. */
+  onHoldStock?: number;
   lowStockThreshold: number;
   price: number;
   productType: ProductType;

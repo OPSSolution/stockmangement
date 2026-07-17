@@ -8,7 +8,11 @@ interface StockHistoryModalProps {
   product: Product;
   history: StockHistoryEntry[];
   onClose: () => void;
+  /** Opens the Resolve On Hold flow — omitted when the viewer can't adjust stock. */
+  onResolveOnHold?: () => void;
 }
+
+type HistoryFilter = 'all' | 'in' | 'out' | 'onhold';
 
 const sourceIcon: Record<ReservationDetail['source'], string> = {
   Request: 'ri-file-list-3-line',
@@ -17,8 +21,14 @@ const sourceIcon: Record<ReservationDetail['source'], string> = {
   Delivery: 'ri-truck-line',
 };
 
-export default function StockHistoryModal({ product, history, onClose }: StockHistoryModalProps) {
+// Matches both units going on hold ("On hold — ", from a damaged/defective return)
+// and units coming back off hold ("On hold resolved — ", from ResolveOnHoldModal) —
+// together these are the full on-hold lifecycle for this product.
+const isOnHoldEntry = (h: StockHistoryEntry) => h.note?.startsWith('On hold — ') || h.note?.startsWith('On hold resolved — ');
+
+export default function StockHistoryModal({ product, history, onClose, onResolveOnHold }: StockHistoryModalProps) {
   const productHistory = history.filter((h) => h.productId === product.id);
+  const [filter, setFilter] = useState<HistoryFilter>('all');
   const [reservations, setReservations] = useState<ReservationDetail[]>([]);
   const [loadingReservations, setLoadingReservations] = useState(true);
 
@@ -31,10 +41,18 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
   }, [product.id]);
 
   const totalReserved = reservations.reduce((sum, r) => sum + r.quantity, 0);
+  const onHoldStock = product.onHoldStock || 0;
+
+  const filteredHistory = productHistory.filter((h) => {
+    if (filter === 'in') return h.quantity > 0;
+    if (filter === 'out') return h.quantity < 0;
+    if (filter === 'onhold') return isOnHoldEntry(h);
+    return true;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl w-full max-w-xl mx-4 shadow-xl max-h-[85vh] flex flex-col">
+      <div className="bg-white rounded-2xl w-full max-w-3xl mx-4 shadow-xl h-[88vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 shrink-0">
           <div>
             <h2 className="text-base font-bold text-gray-900">Stock History</h2>
@@ -45,21 +63,23 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
           </button>
         </div>
 
-        {/* Stats summary */}
-        <div className="grid grid-cols-4 gap-0 border-b border-gray-100 shrink-0">
+        {/* Stats summary — click a card to filter the history list below to just that data */}
+        <div className="grid grid-cols-5 gap-0 border-b border-gray-100 shrink-0">
           {[
-            { label: 'Current Stock', value: String(product.stock), icon: 'ri-stack-line', color: 'text-gray-800' },
+            { label: 'Current Stock', value: String(product.stock), icon: 'ri-stack-line', color: 'text-gray-800', filter: 'all' as HistoryFilter },
             {
               label: 'Total In',
               value: `+${productHistory.filter(h => h.quantity > 0).reduce((s, h) => s + h.quantity, 0)}`,
               icon: 'ri-arrow-down-circle-line',
               color: 'text-emerald-600',
+              filter: 'in' as HistoryFilter,
             },
             {
               label: 'Total Out',
               value: `${productHistory.filter(h => h.quantity < 0).reduce((s, h) => s + h.quantity, 0)}`,
               icon: 'ri-arrow-up-circle-line',
               color: 'text-rose-600',
+              filter: 'out' as HistoryFilter,
             },
             {
               label: 'Reserved',
@@ -67,16 +87,38 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
               icon: 'ri-time-line',
               color: totalReserved > 0 ? 'text-amber-600' : 'text-gray-400',
             },
-          ].map((stat) => (
-            <div key={stat.label} className="flex flex-col items-center py-4 border-r border-gray-100 last:border-r-0">
-              <div className={`w-5 h-5 flex items-center justify-center mb-1`}>
-                <i className={`${stat.icon} ${stat.color} text-base`}></i>
+            {
+              label: 'On Hold',
+              value: String(onHoldStock),
+              icon: 'ri-forbid-2-line',
+              color: onHoldStock > 0 ? 'text-orange-600' : 'text-gray-400',
+              filter: 'onhold' as HistoryFilter,
+            },
+          ].map((stat) => {
+            const isActive = !!stat.filter && filter === stat.filter;
+            return (
+              <div
+                key={stat.label}
+                onClick={stat.filter ? () => setFilter(filter === stat.filter ? 'all' : stat.filter!) : undefined}
+                className={`relative flex flex-col items-center py-4 border-r border-gray-100 last:border-r-0 ${stat.filter ? 'cursor-pointer hover:bg-gray-50 transition-colors' : ''} ${isActive ? 'bg-gray-50' : ''}`}
+                title={stat.filter ? 'Click to filter history below' : undefined}
+              >
+                {stat.filter && (
+                  <i className={`ri-filter-3-fill absolute top-1.5 right-1.5 text-[11px] ${isActive ? 'text-gray-500' : 'text-gray-300'}`}></i>
+                )}
+                <div className={`w-5 h-5 flex items-center justify-center mb-1`}>
+                  <i className={`${stat.icon} ${stat.color} text-base`}></i>
+                </div>
+                <p className={`text-lg font-bold ${stat.color}`}>{stat.value}</p>
+                <p className={`text-xs ${isActive ? 'text-gray-700 font-medium' : 'text-gray-400'}`}>{stat.label}</p>
               </div>
-              <p className={`text-lg font-bold ${stat.color}`}>{stat.value}</p>
-              <p className="text-xs text-gray-400">{stat.label}</p>
-            </div>
-          ))}
+            );
+          })}
         </div>
+        <p className="text-[11px] text-gray-400 text-center py-1.5 border-b border-gray-100 shrink-0 flex items-center justify-center gap-1">
+          <i className="ri-cursor-line"></i>
+          Click a card above to filter the history below
+        </p>
 
         {/* Reserved breakdown — what's holding stock aside, not yet physically deducted */}
         {!loadingReservations && reservations.length > 0 && (
@@ -104,9 +146,28 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
           </div>
         )}
 
-        {/* History list */}
+        {/* History list — filtered by the stat card clicked above, if any */}
         <div className="overflow-y-auto flex-1 px-6 py-4 space-y-2">
-          {productHistory.length === 0 ? (
+          {filter !== 'all' && (
+            <div className="flex items-center justify-between pb-1">
+              <p className="text-xs text-gray-500">
+                Showing {filter === 'in' ? 'stock in' : filter === 'out' ? 'stock out' : 'on hold'} entries only
+              </p>
+              <button onClick={() => setFilter('all')} className="text-xs text-emerald-600 hover:underline cursor-pointer">
+                Show all
+              </button>
+            </div>
+          )}
+          {filter === 'onhold' && onHoldStock > 0 && onResolveOnHold && (
+            <button
+              onClick={onResolveOnHold}
+              className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 mb-1 rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors cursor-pointer"
+            >
+              <i className="ri-checkbox-multiple-line"></i>
+              Resolve On Hold Stock ({onHoldStock} unit{onHoldStock === 1 ? '' : 's'})
+            </button>
+          )}
+          {filteredHistory.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-gray-400">
               <div className="w-10 h-10 flex items-center justify-center mb-3">
                 <i className="ri-history-line text-3xl"></i>
@@ -114,7 +175,7 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
               <p className="text-sm">No history available for this product.</p>
             </div>
           ) : (
-            productHistory.map((entry) => {
+            filteredHistory.map((entry) => {
               const cfg = typeConfig[entry.type] ?? typeConfig.adjustment;
               return (
                 <div key={entry.id} className="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors">
@@ -124,7 +185,7 @@ export default function StockHistoryModal({ product, history, onClose }: StockHi
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <span className={`text-xs font-semibold ${cfg.color}`}>{cfg.label}</span>
-                      <span className={`text-sm font-bold ${entry.quantity > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      <span className={`text-sm font-bold ${entry.quantity > 0 ? 'text-emerald-600' : entry.quantity < 0 ? 'text-rose-600' : 'text-gray-400'}`}>
                         {entry.quantity > 0 ? '+' : ''}{entry.quantity}
                       </span>
                     </div>

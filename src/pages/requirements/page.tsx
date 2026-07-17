@@ -407,7 +407,12 @@ export default function RequirementsPage() {
 
         {/* Table */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          {requirements.length === 0 ? (
+          {loading ? (
+            <div className="py-12 text-center">
+              <i className="ri-loader-4-line animate-spin text-2xl text-gray-300"></i>
+              <p className="text-sm text-gray-400 mt-3">Loading requirements…</p>
+            </div>
+          ) : requirements.length === 0 ? (
             <div className="py-12 text-center">
               <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
                 <i className="ri-clipboard-line text-gray-300 text-xl"></i>

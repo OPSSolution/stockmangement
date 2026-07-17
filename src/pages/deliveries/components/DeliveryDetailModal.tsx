@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { type DeliveryRecord, type DeliveryStep } from '@/mocks/deliveries';
 import DeliveryStepTracker from './DeliveryStepTracker';
 import { useAuth } from '@/contexts/AuthContext';
+import { downloadPdf } from '@/lib/exportPdf';
 
 interface DeliveryDetailModalProps {
   delivery: DeliveryRecord;
@@ -52,6 +53,45 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
     reader.readAsDataURL(file);
   };
 
+  const handleDownloadPdf = () => {
+    downloadPdf(
+      {
+        docType: 'Delivery Note',
+        docId: delivery.id,
+        status: delivery.status,
+        subtitle: `${delivery.fromWarehouse} → ${delivery.toWarehouse}`,
+        infoBoxes: [
+          {
+            title: 'Shipment Info',
+            rows: [
+              { label: 'Transfer ID', value: delivery.transferId || delivery.id },
+              { label: 'Driver', value: delivery.driver_name || 'Unassigned' },
+              { label: 'Vehicle', value: delivery.vehicle_plate || '—' },
+              { label: 'Est. Delivery', value: delivery.estimatedDelivery },
+            ],
+          },
+        ],
+        notes: delivery.notes ? [{ label: 'Notes', text: delivery.notes, tone: 'gray' }] : undefined,
+        tables: [
+          {
+            title: `Shipment Contents (${totalItems} items)`,
+            head: ['Product', 'SKU', 'Qty'],
+            rows: delivery.items.map((item) => [item.productName, item.sku, item.quantity]),
+            colStyles: { 2: { halign: 'center' } },
+            footRow: [{ content: 'Total Items', colSpan: 2, styles: { halign: 'right' } }, totalItems],
+          },
+        ],
+        timeline: delivery.timeline.map((event) => ({
+          title: event.step.replace('_', ' ').replace(/^\w/, (c) => c.toUpperCase()),
+          text: event.note,
+          meta: `${event.timestamp}${event.completedBy ? ` · by ${event.completedBy}` : ''}`,
+        })),
+        footerLeft: `${delivery.fromWarehouse} → ${delivery.toWarehouse}`,
+      },
+      `${delivery.id}.pdf`
+    );
+  };
+
   const handleAdvance = () => {
     if (!nextStep) return;
     onAdvance(delivery.id, nextStep, note || `Moved to ${nextStep}`, photo || undefined);
@@ -82,9 +122,14 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
               {delivery.toWarehouse}
             </p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
-            <i className="ri-close-line text-lg"></i>
-          </button>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button onClick={handleDownloadPdf} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer whitespace-nowrap">
+              <i className="ri-file-pdf-2-line"></i>Download PDF
+            </button>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
+              <i className="ri-close-line text-lg"></i>
+            </button>
+          </div>
         </div>
 
         <div className="px-8 py-5 border-b border-gray-100 shrink-0">

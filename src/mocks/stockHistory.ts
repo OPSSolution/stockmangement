@@ -1,4 +1,4 @@
-export type StockChangeType = 'sale' | 'purchase' | 'transfer_in' | 'transfer_out' | 'return' | 'adjustment';
+export type StockChangeType = 'sale' | 'purchase' | 'transfer_in' | 'transfer_out' | 'return' | 'adjustment' | 'request';
 
 export interface StockHistoryEntry {
   id: string;

@@ -35,8 +35,11 @@ function sumInto(reserved: Record<string, number>, items: LineItem[] | null | un
 export async function getReservedQuantities(exclude: ReservationExclusions = {}): Promise<Record<string, number>> {
   const reserved: Record<string, number> = {};
 
+  // Requests: stock is deducted the moment a request is approved, so only
+  // 'pending' ones are still just a promise against real stock — an 'approved'
+  // request is already baked into products.stock and must not be counted here too.
   const [{ data: requests }, { data: orders }, { data: transfers }, { data: deliveries }] = await Promise.all([
-    supabase.from('stock_requests').select('id, items').in('status', ['pending', 'approved']),
+    supabase.from('stock_requests').select('id, items').eq('status', 'pending'),
     supabase.from('orders').select('id, vendor_splits').in('status', ['pending', 'accepted', 'partial', 'processing']),
     supabase.from('transfers').select('id, items').in('status', ['requested', 'approved', 'in_transit']),
     supabase.from('deliveries').select('id, items_detail').in('status', ['prepare', 'ready', 'in_transit']),
@@ -46,10 +49,15 @@ export async function getReservedQuantities(exclude: ReservationExclusions = {})
     .filter((r) => r.id !== exclude.excludeRequestId)
     .forEach((r) => sumInto(reserved, r.items as LineItem[]));
 
+  // Orders decide per line item — an 'accepted' item is deducted immediately on
+  // confirm (see OrderDetailModal.handleConfirm), so only still-'pending' items
+  // (including the undecided remainder of a 'partial' order) are still just reserved.
   (orders || [])
     .filter((o) => o.id !== exclude.excludeOrderId)
     .forEach((o) => {
-      ((o.vendor_splits as { items?: LineItem[] }[]) || []).forEach((split) => sumInto(reserved, split.items));
+      ((o.vendor_splits as { items?: (LineItem & { status?: string })[] }[]) || []).forEach((split) =>
+        sumInto(reserved, (split.items || []).filter((i) => i.status === 'pending'))
+      );
     });
 
   (transfers || [])
@@ -63,9 +71,13 @@ export async function getReservedQuantities(exclude: ReservationExclusions = {})
   return reserved;
 }
 
-/** Non-negative units of a product not already promised to another pending request/order/transfer. */
-export function availableStock(stock: number, reserved: Record<string, number>, productId: string): number {
-  return Math.max(0, stock - (reserved[productId] || 0));
+/**
+ * Non-negative units of a product not already promised to another pending
+ * request/order/transfer, and not sitting on hold (damaged/unusable returns —
+ * counted in `stock` but never requestable/sellable until someone resolves them).
+ */
+export function availableStock(stock: number, reserved: Record<string, number>, productId: string, onHoldStock = 0): number {
+  return Math.max(0, stock - (reserved[productId] || 0) - onHoldStock);
 }
 
 export interface ReservationDetail {
@@ -84,7 +96,7 @@ export async function getReservationDetailsForProduct(productId: string): Promis
   const details: ReservationDetail[] = [];
 
   const [{ data: requests }, { data: orders }, { data: transfers }, { data: deliveries }] = await Promise.all([
-    supabase.from('stock_requests').select('id, items, status').in('status', ['pending', 'approved']),
+    supabase.from('stock_requests').select('id, items, status').eq('status', 'pending'),
     supabase.from('orders').select('id, vendor_splits, status').in('status', ['pending', 'accepted', 'partial', 'processing']),
     supabase.from('transfers').select('id, items, status').in('status', ['requested', 'approved', 'in_transit']),
     supabase.from('deliveries').select('id, items_detail, status').in('status', ['prepare', 'ready', 'in_transit']),
@@ -96,8 +108,9 @@ export async function getReservationDetailsForProduct(productId: string): Promis
   });
 
   (orders || []).forEach((o) => {
-    const quantity = ((o.vendor_splits as { items?: LineItem[] }[]) || [])
-      .reduce((sum, split) => sum + qtyForProduct(split.items, productId), 0);
+    const pendingItems = ((o.vendor_splits as { items?: (LineItem & { status?: string })[] }[]) || [])
+      .flatMap((split) => (split.items || []).filter((i) => i.status === 'pending'));
+    const quantity = qtyForProduct(pendingItems, productId);
     if (quantity > 0) details.push({ source: 'Order', id: o.id, status: o.status, quantity });
   });
 

@@ -1,6 +1,7 @@
 import type { StockTransfer, TransferStatus } from '@/mocks/transfers';
 import TransferStatusBadge from './TransferStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { downloadPdf } from '@/lib/exportPdf';
 
 interface TransferDetailModalProps {
   transfer: StockTransfer;
@@ -42,6 +43,56 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
 
   const totalValue = transfer.items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
 
+  const handleDownloadPdf = () => {
+    downloadPdf(
+      {
+        docType: 'Stock Transfer',
+        docId: transfer.id,
+        status: transfer.status,
+        subtitle: `${transfer.fromWarehouse} → ${transfer.toWarehouse}`,
+        infoBoxes: [
+          {
+            title: 'Transfer Info',
+            rows: [
+              { label: 'Requested by', value: transfer.requestedBy },
+              ...(transfer.approvedBy ? [{ label: 'Approved by', value: transfer.approvedBy }] : []),
+              { label: 'Created', value: transfer.createdAt },
+              ...(transfer.expectedArrival ? [{ label: 'Expected', value: transfer.expectedArrival }] : []),
+              ...(transfer.completedAt ? [{ label: 'Completed', value: transfer.completedAt }] : []),
+            ],
+          },
+          {
+            title: 'Summary',
+            rows: [
+              { label: 'Total SKUs', value: String(transfer.items.length) },
+              { label: 'Total Units', value: String(transfer.totalItems) },
+              { label: 'Est. Value', value: formatAmount(totalValue) },
+              { label: 'Reason', value: transfer.reason },
+            ],
+          },
+        ],
+        notes: transfer.notes ? [{ label: 'Notes', text: transfer.notes, tone: 'amber' }] : undefined,
+        tables: [
+          {
+            title: 'Transfer Items',
+            head: ['Product', 'SKU', 'Qty', 'Unit Price', 'Total'],
+            rows: transfer.items.map((item) => [
+              item.productName,
+              item.sku,
+              item.quantity,
+              formatAmount(item.unitPrice),
+              formatAmount(item.quantity * item.unitPrice),
+            ]),
+            colStyles: { 2: { halign: 'center' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+            footRow: [{ content: 'Total Value', colSpan: 4, styles: { halign: 'right' } }, formatAmount(totalValue)],
+          },
+        ],
+        footerLeft: `Requested by ${transfer.requestedBy}`,
+      },
+      `${transfer.id}.pdf`
+    );
+  };
+
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div
@@ -61,9 +112,14 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
               <span className="font-medium text-gray-700">{transfer.toWarehouse}</span>
             </p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors cursor-pointer ml-4">
-            <i className="ri-close-line text-gray-500"></i>
-          </button>
+          <div className="flex items-center gap-1.5 flex-shrink-0 ml-4">
+            <button onClick={handleDownloadPdf} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap">
+              <i className="ri-file-pdf-2-line"></i>Download PDF
+            </button>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
+              <i className="ri-close-line text-gray-500"></i>
+            </button>
+          </div>
         </div>
 
         <div className="px-6 py-5 space-y-6">

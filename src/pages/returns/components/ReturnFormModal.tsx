@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReturnItem, ReturnReason, ReturnRequest, ReturnStatus } from '@/mocks/returns';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 
@@ -28,32 +29,27 @@ interface Props {
   presetRequestId?: string;
   onClose: () => void;
   onSave: (ret: ReturnRequest) => void;
+  /** The status currently being saved, or null when idle — lets only the button that was actually clicked show its loading state, while the rest just get disabled. */
+  submittingAction?: ReturnStatus | null;
 }
 
 const inputClass = 'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300';
 
-const statusOptions: { value: ReturnStatus; label: string }[] = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'inspecting', label: 'Inspecting' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'restocked', label: 'Restocked' },
-  { value: 'discarded', label: 'Discarded' },
-];
-
-const reasonOptions: { value: ReturnReason; label: string }[] = [
-  { value: 'photoshoot', label: 'Used for Photoshoot/Project' },
-  { value: 'excess', label: 'Excess / Not Used' },
-  { value: 'damaged', label: 'Damaged During Use' },
-  { value: 'consignment', label: 'Borrowed (Consignment)' },
-  { value: 'other', label: 'Other' },
-];
-
-export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave }: Props) {
+export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave, submittingAction }: Props) {
+  const submitting = submittingAction != null;
+  // Once a return has actually been decided, it's done — re-confirming is a no-op
+  // (guarded server-side) but Reject would flip the record to 'discarded' without
+  // reversing stock that's already been added, leaving them out of sync. Terminal
+  // returns are read-only here; edit/confirm/reject cease to be legitimate.
+  const isTerminal = !!ret && (ret.status === 'restocked' || ret.status === 'discarded');
   const { formatAmount } = useCurrency();
+  const { isAdmin } = useAuth();
   const [form, setForm] = useState({
     returnedBy: ret?.returnedBy ?? '',
-    status: ret?.status ?? 'pending' as ReturnStatus,
-    reason: ret?.reason ?? 'photoshoot' as ReturnReason,
+    // No Reason field in the UI anymore — per-item Condition (Good/Damaged) already
+    // captures what matters for stock. Kept in state only to satisfy the DB's
+    // required, constrained `reason` column without a schema change.
+    reason: ret?.reason ?? 'other' as ReturnReason,
     reasonNote: ret?.reasonNote ?? '',
     warehouse: ret?.warehouse ?? '',
     assignedTo: ret?.assignedTo ?? '',
@@ -190,7 +186,16 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
     }));
   };
 
-  const handleSubmit = () => {
+  // Good/New/Fair go straight back to available stock; Damaged/Defective are still
+  // counted in stock but placed on hold — see restockReturnedItems in stockDeduction.ts.
+  const setItemGood = (productId: string, good: boolean) => {
+    setForm((prev) => ({
+      ...prev,
+      items: prev.items.map((i) => (i.productId === productId ? { ...i, condition: good ? 'good' : 'damaged' } : i)),
+    }));
+  };
+
+  const handleFinalize = (status: ReturnStatus) => {
     if (!form.requestId) {
       setError('Select the stock request this return is for.');
       return;
@@ -210,15 +215,23 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
       return;
     }
 
+    // Confirming decides real stock right away — every item needs a Good/Not Good
+    // call first so there's no ambiguity about which pile it lands in.
+    if (status === 'restocked' && form.items.some((item) => !item.condition)) {
+      setError('Mark every item Good or Not Good before confirming.');
+      return;
+    }
+
+    setError('');
     const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
-    const completedAt = ['restocked', 'discarded'].includes(form.status)
+    const completedAt = ['restocked', 'discarded'].includes(status)
       ? form.completedAt || ret?.completedAt || now
       : undefined;
 
     onSave({
       id: ret?.id || '',
       returnedBy: form.returnedBy.trim(),
-      status: form.status,
+      status,
       items: form.items.map((item) => ({
         ...item,
         productId: item.productId.trim() || item.sku.trim(),
@@ -254,7 +267,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
           </button>
         </div>
 
-        <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+        <form onSubmit={(e) => e.preventDefault()} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           <section className="rounded-2xl border border-emerald-100 bg-emerald-50/30 p-4 space-y-2">
             <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wider">Stock Request</p>
             <select
@@ -294,28 +307,12 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Return details</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Status</label>
-                <select value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as ReturnStatus }))} className={inputClass}>
-                  {statusOptions.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
-                </select>
-              </div>
-              <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Returned By</label>
                 <input value={form.returnedBy} disabled className={`${inputClass} bg-gray-50 text-gray-500`} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Warehouse</label>
                 <input value={form.warehouse} disabled className={`${inputClass} bg-gray-50 text-gray-500`} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Reason</label>
-                <select value={form.reason} onChange={(e) => setForm((prev) => ({ ...prev, reason: e.target.value as ReturnReason }))} className={inputClass}>
-                  {reasonOptions.map((reason) => <option key={reason.value} value={reason.value}>{reason.label}</option>)}
-                </select>
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Reason Note</label>
-                <textarea value={form.reasonNote} onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))} rows={1} placeholder="Optional note" className={`${inputClass} resize-none`} />
               </div>
             </div>
           </section>
@@ -342,11 +339,11 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
                       key={reqItem.productId}
                       className={`rounded-xl border px-3 py-2.5 ${fullyReturned ? 'bg-gray-50 border-gray-100' : checked ? 'border-emerald-200 bg-emerald-50/20' : 'border-gray-100'}`}
                     >
-                      <label className={`flex items-center gap-3 ${fullyReturned ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                      <label className={`flex items-center gap-3 ${fullyReturned || isTerminal ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={fullyReturned}
+                          disabled={fullyReturned || isTerminal}
                           onChange={() => toggleItem(reqItem)}
                           className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-400 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
                         />
@@ -379,6 +376,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
                               min={1}
                               max={reqItem.remaining}
                               value={formItem.quantity === 0 ? '' : formItem.quantity}
+                              disabled={isTerminal}
                               onChange={(e) => {
                                 // Don't clamp while typing — backspacing to retype a smaller
                                 // number would otherwise get forced back to 1 on every keystroke.
@@ -390,7 +388,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
                                 const clamped = Math.min(Math.max(1, Number(e.target.value) || 1), reqItem.remaining);
                                 updateItemQty(reqItem.productId, clamped);
                               }}
-                              className={inputClass}
+                              className={`${inputClass} disabled:opacity-60 disabled:cursor-not-allowed`}
                             />
                           </div>
                           <div className="w-32">
@@ -400,10 +398,42 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
                               min={0}
                               step="0.01"
                               value={formItem.unitPrice}
+                              disabled={isTerminal}
                               onChange={(e) => updateItemPrice(reqItem.productId, Math.max(0, Number(e.target.value) || 0))}
-                              className={inputClass}
+                              className={`${inputClass} disabled:opacity-60 disabled:cursor-not-allowed`}
                             />
                           </div>
+                          <div>
+                            <label className="block text-[10px] font-medium text-gray-500 mb-1">Condition</label>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setItemGood(reqItem.productId, true)}
+                                disabled={isTerminal}
+                                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all disabled:cursor-not-allowed ${isTerminal ? '' : 'cursor-pointer'} ${formItem.condition === 'good' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
+                              >
+                                ✅ Good
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setItemGood(reqItem.productId, false)}
+                                disabled={isTerminal}
+                                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all disabled:cursor-not-allowed ${isTerminal ? '' : 'cursor-pointer'} ${formItem.condition === 'damaged' ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
+                              >
+                                ❌ Damaged
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {checked && formItem && formItem.condition && (
+                        <div className="mt-1.5 pl-7">
+                          <p className="text-[10px] font-medium text-gray-500 mb-1">Stock Status</p>
+                          {formItem.condition === 'good' ? (
+                            <p className="text-xs text-emerald-700">🟢 Available (can be sold/used)</p>
+                          ) : (
+                            <p className="text-xs text-amber-700">🟡 On Hold (cannot be sold/used)</p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -419,17 +449,68 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave 
 
           <section>
             <label className="block text-xs font-medium text-gray-500 mb-1.5">Inspection Notes</label>
-            <textarea value={form.inspectionNotes} onChange={(e) => setForm((prev) => ({ ...prev, inspectionNotes: e.target.value }))} rows={3} placeholder="Condition of the returned stock, or any remarks" className={`${inputClass} resize-none`} />
+            <textarea value={form.inspectionNotes} onChange={(e) => setForm((prev) => ({ ...prev, inspectionNotes: e.target.value }))} rows={3} disabled={isTerminal} placeholder="Condition of the returned stock, or any remarks" className={`${inputClass} resize-none disabled:opacity-60 disabled:cursor-not-allowed`} />
           </section>
 
           {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-3">{error}</div>}
         </form>
 
         <div className="px-6 py-4 border-t border-gray-100 shrink-0 flex items-center justify-between">
-          <p className="text-xs text-gray-400">{ret ? 'Save changes to this return' : 'Create return request'}</p>
+          <p className="text-xs text-gray-400">
+            {isTerminal
+              ? 'This return has already been decided — read-only.'
+              : !ret
+              ? 'Create the return first — an admin decides Confirm or Reject afterward.'
+              : isAdmin
+              ? 'Confirm applies the Good/Not Good decision to stock right away. Reject leaves stock untouched.'
+              : 'Saved for an admin to confirm or reject.'}
+          </p>
           <div className="flex items-center gap-3">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">Cancel</button>
-            <button type="submit" onClick={handleSubmit} className="px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 cursor-pointer">{ret ? 'Save Changes' : 'Create Return'}</button>
+            <button type="button" onClick={onClose} disabled={submitting} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer">
+              {isTerminal ? 'Close' : 'Cancel'}
+            </button>
+            {isTerminal ? null : !ret ? (
+              <button
+                type="button"
+                onClick={() => handleFinalize('pending')}
+                disabled={submitting}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {submittingAction === 'pending' && <i className="ri-loader-4-line animate-spin"></i>}
+                {submittingAction === 'pending' ? 'Creating…' : 'Create Return'}
+              </button>
+            ) : isAdmin ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleFinalize('discarded')}
+                  disabled={submitting}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {submittingAction === 'discarded' ? <i className="ri-loader-4-line animate-spin"></i> : <i className="ri-close-circle-line"></i>}
+                  {submittingAction === 'discarded' ? 'Rejecting…' : 'Reject'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleFinalize('restocked')}
+                  disabled={submitting}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {submittingAction === 'restocked' ? <i className="ri-loader-4-line animate-spin"></i> : <i className="ri-checkbox-circle-line"></i>}
+                  {submittingAction === 'restocked' ? 'Confirming…' : 'Confirm'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleFinalize('pending')}
+                disabled={submitting}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {submittingAction === 'pending' && <i className="ri-loader-4-line animate-spin"></i>}
+                {submittingAction === 'pending' ? 'Saving…' : 'Save Changes'}
+              </button>
+            )}
           </div>
         </div>
       </div>

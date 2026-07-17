@@ -255,7 +255,12 @@ export default function RolesPage() {
         </div>
 
         {/* Roles list */}
-        {roles.length === 0 ? (
+        {loading ? (
+          <div className="text-center py-20 text-gray-400">
+            <i className="ri-loader-4-line animate-spin text-3xl mb-2 block"></i>
+            <p className="text-sm">Loading roles…</p>
+          </div>
+        ) : roles.length === 0 ? (
           <div className="text-center py-20 text-gray-400">
             <i className="ri-shield-user-line text-4xl mb-2 block"></i>
             <p className="text-sm">No roles yet. Run the SQL migration first, then create roles.</p>

@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ReturnRequest, ReturnStatus, ReturnCondition } from '@/mocks/returns';
+import type { ReturnRequest, ReturnCondition } from '@/mocks/returns';
 import ReturnStatusBadge from './ReturnStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
+import { restockReturnedItems } from '@/lib/stockDeduction';
+import { downloadPdf } from '@/lib/exportPdf';
 
 interface Props {
   ret: ReturnRequest;
@@ -11,9 +14,11 @@ interface Props {
   history?: ReturnRequest[];
   onSelectReturn?: (ret: ReturnRequest) => void;
   onClose: () => void;
-  onUpdate: (id: string, updates: Partial<ReturnRequest>) => void;
+  onUpdate: (id: string, updates: Partial<ReturnRequest>) => void | Promise<void>;
   onCreateFollowUp: (requestId: string) => void;
 }
+
+const GOOD_CONDITIONS: ReturnCondition[] = ['new', 'good', 'fair'];
 
 const conditionOptions: { value: ReturnCondition; label: string; color: string }[] = [
   { value: 'new', label: 'New / Sealed', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
@@ -31,11 +36,6 @@ const reasonLabels: Record<string, string> = {
   other: 'Other',
 };
 
-const nextStatusMap: Partial<Record<ReturnStatus, { status: ReturnStatus; label: string; icon: string; color: string }>> = {
-  pending: { status: 'inspecting', label: 'Start Inspection', icon: 'ri-search-eye-line', color: 'bg-sky-500 hover:bg-sky-600' },
-  inspecting: { status: 'approved', label: 'Approve Return', icon: 'ri-checkbox-circle-line', color: 'bg-violet-500 hover:bg-violet-600' },
-};
-
 interface RequestProgressItem {
   productId: string;
   productName: string;
@@ -47,10 +47,16 @@ interface RequestProgressItem {
 
 export default function ReturnDetailModal({ ret, history, onSelectReturn, onClose, onUpdate, onCreateFollowUp }: Props) {
   const { formatAmount } = useCurrency();
+  const { isAdmin } = useAuth();
   const [items, setItems] = useState(ret.items);
   const [inspectionNotes, setInspectionNotes] = useState(ret.inspectionNotes ?? '');
   const [assignedTo] = useState(ret.assignedTo ?? 'Admin');
   const [progress, setProgress] = useState<RequestProgressItem[] | null>(null);
+  // Which specific action is in flight — lets only the button that was actually
+  // clicked show its loading state, while the rest just get disabled.
+  const [finalizingAction, setFinalizingAction] = useState<'restocked' | 'discarded' | 'saving' | null>(null);
+  const finalizing = finalizingAction != null;
+  const [finalizeError, setFinalizeError] = useState('');
 
   // Always show how much of the source request has been claimed by a return so
   // far (this one plus any others) and how much is still outstanding — this is
@@ -85,11 +91,18 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
     setItems((prev) => prev.map((item, i) => i === idx ? { ...item, condition } : item));
   };
 
-  const nextAction = nextStatusMap[ret.status];
-  const isEditable = ret.status === 'pending' || ret.status === 'inspecting';
+  const isEditable = ret.status === 'pending' || ret.status === 'inspecting' || ret.status === 'approved';
   const totalRequested = progress?.reduce((s, i) => s + i.requestedQty, 0) ?? 0;
   const totalReturned = progress?.reduce((s, i) => s + i.returnedQty, 0) ?? 0;
   const unitsLeft = totalRequested - totalReturned;
+
+  // Every not-yet-finalized return on this request — Confirm/Reject decide all of
+  // them in one click instead of making the admin open and process each separately.
+  const openReturns = useMemo(() => {
+    const list = history && history.length > 0 ? history : [ret];
+    const others = list.filter((h) => h.id !== ret.id && h.status !== 'restocked' && h.status !== 'discarded');
+    return ['restocked', 'discarded'].includes(ret.status) ? others : [ret, ...others];
+  }, [history, ret]);
 
   // For each return in the history, work out — per product — how many were
   // returned in that specific event and how many were still outstanding right
@@ -113,29 +126,109 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
     }));
   }, [history, progress]);
 
-  const handleAction = () => {
-    if (!nextAction) return;
+  // Save condition/notes edits on the current return without deciding it yet —
+  // the only action a non-admin gets, since only an admin can Confirm/Reject.
+  const saveChanges = async () => {
+    setFinalizingAction('saving');
     const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
-    onUpdate(ret.id, {
-      status: nextAction.status,
+    await onUpdate(ret.id, {
       items,
       inspectionNotes: inspectionNotes || undefined,
       assignedTo,
       updatedAt: now,
     });
+    setFinalizingAction(null);
     onClose();
   };
 
-  const finalize = (status: 'restocked' | 'discarded') => {
+  const finalize = async (status: 'restocked' | 'discarded') => {
+    setFinalizeError('');
+    setFinalizingAction(status);
     const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
-    onUpdate(ret.id, {
-      status,
-      items,
-      inspectionNotes: inspectionNotes || undefined,
-      completedAt: now,
-      updatedAt: now,
-    });
+
+    // One click decides every not-yet-finalized return on this request, not just
+    // the one currently open — the current return uses whatever's been edited in
+    // this session, every other one uses its own already-saved items/condition.
+    if (status === 'restocked') {
+      for (const target of openReturns) {
+        const targetItems = target.id === ret.id ? items : target.items;
+        const targetNote = target.id === ret.id ? inspectionNotes : target.inspectionNotes;
+        const { error } = await restockReturnedItems(
+          targetItems.map((i) => ({ productId: i.productId, quantity: i.quantity, condition: i.condition, note: targetNote })),
+          { reference: target.id, userName: assignedTo }
+        );
+        if (error) {
+          setFinalizingAction(null);
+          setFinalizeError(`${target.id}: ${error}`);
+          return;
+        }
+      }
+    }
+
+    for (const target of openReturns) {
+      const targetItems = target.id === ret.id ? items : target.items;
+      await onUpdate(target.id, {
+        status,
+        items: targetItems,
+        inspectionNotes: target.id === ret.id ? (inspectionNotes || undefined) : target.inspectionNotes,
+        completedAt: now,
+        updatedAt: now,
+      });
+    }
+    setFinalizingAction(null);
     onClose();
+  };
+
+  const handleDownloadPdf = () => {
+    downloadPdf(
+      {
+        docType: 'Return',
+        docId: ret.id,
+        status: ret.status,
+        subtitle: `Request ${ret.requestId} · ${ret.returnedBy}`,
+        infoBoxes: [
+          {
+            title: 'Returned By',
+            rows: [
+              { label: 'Staff', value: ret.returnedBy },
+              { label: 'Warehouse', value: ret.warehouse },
+              { label: 'Linked Request', value: ret.requestId },
+            ],
+          },
+          {
+            title: 'Return Details',
+            rows: [
+              { label: 'Reason', value: reasonLabels[ret.reason] || ret.reason },
+              { label: 'Stock Value', value: formatAmount(ret.totalValue) },
+              { label: 'Submitted', value: ret.createdAt },
+              ...(ret.completedAt ? [{ label: 'Completed', value: ret.completedAt }] : []),
+            ],
+          },
+        ],
+        notes: [
+          ...(ret.reasonNote ? [{ label: 'Reason Note', text: ret.reasonNote, tone: 'amber' as const }] : []),
+          ...(ret.inspectionNotes ? [{ label: 'Inspection Notes', text: ret.inspectionNotes, tone: 'gray' as const }] : []),
+        ],
+        tables: [
+          {
+            title: 'Returned Items',
+            head: ['Product', 'SKU', 'Qty', 'Condition', 'Unit Price', 'Total'],
+            rows: items.map((item) => [
+              item.productName,
+              item.sku,
+              item.quantity,
+              conditionOptions.find((c) => c.value === item.condition)?.label || '—',
+              formatAmount(item.unitPrice),
+              formatAmount(item.quantity * item.unitPrice),
+            ]),
+            colStyles: { 2: { halign: 'center' }, 4: { halign: 'right' }, 5: { halign: 'right' } },
+            footRow: [{ content: 'Stock Value', colSpan: 5, styles: { halign: 'right' } }, formatAmount(ret.totalValue)],
+          },
+        ],
+        footerLeft: `Returned by ${ret.returnedBy}`,
+      },
+      `${ret.id}.pdf`
+    );
   };
 
   return (
@@ -154,9 +247,14 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
               <span className="font-medium text-gray-700">{ret.returnedBy}</span>
             </p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer ml-4">
-            <i className="ri-close-line text-gray-500"></i>
-          </button>
+          <div className="flex items-center gap-1.5 flex-shrink-0 ml-4">
+            <button onClick={handleDownloadPdf} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer whitespace-nowrap">
+              <i className="ri-file-pdf-2-line"></i>Download PDF
+            </button>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer">
+              <i className="ri-close-line text-gray-500"></i>
+            </button>
+          </div>
         </div>
 
         <div className="px-6 py-5 space-y-6">
@@ -288,12 +386,25 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
                           </button>
                         ))}
                       </div>
+                      {item.condition && !GOOD_CONDITIONS.includes(item.condition) && (
+                        <p className="text-xs text-orange-600 mt-1.5">
+                          <i className="ri-forbid-2-line mr-1"></i>
+                          Counted in stock but placed on hold — not usable until resolved.
+                        </p>
+                      )}
                     </div>
                   ) : (
                     item.condition && (
-                      <span className={`px-2.5 py-1 text-xs font-medium rounded-full border ${conditionOptions.find((c) => c.value === item.condition)?.color ?? 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-                        {conditionOptions.find((c) => c.value === item.condition)?.label}
-                      </span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`px-2.5 py-1 text-xs font-medium rounded-full border ${conditionOptions.find((c) => c.value === item.condition)?.color ?? 'bg-gray-100 text-gray-600 border-gray-200'}`}>
+                          {conditionOptions.find((c) => c.value === item.condition)?.label}
+                        </span>
+                        {ret.status === 'restocked' && !GOOD_CONDITIONS.includes(item.condition) && (
+                          <span className="text-xs text-orange-600 font-medium">
+                            <i className="ri-forbid-2-line mr-1"></i>On hold — not usable
+                          </span>
+                        )}
+                      </div>
                     )
                   )}
                 </div>
@@ -327,35 +438,50 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100">
-          <div className="flex gap-2">
-            {ret.status === 'approved' && (
-              <>
-                <button
-                  onClick={() => finalize('restocked')}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-archive-stack-line"></i>Mark Restocked
-                </button>
-                <button
-                  onClick={() => finalize('discarded')}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-delete-bin-line"></i>Mark Discarded
-                </button>
-              </>
+          <div className="flex flex-col gap-1.5">
+            {finalizeError && (
+              <p className="text-xs text-red-600 max-w-xs">
+                <i className="ri-error-warning-line mr-1"></i>{finalizeError}
+              </p>
+            )}
+            {isEditable && isAdmin && openReturns.length > 1 && (
+              <p className="text-xs text-gray-400">Confirm/Reject will decide all {openReturns.length} open returns on this request.</p>
             )}
           </div>
           <div className="flex items-center gap-3 ml-auto">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap">
+            <button onClick={onClose} disabled={finalizing} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap">
               Close
             </button>
-            {nextAction && (
-              <button
-                onClick={handleAction}
-                className={`flex items-center gap-1.5 px-5 py-2 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${nextAction.color}`}
-              >
-                <i className={nextAction.icon}></i>{nextAction.label}
-              </button>
+            {isEditable && (
+              isAdmin ? (
+                <>
+                  <button
+                    onClick={() => finalize('discarded')}
+                    disabled={finalizing}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                  >
+                    {finalizingAction === 'discarded' ? <i className="ri-loader-4-line animate-spin"></i> : <i className="ri-close-circle-line"></i>}
+                    {finalizingAction === 'discarded' ? 'Rejecting…' : 'Reject'}
+                  </button>
+                  <button
+                    onClick={() => finalize('restocked')}
+                    disabled={finalizing}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                  >
+                    {finalizingAction === 'restocked' ? <i className="ri-loader-4-line animate-spin"></i> : <i className="ri-checkbox-circle-line"></i>}
+                    {finalizingAction === 'restocked' ? 'Confirming…' : 'Confirm'}
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={saveChanges}
+                  disabled={finalizing}
+                  className="flex items-center gap-1.5 px-5 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                >
+                  {finalizingAction === 'saving' && <i className="ri-loader-4-line animate-spin"></i>}
+                  {finalizingAction === 'saving' ? 'Saving…' : 'Save Changes'}
+                </button>
+              )
             )}
           </div>
         </div>

@@ -158,6 +158,13 @@ export default function WarehousesPage() {
         )}
       </div>
 
+      {loading && (
+        <div className="text-center py-16 text-gray-400">
+          <i className="ri-loader-4-line animate-spin text-3xl mb-2 block"></i>
+          <p className="text-sm">Loading warehouses…</p>
+        </div>
+      )}
+
       {!loading && warehouses.length === 0 && (
         <div className="text-center py-16 text-gray-400">
           <i className="ri-building-2-line text-4xl mb-2 block"></i>

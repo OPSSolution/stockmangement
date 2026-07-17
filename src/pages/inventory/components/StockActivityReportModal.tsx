@@ -10,7 +10,6 @@ interface StockActivityReportModalProps {
   onClose: () => void;
 }
 
-type Period = 'this_month' | 'last_month' | 'this_week' | 'all' | 'custom';
 type Tab = 'by_product' | 'ledger';
 
 function formatDateTime(ts: string) {
@@ -19,15 +18,34 @@ function formatDateTime(ts: string) {
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function formatDateShort(iso: string) {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function toInputDate(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function csvEscape(value: string) {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
+const TYPE_ORDER: StockHistoryEntry['type'][] = ['transfer_in', 'transfer_out', 'purchase', 'sale', 'request', 'return', 'adjustment'];
+
+const REPORT_LABEL_OVERRIDES: Partial<Record<StockHistoryEntry['type'], string>> = {
+  purchase: 'Order',
+  sale: 'Deliveries',
+};
+
+function reportLabel(type: StockHistoryEntry['type'] | string) {
+  return REPORT_LABEL_OVERRIDES[type as StockHistoryEntry['type']] ?? typeConfig[type]?.label ?? type;
+}
+
 export default function StockActivityReportModal({ products, history, warehouses, onClose }: StockActivityReportModalProps) {
   const [tab, setTab] = useState<Tab>('by_product');
-  const [period, setPeriod] = useState<Period>('this_month');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
+  const [dateFrom, setDateFrom] = useState(() => toInputDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
+  const [dateTo, setDateTo] = useState(() => toInputDate(new Date()));
   const [filterWarehouse, setFilterWarehouse] = useState('all');
   const [filterType, setFilterType] = useState<'all' | StockHistoryEntry['type']>('all');
   const [search, setSearch] = useState('');
@@ -39,36 +57,22 @@ export default function StockActivityReportModal({ products, history, warehouses
   }, [products]);
 
   const periodLabel = useMemo(() => {
-    const now = new Date();
-    if (period === 'this_month') return now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-    if (period === 'last_month') return new Date(now.getFullYear(), now.getMonth() - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
-    if (period === 'this_week') return 'Last 7 days';
-    if (period === 'custom') return customStart && customEnd ? `${customStart} → ${customEnd}` : 'Custom range';
-    return 'All time';
-  }, [period, customStart, customEnd]);
+    if (!dateFrom && !dateTo) return 'All time';
+    if (dateFrom && dateTo) return `${formatDateShort(dateFrom)} – ${formatDateShort(dateTo)}`;
+    if (dateFrom) return `From ${formatDateShort(dateFrom)}`;
+    return `Through ${formatDateShort(dateTo)}`;
+  }, [dateFrom, dateTo]);
 
   const filtered = useMemo(() => {
-    const now = new Date();
     return history.filter((h) => {
       const d = new Date(h.timestamp);
 
-      let inPeriod = true;
-      if (period === 'this_week') {
-        const cutoff = new Date(now);
-        cutoff.setDate(now.getDate() - 7);
-        inPeriod = d >= cutoff;
-      } else if (period === 'this_month') {
-        inPeriod = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-      } else if (period === 'last_month') {
-        const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        inPeriod = d.getFullYear() === lm.getFullYear() && d.getMonth() === lm.getMonth();
-      } else if (period === 'custom' && customStart && customEnd) {
-        const start = new Date(customStart);
-        const end = new Date(customEnd);
+      if (dateFrom && d < new Date(dateFrom)) return false;
+      if (dateTo) {
+        const end = new Date(dateTo);
         end.setHours(23, 59, 59, 999);
-        inPeriod = d >= start && d <= end;
+        if (d > end) return false;
       }
-      if (!inPeriod) return false;
 
       if (filterWarehouse !== 'all' && h.warehouse !== filterWarehouse) return false;
       if (filterType !== 'all' && h.type !== filterType) return false;
@@ -81,35 +85,40 @@ export default function StockActivityReportModal({ products, history, warehouses
 
       return true;
     });
-  }, [history, period, customStart, customEnd, filterWarehouse, filterType, search, productMap]);
+  }, [history, dateFrom, dateTo, filterWarehouse, filterType, search, productMap]);
 
   const totals = useMemo(() => {
-    const added = filtered.filter((h) => h.quantity > 0).reduce((s, h) => s + h.quantity, 0);
-    const removed = filtered.filter((h) => h.quantity < 0).reduce((s, h) => s + Math.abs(h.quantity), 0);
-    return { added, removed, net: added - removed, movements: filtered.length };
+    const net = filtered.reduce((s, h) => s + h.quantity, 0);
+    return { net, movements: filtered.length };
   }, [filtered]);
 
+  const typeTotals = useMemo(() => {
+    const map = new Map<string, number>();
+    filtered.forEach((h) => map.set(h.type, (map.get(h.type) ?? 0) + h.quantity));
+    return TYPE_ORDER.filter((t) => map.has(t)).map((t) => ({ type: t, total: map.get(t)! }));
+  }, [filtered]);
+
+  const activeTypes = useMemo(() => typeTotals.map((t) => t.type), [typeTotals]);
+
+  const cardsTotal = useMemo(
+    () => typeTotals.filter((t) => t.type !== 'adjustment').reduce((s, t) => s + t.total, 0),
+    [typeTotals]
+  );
+
   const byProduct = useMemo(() => {
-    const map = new Map<string, { productId: string; warehouse: string; added: number; removed: number; movements: number; lastActivity: string }>();
+    const map = new Map<string, { productId: string; warehouse: string; typeTotals: Partial<Record<StockHistoryEntry['type'], number>>; movements: number; lastActivity: string; volume: number }>();
     filtered.forEach((h) => {
-      const existing = map.get(h.productId);
+      let existing = map.get(h.productId);
       if (!existing) {
-        map.set(h.productId, {
-          productId: h.productId,
-          warehouse: h.warehouse,
-          added: h.quantity > 0 ? h.quantity : 0,
-          removed: h.quantity < 0 ? Math.abs(h.quantity) : 0,
-          movements: 1,
-          lastActivity: h.timestamp,
-        });
-      } else {
-        if (h.quantity > 0) existing.added += h.quantity;
-        else existing.removed += Math.abs(h.quantity);
-        existing.movements += 1;
-        if (new Date(h.timestamp) > new Date(existing.lastActivity)) existing.lastActivity = h.timestamp;
+        existing = { productId: h.productId, warehouse: h.warehouse, typeTotals: {}, movements: 0, lastActivity: h.timestamp, volume: 0 };
+        map.set(h.productId, existing);
       }
+      existing.typeTotals[h.type] = (existing.typeTotals[h.type] ?? 0) + h.quantity;
+      existing.movements += 1;
+      existing.volume += Math.abs(h.quantity);
+      if (new Date(h.timestamp) > new Date(existing.lastActivity)) existing.lastActivity = h.timestamp;
     });
-    return Array.from(map.values()).sort((a, b) => (b.added + b.removed) - (a.added + a.removed));
+    return Array.from(map.values()).sort((a, b) => b.volume - a.volume);
   }, [filtered]);
 
   const exportCsv = () => {
@@ -120,7 +129,7 @@ export default function StockActivityReportModal({ products, history, warehouses
         formatDateTime(h.timestamp),
         p?.name ?? h.productId,
         p?.sku ?? '',
-        typeConfig[h.type]?.label ?? h.type,
+        reportLabel(h.type),
         h.warehouse,
         String(h.quantity),
         String(h.stockBefore),
@@ -135,14 +144,14 @@ export default function StockActivityReportModal({ products, history, warehouses
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `stock-activity-${period}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `stock-activity-${dateFrom || 'all'}-to-${dateTo || 'all'}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-xl max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-xl h-[95vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 shrink-0">
           <div>
@@ -164,34 +173,26 @@ export default function StockActivityReportModal({ products, history, warehouses
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-2 px-6 py-3 border-b border-gray-100 shrink-0">
-          <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value as Period)}
-            className="py-1.5 px-2.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer text-gray-600"
-          >
-            <option value="this_month">This Month</option>
-            <option value="last_month">Last Month</option>
-            <option value="this_week">Last 7 Days</option>
-            <option value="all">All Time</option>
-            <option value="custom">Custom Range</option>
-          </select>
-
-          {period === 'custom' && (
-            <>
-              <input
-                type="date"
-                value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
-                className="py-1.5 px-2.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 text-gray-600"
-              />
-              <span className="text-xs text-gray-300">to</span>
-              <input
-                type="date"
-                value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
-                className="py-1.5 px-2.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 text-gray-600"
-              />
-            </>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="py-1.5 px-2.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 text-gray-600"
+          />
+          <span className="text-xs text-gray-300">to</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="py-1.5 px-2.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 text-gray-600"
+          />
+          {(dateFrom || dateTo) && (
+            <button
+              onClick={() => { setDateFrom(''); setDateTo(''); }}
+              className="text-xs text-gray-400 hover:text-gray-600 cursor-pointer whitespace-nowrap"
+            >
+              Clear dates
+            </button>
           )}
 
           {warehouses.length > 1 && (
@@ -211,7 +212,7 @@ export default function StockActivityReportModal({ products, history, warehouses
             className="py-1.5 px-2.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer text-gray-600"
           >
             <option value="all">All Types</option>
-            {Object.entries(typeConfig).map(([key, cfg]) => <option key={key} value={key}>{cfg.label}</option>)}
+            {Object.keys(typeConfig).map((key) => <option key={key} value={key}>{reportLabel(key)}</option>)}
           </select>
 
           <div className="relative ml-auto">
@@ -228,21 +229,27 @@ export default function StockActivityReportModal({ products, history, warehouses
         </div>
 
         {/* Stats summary */}
-        <div className="grid grid-cols-4 gap-0 border-b border-gray-100 shrink-0">
-          {[
-            { label: 'Movements', value: String(totals.movements), icon: 'ri-swap-line', color: 'text-gray-800' },
-            { label: 'Total Added', value: `+${totals.added}`, icon: 'ri-arrow-down-circle-line', color: 'text-emerald-600' },
-            { label: 'Total Removed', value: `-${totals.removed}`, icon: 'ri-arrow-up-circle-line', color: 'text-rose-600' },
-            { label: 'Net Change', value: `${totals.net > 0 ? '+' : ''}${totals.net}`, icon: 'ri-scales-3-line', color: totals.net >= 0 ? 'text-emerald-600' : 'text-rose-600' },
-          ].map((stat) => (
-            <div key={stat.label} className="flex flex-col items-center py-4 border-r border-gray-100 last:border-r-0">
-              <div className="w-5 h-5 flex items-center justify-center mb-1">
-                <i className={`${stat.icon} ${stat.color} text-base`}></i>
+        <div className="flex items-stretch gap-0 border-b border-gray-100 shrink-0 divide-x divide-gray-100">
+          {typeTotals.filter(({ type }) => type !== 'adjustment').map(({ type, total }) => {
+            const cfg = typeConfig[type] ?? typeConfig.adjustment;
+            return (
+              <div key={type} className="flex-1 min-w-0 flex flex-col items-center justify-center py-4 px-2">
+                <div className="w-5 h-5 flex items-center justify-center mb-1">
+                  <i className={`${cfg.icon} ${cfg.color} text-base`}></i>
+                </div>
+                <p className={`text-lg font-bold ${cfg.color}`}>{total > 0 ? '+' : ''}{total}</p>
+                <p className="text-xs text-gray-400">{reportLabel(type)}</p>
               </div>
-              <p className={`text-lg font-bold ${stat.color}`}>{stat.value}</p>
-              <p className="text-xs text-gray-400">{stat.label}</p>
+            );
+          })}
+
+          <div className="flex-1 min-w-0 flex flex-col items-center justify-center py-4 px-2">
+            <div className="w-5 h-5 flex items-center justify-center mb-1">
+              <i className={`ri-scales-3-line text-base ${cardsTotal >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}></i>
             </div>
-          ))}
+            <p className={`text-lg font-bold ${cardsTotal >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{cardsTotal > 0 ? '+' : ''}{cardsTotal}</p>
+            <p className="text-xs text-gray-400">Total</p>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -264,7 +271,7 @@ export default function StockActivityReportModal({ products, history, warehouses
         </div>
 
         {/* Body */}
-        <div className="overflow-y-auto flex-1 px-6 py-4">
+        <div className="overflow-auto flex-1 px-6 pb-4">
           {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400">
               <div className="w-10 h-10 flex items-center justify-center mb-3">
@@ -273,47 +280,72 @@ export default function StockActivityReportModal({ products, history, warehouses
               <p className="text-sm">No stock activity in this period.</p>
             </div>
           ) : tab === 'by_product' ? (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-gray-400">
-                  <th className="font-medium pb-2">Product</th>
-                  <th className="font-medium pb-2">Warehouse</th>
-                  <th className="font-medium pb-2 text-right">Added</th>
-                  <th className="font-medium pb-2 text-right">Removed</th>
-                  <th className="font-medium pb-2 text-right">Net</th>
-                  <th className="font-medium pb-2 text-right">Movements</th>
-                  <th className="font-medium pb-2 text-right">Last Activity</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byProduct.map((row) => {
-                  const p = productMap.get(row.productId);
-                  const net = row.added - row.removed;
-                  return (
-                    <tr
-                      key={row.productId}
-                      onClick={() => { setSearch(p?.sku ?? row.productId); setTab('ledger'); }}
-                      className="border-t border-gray-50 hover:bg-gray-50 cursor-pointer"
-                    >
-                      <td className="py-2.5">
-                        <p className="font-medium text-gray-800">{p?.name ?? row.productId}</p>
-                        <p className="text-xs text-gray-400">{p?.sku ?? '—'}</p>
-                      </td>
-                      <td className="py-2.5 text-gray-600">{row.warehouse}</td>
-                      <td className="py-2.5 text-right text-emerald-600 font-medium">+{row.added}</td>
-                      <td className="py-2.5 text-right text-rose-600 font-medium">-{row.removed}</td>
-                      <td className={`py-2.5 text-right font-semibold ${net > 0 ? 'text-emerald-600' : net < 0 ? 'text-rose-600' : 'text-gray-400'}`}>
-                        {net > 0 ? '+' : ''}{net}
-                      </td>
-                      <td className="py-2.5 text-right text-gray-500">{row.movements}</td>
-                      <td className="py-2.5 text-right text-gray-400 text-xs">{formatDateTime(row.lastActivity)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div>
+              <table className="w-full text-sm border-separate border-spacing-0">
+                <thead>
+                  <tr className="text-left text-xs text-gray-400">
+                    <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 pr-4 border-b border-gray-100">Product</th>
+                    <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 px-4 border-b border-gray-100">Warehouse</th>
+                    {activeTypes.map((t) => (
+                      <th key={t} className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 px-4 text-right whitespace-nowrap border-b border-gray-100">{reportLabel(t)}</th>
+                    ))}
+                    <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 pl-5 pr-4 text-right border-l border-b border-gray-100 whitespace-nowrap">Total</th>
+                    <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 pl-4 text-right whitespace-nowrap border-b border-gray-100">Last Activity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byProduct.map((row) => {
+                    const p = productMap.get(row.productId);
+                    const rowTotal = Object.values(row.typeTotals).reduce((s, v) => s + (v ?? 0), 0);
+                    return (
+                      <tr
+                        key={row.productId}
+                        onClick={() => { setSearch(p?.sku ?? row.productId); setTab('ledger'); }}
+                        className="border-t border-gray-50 hover:bg-gray-50 cursor-pointer"
+                      >
+                        <td className="py-2.5 pr-4">
+                          <p className="font-medium text-gray-800">{p?.name ?? row.productId}</p>
+                          <p className="text-xs text-gray-400">{p?.sku ?? '—'}</p>
+                        </td>
+                        <td className="py-2.5 px-4 text-gray-600 whitespace-nowrap">{row.warehouse}</td>
+                        {activeTypes.map((t) => {
+                          const v = row.typeTotals[t];
+                          return (
+                            <td key={t} className={`py-2.5 px-4 text-right font-medium whitespace-nowrap ${!v ? 'text-gray-300' : v > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {v ? `${v > 0 ? '+' : ''}${v}` : '—'}
+                            </td>
+                          );
+                        })}
+                        <td className={`py-2.5 pl-5 pr-4 text-right font-semibold border-l border-gray-100 whitespace-nowrap ${rowTotal === 0 ? 'text-gray-400' : rowTotal > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {rowTotal > 0 ? '+' : ''}{rowTotal}
+                        </td>
+                        <td className="py-2.5 pl-4 text-right text-gray-400 text-xs whitespace-nowrap">{formatDateTime(row.lastActivity)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-gray-200">
+                    <td className="py-2.5 pr-4 font-semibold text-gray-800">Total</td>
+                    <td className="py-2.5 px-4"></td>
+                    {activeTypes.map((t) => {
+                      const v = typeTotals.find((tt) => tt.type === t)?.total ?? 0;
+                      return (
+                        <td key={t} className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${v === 0 ? 'text-gray-300' : v > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {v ? `${v > 0 ? '+' : ''}${v}` : '—'}
+                        </td>
+                      );
+                    })}
+                    <td className={`py-2.5 pl-5 pr-4 text-right font-semibold border-l border-gray-100 whitespace-nowrap ${totals.net === 0 ? 'text-gray-400' : totals.net > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {totals.net > 0 ? '+' : ''}{totals.net}
+                    </td>
+                    <td className="py-2.5 pl-4"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2 pt-4">
               {filtered.map((entry) => {
                 const cfg = typeConfig[entry.type] ?? typeConfig.adjustment;
                 const p = productMap.get(entry.productId);
@@ -330,7 +362,7 @@ export default function StockActivityReportModal({ products, history, warehouses
                         </span>
                       </div>
                       <div className="flex items-center gap-3 mt-1 flex-wrap">
-                        <span className={`text-xs font-semibold ${cfg.color}`}>{cfg.label}</span>
+                        <span className={`text-xs font-semibold ${cfg.color}`}>{reportLabel(entry.type)}</span>
                         <span className="text-xs text-gray-300">·</span>
                         <span className="text-xs text-gray-400">{entry.warehouse}</span>
                         <span className="text-xs text-gray-300">·</span>

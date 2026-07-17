@@ -322,7 +322,13 @@ export default function VendorsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filtered.length === 0 ? (
+                    {loading ? (
+                      <tr>
+                        <td colSpan={9} className="px-5 py-12 text-center text-sm text-gray-400">
+                          <i className="ri-loader-4-line animate-spin text-2xl block mb-2"></i>Loading vendors…
+                        </td>
+                      </tr>
+                    ) : filtered.length === 0 ? (
                       <tr>
                         <td colSpan={9} className="px-5 py-12 text-center text-sm text-gray-400">
                           <i className="ri-store-2-line text-3xl block mb-2"></i>No vendors found
@@ -407,7 +413,11 @@ export default function VendorsPage() {
             {/* Card View */}
             {viewMode === 'card' && (
               <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filtered.length === 0 ? (
+                {loading ? (
+                  <div className="col-span-3 py-12 text-center text-sm text-gray-400">
+                    <i className="ri-loader-4-line animate-spin text-2xl block mb-2"></i>Loading vendors…
+                  </div>
+                ) : filtered.length === 0 ? (
                   <div className="col-span-3 py-12 text-center text-sm text-gray-400">
                     <i className="ri-store-2-line text-3xl block mb-2"></i>No vendors found
                   </div>

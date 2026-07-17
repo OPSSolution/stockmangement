@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import ProductTable from './components/ProductTable';
@@ -7,6 +7,7 @@ import StockAdjustModal from './components/StockAdjustModal';
 import StockHistoryModal from './components/StockHistoryModal';
 import StockActivityReportModal from './components/StockActivityReportModal';
 import DeleteConfirmModal from './components/DeleteConfirmModal';
+import ResolveOnHoldModal from './components/ResolveOnHoldModal';
 import { Product } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
 import { supabase } from '@/lib/supabase';
@@ -16,6 +17,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit, diffFields } from '@/lib/auditLog';
+import { resolveOnHoldStock, type OnHoldResolution } from '@/lib/stockDeduction';
 
 const CATEGORY_STORAGE_KEY = 'inventory_categories';
 
@@ -37,6 +39,7 @@ function mapProduct(row: Record<string, unknown>): Product {
     vendor: row.vendor as string | undefined,
     imageUrl: (row.image_url as string) || undefined,
     stock: row.stock as number,
+    onHoldStock: (row.on_hold_stock as number) ?? 0,
     lowStockThreshold: row.low_stock_threshold as number,
     price: row.price as number,
     productType: (row.product_type as Product['productType']) || 'pack',
@@ -86,8 +89,12 @@ export default function InventoryPage() {
   const [editProduct, setEditProduct] = useState<Product | null>(null);
   const [adjustProduct, setAdjustProduct] = useState<Product | null>(null);
   const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
+  const [resolveOnHoldProduct, setResolveOnHoldProduct] = useState<Product | null>(null);
+  const [resolvingOnHold, setResolvingOnHold] = useState(false);
+  const [resolveOnHoldError, setResolveOnHoldError] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const actionsMenuRef = useRef<HTMLDivElement>(null);
   const [deleteProduct, setDeleteProduct] = useState<Product | null>(null);
 
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
@@ -146,6 +153,17 @@ export default function InventoryPage() {
 
   // Auto-open add modal when navigated with ?action=add
   useEffect(() => {
+    if (!showActionsMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (actionsMenuRef.current && !actionsMenuRef.current.contains(e.target as Node)) {
+        setShowActionsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showActionsMenu]);
+
+  useEffect(() => {
     if (searchParams.get('action') === 'add') {
       setShowAddModal(true);
       searchParams.delete('action');
@@ -168,7 +186,10 @@ export default function InventoryPage() {
 
   const fetchProducts = async () => {
     setLoading(true);
-    let query = supabase.from('products').select('*').order('last_updated', { ascending: false });
+    // Sort by id (assigned sequentially at creation, never changed afterward), not
+    // last_updated — otherwise editing/adjusting any product bumps it to the top and
+    // reshuffles the whole list every time something merely changes on it.
+    let query = supabase.from('products').select('*').order('id', { ascending: false });
     if (warehouseScope) query = query.in('warehouse', warehouseScope);
     const { data, error } = await query;
     if (error) {
@@ -198,6 +219,20 @@ export default function InventoryPage() {
       return matchSearch && matchStatus && matchWarehouse && matchCategory && matchVendor;
     });
   }, [products, search, filterStatus, filterWarehouse, filterCategory, filterVendor]);
+
+  // Latest reason a product's on-hold units were placed on hold for — sourced from
+  // the stock_history row restockReturnedItems writes (src/lib/stockDeduction.ts),
+  // which prefixes the note "On hold — " specifically so this can be parsed back out.
+  // `history` is fetched newest-first, so the first match per product is the latest.
+  const onHoldReasons = useMemo(() => {
+    const map: Record<string, string> = {};
+    history.forEach((h) => {
+      if (h.type === 'return' && h.note?.startsWith('On hold — ') && map[h.productId] === undefined) {
+        map[h.productId] = h.note.slice('On hold — '.length);
+      }
+    });
+    return map;
+  }, [history]);
 
   const availableCategories = useMemo(() => {
     const fromProducts = [...new Set(products.map((p) => p.category))];
@@ -370,6 +405,61 @@ export default function InventoryPage() {
     }
   };
 
+  const handleResolveOnHold = async (quantity: number, resolution: OnHoldResolution, note: string) => {
+    if (!resolveOnHoldProduct) return;
+    const target = resolveOnHoldProduct;
+    setResolvingOnHold(true);
+    setResolveOnHoldError('');
+
+    const { error } = await resolveOnHoldStock({
+      productId: target.id,
+      quantity,
+      resolution,
+      reference: 'ON-HOLD-RESOLVE',
+      userName: 'Admin',
+      note,
+    });
+
+    setResolvingOnHold(false);
+    if (error) {
+      setResolveOnHoldError(error);
+      return;
+    }
+
+    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const newOnHold = Math.max(0, (target.onHoldStock || 0) - quantity);
+    const newStock = resolution === 'discard' ? Math.max(0, target.stock - quantity) : target.stock;
+    const newStatus = deriveStatus(newStock, target.lowStockThreshold);
+
+    setProducts((prev) => prev.map((p) => (p.id === target.id ? { ...p, stock: newStock, onHoldStock: newOnHold, status: newStatus, lastUpdated: now } : p)));
+    const label = resolution === 'discard' ? 'Discarded' : 'Released to available stock';
+    setHistory((prev) => [
+      {
+        id: `SH-${Date.now()}`,
+        productId: target.id,
+        type: 'adjustment',
+        quantity: resolution === 'discard' ? -quantity : 0,
+        stockBefore: target.stock,
+        stockAfter: newStock,
+        reference: 'ON-HOLD-RESOLVE',
+        note: `On hold resolved — ${label}${note ? `: ${note}` : ''}`,
+        warehouse: target.warehouse,
+        user: 'Admin',
+        timestamp: now,
+      },
+      ...prev,
+    ]);
+    showToast(resolution === 'discard' ? 'On-hold stock discarded.' : 'On-hold stock released to available.');
+    logAudit({
+      action: 'update',
+      module: 'inventory',
+      description: `${label} ${quantity} on-hold unit(s) for "${target.name}"`,
+      referenceId: target.id,
+      changes: [{ field: 'On Hold Stock', from: target.onHoldStock || 0, to: newOnHold }],
+    });
+    setResolveOnHoldProduct(null);
+  };
+
   const handleDelete = async () => {
     if (!deleteProduct) return;
     const { error } = await supabase.from('products').delete().eq('id', deleteProduct.id);
@@ -427,20 +517,30 @@ export default function InventoryPage() {
           {/* Main panel */}
           <div className="bg-white rounded-2xl">
             {/* Toolbar */}
-            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 px-6 py-4 border-b border-gray-100">
-              {/* Search */}
-              <div className="relative">
-                <div className="w-4 h-4 flex items-center justify-center absolute left-3 top-1/2 -translate-y-1/2">
-                  <i className="ri-search-line text-gray-400 text-sm"></i>
+            <div className="flex flex-col gap-3 px-6 py-4 border-b border-gray-100">
+              {/* Row 1: Search + primary action */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="relative">
+                  <div className="w-4 h-4 flex items-center justify-center absolute left-3 top-1/2 -translate-y-1/2">
+                    <i className="ri-search-line text-gray-400 text-sm"></i>
+                  </div>
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search name or SKU..."
+                    className="pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg w-48 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                  />
                 </div>
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name or SKU..."
-                  className="pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg w-48 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                />
+
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <i className="ri-add-line"></i> Add Product
+                </button>
               </div>
 
+              {/* Row 2: Filters + Actions */}
               <div className="flex items-center gap-3 flex-wrap">
                 {/* Warehouse filter */}
                 <select
@@ -490,30 +590,42 @@ export default function InventoryPage() {
                   {formatAmount(totalValue)}
                 </div> */}
 
-                <div className="relative">
+                <div className="relative ml-auto" ref={actionsMenuRef} onMouseLeave={() => setShowActionsMenu(false)}>
                   <button
                     onClick={() => setShowActionsMenu((v) => !v)}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
+                    className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg cursor-pointer whitespace-nowrap border transition-colors ${
+                      showActionsMenu
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                    }`}
                   >
                     <i className="ri-more-2-fill"></i> Actions
+                    <i className={`ri-arrow-down-s-line transition-transform duration-200 ${showActionsMenu ? 'rotate-180' : ''}`}></i>
                   </button>
                   {showActionsMenu && (
                     <div
-                      onMouseLeave={() => setShowActionsMenu(false)}
-                      className="absolute right-0 top-full mt-2 w-52 bg-white border border-gray-100 rounded-xl shadow-lg z-20 py-1"
+                      className="absolute right-0 top-full w-60 bg-white border border-gray-100 rounded-2xl z-20 py-1.5 overflow-hidden"
+                      style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}
                     >
                       <button
                         onClick={() => { navigate('/categories'); setShowActionsMenu(false); }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer text-left"
                       >
-                        <i className="ri-price-tag-2-line text-gray-400"></i> Manage Categories
+                        <div className="w-8 h-8 flex items-center justify-center bg-violet-50 rounded-lg shrink-0">
+                          <i className="ri-price-tag-2-line text-violet-600 text-sm"></i>
+                        </div>
+                        Manage Categories
                       </button>
                       <button
                         onClick={() => { setShowReportModal(true); setShowActionsMenu(false); }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer text-left"
                       >
-                        <i className="ri-file-chart-line text-gray-400"></i> Stock Report
+                        <div className="w-8 h-8 flex items-center justify-center bg-sky-50 rounded-lg shrink-0">
+                          <i className="ri-file-chart-line text-sky-600 text-sm"></i>
+                        </div>
+                        Stock Report
                       </button>
+                      <div className="border-t border-gray-50 my-1"></div>
                       <button
                         onClick={() => {
                           exportToCsv('products', filtered, [
@@ -524,7 +636,9 @@ export default function InventoryPage() {
                             { header: 'Warehouse', value: (p) => p.warehouse },
                             { header: 'Vendor', value: (p) => p.vendor || '' },
                             { header: 'Stock', value: (p) => p.stock },
-                            { header: 'Available', value: (p) => availableStock(p.stock, reserved, p.id) },
+                            { header: 'On Hold', value: (p) => p.onHoldStock || 0 },
+                            { header: 'On Hold Reason', value: (p) => (p.onHoldStock || 0) > 0 ? (onHoldReasons[p.id] || '') : '' },
+                            { header: 'Available', value: (p) => availableStock(p.stock, reserved, p.id, p.onHoldStock || 0) },
                             { header: 'Low Stock Threshold', value: (p) => p.lowStockThreshold },
                             { header: 'Price', value: (p) => p.price },
                             { header: 'Status', value: (p) => p.status },
@@ -532,20 +646,16 @@ export default function InventoryPage() {
                           ]);
                           setShowActionsMenu(false);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer text-left"
                       >
-                        <i className="ri-download-2-line text-gray-400"></i> Export CSV
+                        <div className="w-8 h-8 flex items-center justify-center bg-emerald-50 rounded-lg shrink-0">
+                          <i className="ri-download-2-line text-emerald-600 text-sm"></i>
+                        </div>
+                        Export CSV
                       </button>
                     </div>
                   )}
                 </div>
-
-                <button
-                  onClick={() => setShowAddModal(true)}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-add-line"></i> Add Product
-                </button>
               </div>
             </div>
 
@@ -559,7 +669,12 @@ export default function InventoryPage() {
               onViewHistory={(p) => setHistoryProduct(p)}
             />
 
-            {filtered.length === 0 && (
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                <i className="ri-loader-4-line animate-spin text-3xl mb-3"></i>
+                <p className="text-sm">Loading products…</p>
+              </div>
+            ) : filtered.length === 0 && (
               <div className="flex flex-col items-center justify-center py-16 text-gray-400">
                 <div className="w-12 h-12 flex items-center justify-center mb-3">
                   <i className="ri-archive-stack-line text-4xl"></i>
@@ -598,9 +713,19 @@ export default function InventoryPage() {
       )}
       {historyProduct && (
         <StockHistoryModal
-          product={historyProduct}
+          product={products.find((p) => p.id === historyProduct.id) || historyProduct}
           history={history}
           onClose={() => setHistoryProduct(null)}
+          onResolveOnHold={canAdjustStock ? () => setResolveOnHoldProduct(products.find((p) => p.id === historyProduct.id) || historyProduct) : undefined}
+        />
+      )}
+      {resolveOnHoldProduct && (
+        <ResolveOnHoldModal
+          product={products.find((p) => p.id === resolveOnHoldProduct.id) || resolveOnHoldProduct}
+          onClose={() => { setResolveOnHoldProduct(null); setResolveOnHoldError(''); }}
+          onResolve={handleResolveOnHold}
+          resolving={resolvingOnHold}
+          error={resolveOnHoldError}
         />
       )}
       {deleteProduct && (

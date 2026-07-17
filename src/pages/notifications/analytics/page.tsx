@@ -198,12 +198,12 @@ export default function NotificationAnalyticsPage() {
         {/* Summary Cards */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
-            { label: 'Total', value: summary?.total ?? 0, color: 'text-gray-800', bg: 'bg-gray-50', icon: 'ri-notification-3-line' },
-            { label: 'Unread', value: summary?.unread ?? 0, color: 'text-amber-600', bg: 'bg-amber-50', icon: 'ri-mail-unread-line' },
-            { label: 'Read Rate', value: `${summary?.read_rate ?? 0}%`, color: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'ri-eye-line' },
-            { label: 'Email Rate', value: `${summary?.email_rate ?? 0}%`, color: 'text-sky-600', bg: 'bg-sky-50', icon: 'ri-mail-send-line' },
-            { label: 'SMS Rate', value: `${summary?.sms_rate ?? 0}%`, color: 'text-violet-600', bg: 'bg-violet-50', icon: 'ri-message-3-line' },
-            { label: 'Webhook Rate', value: `${summary?.webhook_rate ?? 0}%`, color: 'text-rose-600', bg: 'bg-rose-50', icon: 'ri-webhook-line' },
+            { label: 'Total', value: loading ? '—' : summary?.total ?? 0, color: 'text-gray-800', bg: 'bg-gray-50', icon: 'ri-notification-3-line' },
+            { label: 'Unread', value: loading ? '—' : summary?.unread ?? 0, color: 'text-amber-600', bg: 'bg-amber-50', icon: 'ri-mail-unread-line' },
+            { label: 'Read Rate', value: loading ? '—' : `${summary?.read_rate ?? 0}%`, color: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'ri-eye-line' },
+            { label: 'Email Rate', value: loading ? '—' : `${summary?.email_rate ?? 0}%`, color: 'text-sky-600', bg: 'bg-sky-50', icon: 'ri-mail-send-line' },
+            { label: 'SMS Rate', value: loading ? '—' : `${summary?.sms_rate ?? 0}%`, color: 'text-violet-600', bg: 'bg-violet-50', icon: 'ri-message-3-line' },
+            { label: 'Webhook Rate', value: loading ? '—' : `${summary?.webhook_rate ?? 0}%`, color: 'text-rose-600', bg: 'bg-rose-50', icon: 'ri-webhook-line' },
           ].map((card) => (
             <div key={card.label} className={`${card.bg} rounded-xl px-4 py-4`}>
               <div className="flex items-center gap-2 mb-2">
@@ -223,7 +223,11 @@ export default function NotificationAnalyticsPage() {
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                 <h3 className="text-sm font-bold text-gray-900 mb-1">Daily Volume</h3>
                 <p className="text-xs text-gray-400 mb-4">Notifications sent per day across all channels</p>
-                {dailyData.length === 0 ? (
+                {loading ? (
+                  <div className="h-48 flex items-center justify-center text-gray-400 text-sm">
+                    <i className="ri-loader-4-line animate-spin text-xl mr-2"></i>Loading…
+                  </div>
+                ) : dailyData.length === 0 ? (
                   <div className="h-48 flex items-center justify-center text-gray-400 text-sm">No data for this period</div>
                 ) : (
                   <div className="h-64">
@@ -253,7 +257,11 @@ export default function NotificationAnalyticsPage() {
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                 <h3 className="text-sm font-bold text-gray-900 mb-1">By Type</h3>
                 <p className="text-xs text-gray-400 mb-4">Distribution of notification types</p>
-                {pieData.length === 0 ? (
+                {loading ? (
+                  <div className="h-48 flex items-center justify-center text-gray-400 text-sm">
+                    <i className="ri-loader-4-line animate-spin text-xl mr-2"></i>Loading…
+                  </div>
+                ) : pieData.length === 0 ? (
                   <div className="h-48 flex items-center justify-center text-gray-400 text-sm">No data for this period</div>
                 ) : (
                   <div className="h-64">
@@ -291,7 +299,11 @@ export default function NotificationAnalyticsPage() {
               <p className="text-xs text-gray-400 mb-4">
                 Percentage of notifications successfully delivered via each channel
               </p>
-              {typeData.length === 0 ? (
+              {loading ? (
+                <div className="h-48 flex items-center justify-center text-gray-400 text-sm">
+                  <i className="ri-loader-4-line animate-spin text-xl mr-2"></i>Loading…
+                </div>
+              ) : typeData.length === 0 ? (
                 <div className="h-48 flex items-center justify-center text-gray-400 text-sm">No data for this period</div>
               ) : (
                 <div className="h-72">

@@ -4,6 +4,7 @@ import OrderStatusBadge from './OrderStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { deductStockForItems } from '@/lib/stockDeduction';
+import { downloadPdf, type PdfTableSpec } from '@/lib/exportPdf';
 
 interface OrderDetailModalProps {
   order: Order;
@@ -112,6 +113,56 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
     onClose();
   };
 
+  const handleDownloadPdf = () => {
+    const totalItems = splits.reduce((s, split) => s + split.items.reduce((si, i) => si + i.quantity, 0), 0);
+    const tables: PdfTableSpec[] = splits.map((split) => ({
+      title: `${split.vendor} · ${split.warehouse}`,
+      head: ['Product', 'SKU', 'Qty', 'Unit Price', 'Total', 'Status'],
+      rows: split.items.map((item) => [
+        item.productName,
+        item.sku,
+        item.quantity,
+        formatAmount(item.unitPrice),
+        formatAmount(item.unitPrice * item.quantity),
+        item.status.replace(/^\w/, (c) => c.toUpperCase()),
+      ]),
+      colStyles: { 2: { halign: 'center' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+      footRow: [{ content: 'Split Subtotal', colSpan: 4, styles: { halign: 'right' } }, formatAmount(split.subtotal), ''],
+    }));
+
+    downloadPdf(
+      {
+        docType: 'Purchase Order',
+        docId: order.id,
+        status: order.status,
+        subtitle: `${order.customer} · ${order.city}`,
+        infoBoxes: [
+          {
+            title: 'Customer',
+            rows: [
+              { label: 'Email', value: order.email },
+              { label: 'Phone', value: order.phone },
+              { label: 'Address', value: `${order.address}, ${order.city}` },
+              { label: 'Ordered', value: order.createdAt },
+            ],
+          },
+          {
+            title: 'Summary',
+            rows: [
+              { label: 'Vendor Splits', value: String(splits.length) },
+              { label: 'Total Items', value: String(totalItems) },
+              { label: 'Order Total', value: formatAmount(order.total) },
+            ],
+          },
+        ],
+        notes: order.notes ? [{ label: 'Notes', text: order.notes, tone: 'amber' }] : undefined,
+        tables,
+        footerLeft: `Requested by ${order.customer}`,
+      },
+      `${order.id}.pdf`
+    );
+  };
+
   const handleReject = () => {
     if (!canDecide) return;
     const rejectedSplits = splits.map((s) => ({ ...s, status: 'rejected' as const, items: s.items.map((i) => ({ ...i, status: 'rejected' as const })) }));
@@ -132,9 +183,14 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
             </div>
             <p className="text-xs text-gray-400 mt-0.5">{order.customer} · {order.city} · {order.createdAt}</p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
-            <i className="ri-close-line text-lg"></i>
-          </button>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button onClick={handleDownloadPdf} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer whitespace-nowrap">
+              <i className="ri-file-pdf-2-line"></i>Download PDF
+            </button>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
+              <i className="ri-close-line text-lg"></i>
+            </button>
+          </div>
         </div>
 
         {/* Customer info */}

@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS products (
   vendor TEXT,
   image_url TEXT,
   stock INTEGER NOT NULL DEFAULT 0,
+  on_hold_stock INTEGER NOT NULL DEFAULT 0,
   low_stock_threshold INTEGER NOT NULL DEFAULT 10,
   price NUMERIC(12,2) NOT NULL DEFAULT 0,
   product_type TEXT NOT NULL DEFAULT 'pack',
@@ -73,6 +74,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 -- Add columns to existing products table (idempotent)
 ALTER TABLE products ADD COLUMN IF NOT EXISTS product_type TEXT NOT NULL DEFAULT 'pack';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS on_hold_stock INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;
 
 -- SKU must be unique per warehouse, not globally, so the same product can
@@ -84,7 +86,7 @@ ALTER TABLE products ADD CONSTRAINT products_sku_warehouse_key UNIQUE (sku, ware
 CREATE TABLE IF NOT EXISTS stock_history (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('sale', 'purchase', 'transfer_in', 'transfer_out', 'return', 'adjustment')),
+  type TEXT NOT NULL CHECK (type IN ('sale', 'purchase', 'transfer_in', 'transfer_out', 'return', 'adjustment', 'request')),
   quantity INTEGER NOT NULL,
   stock_before INTEGER NOT NULL,
   stock_after INTEGER NOT NULL,

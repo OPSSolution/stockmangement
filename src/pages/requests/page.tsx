@@ -7,7 +7,8 @@ import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 import { deductStockForItems } from '@/lib/stockDeduction';
 import { exportToCsv } from '@/lib/exportCsv';
 import { exportRequestAsForm } from '@/lib/exportRequestForm';
-import { logAudit, diffFields } from '@/lib/auditLog';
+import { downloadPdf, type PdfNote } from '@/lib/exportPdf';
+import { logAudit } from '@/lib/auditLog';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { notifyAdmins } from '@/lib/notifyAdmins';
 
@@ -119,6 +120,10 @@ function avatarColor(name: string) {
   return AVATAR_COLORS[hash];
 }
 
+function isImageFileName(name: string | null | undefined) {
+  return !!name && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
+}
+
 function formatTimeAgo(isoDate: string) {
   const diffMs = Date.now() - new Date(isoDate).getTime();
   const minutes = Math.floor(diffMs / 60000);
@@ -186,11 +191,9 @@ export default function RequestsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploadingApproval, setUploadingApproval] = useState(false);
-
-  const [reviewedByInput, setReviewedByInput] = useState('');
-  const [reviewedBy2Input, setReviewedBy2Input] = useState('');
-  const [approvedByInput, setApprovedByInput] = useState('');
-  const [savingSignatures, setSavingSignatures] = useState(false);
+  const [pendingDocFile, setPendingDocFile] = useState<File | null>(null);
+  const [pendingDocPreview, setPendingDocPreview] = useState<string | null>(null);
+  const [isDraggingDoc, setIsDraggingDoc] = useState(false);
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
@@ -252,10 +255,24 @@ export default function RequestsPage() {
   }, []);
 
   useEffect(() => {
-    setReviewedByInput(viewingReq?.reviewed_by || '');
-    setReviewedBy2Input(viewingReq?.reviewed_by_2 || '');
-    setApprovedByInput(viewingReq?.approved_by || '');
+    setPendingDocFile(null);
   }, [viewingReq?.id]);
+
+  // Swap the staged-document preview URL whenever a new file is picked, and always
+  // revoke the previous one — object URLs otherwise leak for the life of the tab.
+  useEffect(() => {
+    if (!pendingDocFile) {
+      setPendingDocPreview(null);
+      return;
+    }
+    if (!pendingDocFile.type.startsWith('image/')) {
+      setPendingDocPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(pendingDocFile);
+    setPendingDocPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [pendingDocFile]);
 
   useEffect(() => {
     if (viewingReq?.needs_return) {
@@ -506,10 +523,7 @@ export default function RequestsPage() {
 
   // Approving requires attaching the referral document at the moment of approval —
   // this is the one place that document gets set, not at request submission.
-  const handleApprove = async (req: StockRequest, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
+  const handleApprove = async (req: StockRequest, file: File) => {
     if (!canApproveRequests) return;
 
     setUploadingApproval(true);
@@ -529,7 +543,7 @@ export default function RequestsPage() {
       reference: req.id,
       note: `Approved request ${req.id}`,
       userName: requesterIdentity || 'Admin',
-      historyType: 'adjustment',
+      historyType: 'request',
     });
     if (deductError) {
       setUploadingApproval(false);
@@ -555,7 +569,13 @@ export default function RequestsPage() {
     showToast('Request approved — stock deducted.');
     setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, ...update } : prev));
     setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, ...update } : r)));
+    setPendingDocFile(null);
     logAudit({ action: 'update', module: 'requests', description: `Approved request ${req.id}`, referenceId: req.id });
+  };
+
+  const handleDocFilePick = (file: File | undefined) => {
+    if (!file) return;
+    setPendingDocFile(file);
   };
 
   const exportRequestDetails = async (req: StockRequest) => {
@@ -621,43 +641,64 @@ export default function RequestsPage() {
     ]);
   };
 
-  const handleSaveSignatures = async (req: StockRequest) => {
-    setSavingSignatures(true);
-    const now = new Date().toISOString();
-    const update: Partial<StockRequest> = { updated_at: now };
-    if (reviewedByInput.trim() !== (req.reviewed_by || '')) {
-      update.reviewed_by = reviewedByInput.trim() || null;
-      update.reviewed_at = reviewedByInput.trim() ? now : null;
+  const handleDownloadRequestPdf = (req: StockRequest) => {
+    const notes: PdfNote[] = [];
+    if (req.reason || req.reason_tags.length > 0) {
+      const tagLabels = req.reason_tags.map((tag) => REASON_TAGS.find((t) => t.value === tag)?.label || tag);
+      notes.push({ label: 'Reason', text: [tagLabels.join(', '), req.reason].filter(Boolean).join(' — '), tone: 'amber' });
     }
-    if (reviewedBy2Input.trim() !== (req.reviewed_by_2 || '')) {
-      update.reviewed_by_2 = reviewedBy2Input.trim() || null;
-      update.reviewed_at_2 = reviewedBy2Input.trim() ? now : null;
+    if (req.status === 'rejected' && req.review_note) {
+      notes.push({ label: 'Rejection Reason', text: req.review_note, tone: 'red' });
     }
-    if (approvedByInput.trim() !== (req.approved_by || '')) {
-      update.approved_by = approvedByInput.trim() || null;
-      update.approved_at = approvedByInput.trim() ? now : null;
+    if (req.status === 'returned' && req.return_reason) {
+      notes.push({ label: 'Return Reason', text: req.return_reason, tone: 'violet' });
     }
 
-    const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
-    setSavingSignatures(false);
-    if (error) {
-      showToast('Failed to save signatures: ' + error.message, 'error');
-      return;
-    }
-    showToast('Signatures updated.');
-    setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, ...update } as StockRequest : prev));
-    setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, ...update } as StockRequest : r)));
-    logAudit({
-      action: 'update',
-      module: 'requests',
-      description: `Updated signatures on request ${req.id}`,
-      referenceId: req.id,
-      changes: diffFields(req, { ...req, ...update }, [
-        { key: 'reviewed_by', label: 'Reviewed By' },
-        { key: 'reviewed_by_2', label: 'Reviewed By (2)' },
-        { key: 'approved_by', label: 'Approved By' },
-      ]),
-    });
+    downloadPdf(
+      {
+        docType: req.template_name ? `${req.template_name} Request` : 'Stock Request',
+        docId: req.id,
+        status: req.status,
+        subtitle: req.warehouse,
+        infoBoxes: [
+          {
+            title: 'Request Info',
+            rows: [
+              { label: 'Total Units', value: `${req.total_items} units` },
+              ...(req.reference ? [{ label: 'Reference', value: req.reference }] : []),
+              ...(req.date_of_receive ? [{ label: 'Date of Receive', value: new Date(req.date_of_receive).toLocaleDateString() }] : []),
+              ...(req.total_kg > 0 ? [{ label: 'Total Weight', value: `${req.total_kg} Kg` }] : []),
+            ],
+          },
+          {
+            title: 'People',
+            rows: [
+              { label: 'Requested By', value: req.requested_by },
+              { label: 'Logged By', value: req.submitted_by },
+              ...(req.reviewed_by ? [{ label: 'Reviewed By', value: req.reviewed_by }] : []),
+              ...(req.approved_by ? [{ label: 'Approved By', value: req.approved_by }] : []),
+            ],
+          },
+        ],
+        notes,
+        tables: [
+          {
+            title: 'Products',
+            head: ['Product', 'SKU', 'Package', 'Qty'],
+            rows: req.items.map((item) => [
+              item.productName,
+              item.sku,
+              item.packageWeight ? `${item.packageWeight}${item.unit || 'kg'}` : (item.unit || '—'),
+              item.quantity,
+            ]),
+            colStyles: { 3: { halign: 'center' } },
+            footRow: [{ content: 'Total Units', colSpan: 3, styles: { halign: 'right' } }, req.total_items],
+          },
+        ],
+        footerLeft: `Requested by ${req.requested_by}`,
+      },
+      `${req.id}.pdf`
+    );
   };
 
   const handleToggleMenu = (reqId: string, event: MouseEvent<HTMLButtonElement>) => {
@@ -711,7 +752,7 @@ export default function RequestsPage() {
                 <i className={`${kpi.icon} ${kpi.color} text-lg`}></i>
               </div>
               <div>
-                <p className="text-xl font-bold text-gray-900 tracking-tight">{kpi.value}</p>
+                <p className="text-xl font-bold text-gray-900 tracking-tight">{loading ? '—' : kpi.value}</p>
                 <p className="text-xs text-gray-400">{kpi.label}</p>
               </div>
             </div>
@@ -1176,7 +1217,12 @@ export default function RequestsPage() {
 
         {/* Table */}
         <div className="overflow-hidden">
-          {filtered.length === 0 ? (
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+              <i className="ri-loader-4-line animate-spin text-3xl mb-3"></i>
+              <p className="text-sm">Loading requests…</p>
+            </div>
+          ) : filtered.length === 0 ? (
             <div className="py-14 text-center">
               <div className="w-14 h-14 bg-gradient-to-br from-emerald-50 to-emerald-100/60 rounded-full flex items-center justify-center mx-auto mb-3">
                 <i className="ri-inbox-line text-emerald-400 text-2xl"></i>
@@ -1193,6 +1239,7 @@ export default function RequestsPage() {
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50/70">
+                    <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Reference</th>
                     <th className="px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Products</th>
                     <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Warehouse</th>
                     <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Qty</th>
@@ -1212,6 +1259,7 @@ export default function RequestsPage() {
 
                     return (
                       <tr key={req.id} className={`hover:bg-gray-50/50 transition-colors border-l-4 ${priorityMeta.accent}`}>
+                        <td className="px-4 py-3.5 text-xs text-gray-500 font-mono whitespace-nowrap">{req.reference || '—'}</td>
                         <td className="px-5 py-3.5">
                           <div className="flex items-start gap-3">
                             <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center flex-shrink-0 mt-0.5 overflow-hidden">
@@ -1336,25 +1384,41 @@ export default function RequestsPage() {
         return (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setViewingReq(null)}>
             <div
-              className={`bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto border-t-4 ${priorityMeta.topAccent}`}
+              className={`bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto border-t-4 ${priorityMeta.topAccent}`}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
-              <div className="flex items-start justify-between px-6 pt-5 pb-4">
-                <div className="flex items-center gap-3">
+              <div className="flex items-start justify-between px-6 pt-5 pb-4 gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center flex-shrink-0">
                     <i className="ri-archive-2-line text-gray-400 text-xl"></i>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-gray-900">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-gray-900 truncate">
                       {viewingReq.items.length} product{viewingReq.items.length !== 1 ? 's' : ''} requested
                     </h3>
                     <p className="text-xs text-gray-400 mt-0.5 font-mono">{viewingReq.id}</p>
                   </div>
                 </div>
-                <button onClick={() => setViewingReq(null)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer flex-shrink-0">
-                  <i className="ri-close-line text-lg"></i>
-                </button>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => exportRequestDetails(viewingReq)}
+                    disabled={exportingForm}
+                    title="Export"
+                    className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <i className={exportingForm ? 'ri-loader-4-line animate-spin' : 'ri-download-2-line'}></i>
+                  </button>
+                  <button
+                    onClick={() => handleDownloadRequestPdf(viewingReq)}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-file-pdf-2-line"></i>Download PDF
+                  </button>
+                  <button onClick={() => setViewingReq(null)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer flex-shrink-0">
+                    <i className="ri-close-line text-lg"></i>
+                  </button>
+                </div>
               </div>
 
               {/* Status + tags */}
@@ -1405,47 +1469,22 @@ export default function RequestsPage() {
               {isPending && (canApproveRequests || isOwnRequest) && (
                 <div className="mx-6 mt-3 px-4 py-3 rounded-xl bg-amber-50/60 border border-amber-100 flex items-center justify-between gap-3 flex-wrap">
                   <span className="text-xs font-semibold text-amber-700 flex items-center gap-1.5">
-                    <i className="ri-time-line"></i> Awaiting decision
+                    <i className="ri-time-line"></i>
+                    {canApproveRequests ? 'Awaiting decision — attach the referral document below, then Confirm' : 'Awaiting decision'}
                   </span>
-                  <div className="flex items-center gap-2">
-                    {canApproveRequests && (
-                      <>
-                        <label
-                          title="Approving requires attaching a referral document"
-                          className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white transition-colors ${uploadingApproval ? 'opacity-60 cursor-not-allowed' : 'hover:bg-emerald-600 cursor-pointer'}`}
-                        >
-                          <i className={uploadingApproval ? 'ri-loader-4-line animate-spin' : 'ri-checkbox-circle-line'}></i>
-                          {uploadingApproval ? 'Uploading…' : 'Approve'}
-                          <input
-                            type="file"
-                            accept="image/*,.pdf,.doc,.docx"
-                            className="hidden"
-                            disabled={uploadingApproval}
-                            onChange={(e) => handleApprove(viewingReq, e)}
-                          />
-                        </label>
-                        <button
-                          onClick={() => handleStatusChange(viewingReq, 'rejected')}
-                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
-                        >
-                          <i className="ri-close-circle-line"></i>Reject
-                        </button>
-                      </>
-                    )}
-                    {isOwnRequest && (
-                      <button
-                        onClick={() => handleStatusChange(viewingReq, 'cancelled')}
-                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors cursor-pointer"
-                      >
-                        Cancel Request
-                      </button>
-                    )}
-                  </div>
+                  {isOwnRequest && (
+                    <button
+                      onClick={() => handleStatusChange(viewingReq, 'cancelled')}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors cursor-pointer"
+                    >
+                      Cancel Request
+                    </button>
+                  )}
                 </div>
               )}
 
               {/* Key stats */}
-              <div className="grid grid-cols-2 gap-3 px-6 mt-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-6 mt-4">
                 <div className="rounded-xl bg-gray-50 px-4 py-3">
                   <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Warehouse</p>
                   <p className="text-sm font-bold text-gray-800 mt-0.5 flex items-center gap-1.5">
@@ -1475,7 +1514,7 @@ export default function RequestsPage() {
                   </div>
                 )}
                 {viewingReq.total_kg > 0 && (
-                  <div className="rounded-xl bg-gray-50 px-4 py-3 col-span-2">
+                  <div className="rounded-xl bg-gray-50 px-4 py-3 col-span-2 sm:col-span-4">
                     <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Total Weight</p>
                     <p className="text-sm font-bold text-gray-800 mt-0.5 flex items-center gap-1.5">
                       <i className="ri-scales-3-line text-gray-400"></i>{viewingReq.total_kg} Kg
@@ -1483,25 +1522,6 @@ export default function RequestsPage() {
                   </div>
                 )}
               </div>
-
-              {/* Referral document */}
-              {viewingReq.referral_document_url && (
-                <div className="px-6 mt-3">
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Referral Document</p>
-                  <a
-                    href={viewingReq.referral_document_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2.5 rounded-xl border border-gray-100 px-4 py-3 hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
-                      <i className="ri-file-text-line text-sky-500"></i>
-                    </div>
-                    <span className="text-sm font-medium text-sky-600 truncate">{viewingReq.referral_document_name || 'View document'}</span>
-                    <i className="ri-external-link-line text-gray-300 ml-auto shrink-0"></i>
-                  </a>
-                </div>
-              )}
 
               {/* Itemized product list */}
               <div className="px-6 mt-3">
@@ -1609,43 +1629,6 @@ export default function RequestsPage() {
                 </div>
               )}
 
-              {/* Approval chain */}
-              <div className="px-6 mt-3">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Approval</p>
-                <div className="rounded-xl border border-gray-100 divide-y divide-gray-50">
-                  {[
-                    { label: 'Reviewed By', value: reviewedByInput, setValue: setReviewedByInput, at: viewingReq.reviewed_at },
-                    { label: 'Reviewed By (2)', value: reviewedBy2Input, setValue: setReviewedBy2Input, at: viewingReq.reviewed_at_2 },
-                    { label: 'Approved By', value: approvedByInput, setValue: setApprovedByInput, at: viewingReq.approved_at },
-                  ].map((row) => (
-                    <div key={row.label} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                      <span className="text-xs font-medium text-gray-500 w-28 flex-shrink-0">{row.label}</span>
-                      {isAdmin ? (
-                        <input
-                          type="text"
-                          value={row.value}
-                          onChange={(e) => row.setValue(e.target.value)}
-                          placeholder="Name"
-                          className="flex-1 min-w-0 px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-emerald-400 placeholder-gray-400"
-                        />
-                      ) : (
-                        <span className="text-sm text-gray-700 truncate">{row.value || '—'}</span>
-                      )}
-                      {row.at && <span className="text-[11px] text-gray-400 flex-shrink-0">{new Date(row.at).toLocaleDateString()}</span>}
-                    </div>
-                  ))}
-                </div>
-                {isAdmin && (
-                  <button
-                    onClick={() => handleSaveSignatures(viewingReq)}
-                    disabled={savingSignatures}
-                    className="mt-2 px-4 py-1.5 bg-gray-800 text-white text-xs font-semibold rounded-lg hover:bg-gray-900 disabled:opacity-50 transition-colors cursor-pointer"
-                  >
-                    {savingSignatures ? 'Saving...' : 'Save Signatures'}
-                  </button>
-                )}
-              </div>
-
               {/* Rejection reason */}
               {viewingReq.status === 'rejected' && viewingReq.review_note && (
                 <div className="px-6 mt-3">
@@ -1672,6 +1655,106 @@ export default function RequestsPage() {
                 </div>
               )}
 
+              {/* Referral document — compact card, bottom-right, out of the way of the main details above. */}
+              {(viewingReq.referral_document_url || isPending) && (
+                <div className="px-6 mt-3 flex justify-end">
+                  <div className="w-full sm:w-72">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2 text-right">Referral Document</p>
+                    {viewingReq.referral_document_url ? (
+                      <a
+                        href={viewingReq.referral_document_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2.5 rounded-xl border border-gray-100 p-2 hover:bg-gray-50 transition-colors"
+                      >
+                        {isImageFileName(viewingReq.referral_document_name) ? (
+                          <img
+                            src={viewingReq.referral_document_url}
+                            alt={viewingReq.referral_document_name || 'Referral document'}
+                            className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                            <i className="ri-file-text-line text-sky-500"></i>
+                          </div>
+                        )}
+                        <span className="text-xs font-medium text-sky-600 truncate">{viewingReq.referral_document_name || 'View document'}</span>
+                        <i className="ri-external-link-line text-gray-300 ml-auto shrink-0"></i>
+                      </a>
+                    ) : canApproveRequests ? (
+                      <div
+                        onDragOver={(e) => { e.preventDefault(); setIsDraggingDoc(true); }}
+                        onDragLeave={() => setIsDraggingDoc(false)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setIsDraggingDoc(false);
+                          handleDocFilePick(e.dataTransfer.files?.[0]);
+                        }}
+                        className={`rounded-xl border-2 border-dashed transition-colors ${isDraggingDoc ? 'border-emerald-400 bg-emerald-50/50' : 'border-gray-200'}`}
+                      >
+                        {pendingDocFile ? (
+                          <div className="flex items-center gap-2.5 p-2">
+                            {pendingDocPreview ? (
+                              <img src={pendingDocPreview} alt="Document preview" className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0" />
+                            ) : (
+                              <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                                <i className="ri-file-text-line text-sky-500"></i>
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-medium text-gray-700 truncate">{pendingDocFile.name}</p>
+                              <p className="text-[10px] text-emerald-600 mt-0.5">Ready — Confirm below</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setPendingDocFile(null)}
+                              title="Remove"
+                              className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer shrink-0"
+                            >
+                              <i className="ri-close-line text-sm"></i>
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="flex flex-col items-center justify-center gap-1 py-3 cursor-pointer">
+                            <i className="ri-upload-cloud-2-line text-lg text-gray-300"></i>
+                            <span className="text-xs font-medium text-gray-600 text-center px-2">Drop file here, or click to browse</span>
+                            <span className="text-[10px] text-gray-400">Required to confirm approval</span>
+                            <input
+                              type="file"
+                              accept="image/*,.pdf,.doc,.docx"
+                              className="hidden"
+                              onChange={(e) => { handleDocFilePick(e.target.files?.[0]); e.target.value = ''; }}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-400 italic text-right">No document attached yet.</p>
+                    )}
+                    {isPending && canApproveRequests && (
+                      <div className="flex items-center justify-end gap-2 mt-2">
+                        <button
+                          onClick={() => handleStatusChange(viewingReq, 'rejected')}
+                          title="Reject"
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
+                        >
+                          <i className="ri-close-circle-line"></i>Reject
+                        </button>
+                        <button
+                          onClick={() => pendingDocFile && handleApprove(viewingReq, pendingDocFile)}
+                          disabled={!pendingDocFile || uploadingApproval}
+                          title={pendingDocFile ? 'Confirm approval' : 'Attach a referral document above to enable'}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white transition-colors hover:bg-emerald-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-emerald-500"
+                        >
+                          <i className={uploadingApproval ? 'ri-loader-4-line animate-spin' : 'ri-checkbox-circle-line'}></i>
+                          {uploadingApproval ? 'Uploading…' : 'Confirm'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Timeline footer */}
               <div className="flex items-center justify-between px-6 py-4 mt-4 border-t border-gray-100 text-xs text-gray-400">
                 <span className="flex items-center gap-1.5">
@@ -1680,17 +1763,6 @@ export default function RequestsPage() {
                 <span className="flex items-center gap-1.5">
                   <i className="ri-refresh-line"></i> Updated {new Date(viewingReq.updated_at).toLocaleString()}
                 </span>
-              </div>
-
-              {/* Actions */}
-              <div className="px-6 pb-5">
-                <button
-                  onClick={() => exportRequestDetails(viewingReq)}
-                  disabled={exportingForm}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <i className={exportingForm ? 'ri-loader-4-line animate-spin' : 'ri-download-2-line'}></i> {exportingForm ? 'Exporting…' : 'Export'}
-                </button>
               </div>
             </div>
           </div>
