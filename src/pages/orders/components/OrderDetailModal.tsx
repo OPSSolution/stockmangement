@@ -4,7 +4,9 @@ import OrderStatusBadge from './OrderStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { deductStockForItems } from '@/lib/stockDeduction';
+import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 import { downloadPdf, type PdfTableSpec } from '@/lib/exportPdf';
+import { supabase } from '@/lib/supabase';
 
 interface OrderDetailModalProps {
   order: Order;
@@ -21,13 +23,19 @@ const vendorStatusColors: Record<string, string> = {
 
 export default function OrderDetailModal({ order, onClose, onUpdateOrder }: OrderDetailModalProps) {
   const { formatAmount } = useCurrency();
-  const { isAdmin, canApprove } = useAuth();
-  const canDecide = isAdmin || canApprove('orders');
+  const { isAdmin, profile } = useAuth();
+  const canDecide = isAdmin;
   const [splits, setSplits] = useState<VendorSplit[]>(order.vendorSplits);
   const [partialQty, setPartialQty] = useState<Record<string, number>>({});
   const [confirmMsg, setConfirmMsg] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [receiptName, setReceiptName] = useState('');
+  const [receiptChecked, setReceiptChecked] = useState(false);
+  const [shipmentDocFile, setShipmentDocFile] = useState<File | null>(null);
+  const [shipmentNote, setShipmentNote] = useState('');
+  const [shipping, setShipping] = useState(false);
   const isPending = order.status === 'pending';
+  const canShip = order.status === 'accepted' || order.status === 'partial';
 
   const updateItemStatus = (splitIdx: number, itemId: string, status: OrderItem['status']) => {
     setSplits((prev) =>
@@ -80,54 +88,33 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
 
     const newStatus = computeNewStatus(resolvedSplits);
 
-    // Stock only leaves the warehouse for items newly accepted this confirm — already-accepted
-    // items (from a prior confirm) aren't re-deducted, and rejected items never touch stock.
-    const newlyAccepted: { productId: string; quantity: number }[] = [];
-    resolvedSplits.forEach((split, si) => {
-      const prevItems = order.vendorSplits[si]?.items || [];
-      split.items.forEach((item) => {
-        const prevStatus = prevItems.find((i) => i.id === item.id)?.status;
-        if (item.status === 'accepted' && prevStatus !== 'accepted') {
-          newlyAccepted.push({ productId: item.productId, quantity: item.quantity });
-        }
-      });
-    });
-
-    if (newlyAccepted.length > 0) {
-      setConfirming(true);
-      const { error } = await deductStockForItems(newlyAccepted, {
-        reference: order.id,
-        note: `Order ${order.id} accepted`,
-        userName: 'Admin',
-        historyType: 'sale',
-      });
-      setConfirming(false);
-      if (error) {
-        setConfirmMsg('Cannot confirm: ' + error);
-        return;
-      }
-    }
-
+    // Accepting no longer touches stock — that only happens once the order is
+    // actually shipped (Confirm Shipment), backed by a required document.
     const updated: Order = { ...order, vendorSplits: resolvedSplits, status: newStatus, updatedAt: new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16) };
     onUpdateOrder(updated);
     onClose();
   };
 
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
+    const allProductIds = splits.flatMap((split) => split.items.map((i) => i.productId));
+    const { data: binRows } = await supabase.from('products').select('id, bin_location').in('id', allProductIds);
+    const binById = new Map((binRows || []).map((r) => [r.id as string, r.bin_location as string | null]));
+
     const totalItems = splits.reduce((s, split) => s + split.items.reduce((si, i) => si + i.quantity, 0), 0);
     const tables: PdfTableSpec[] = splits.map((split) => ({
       title: `${split.vendor} · ${split.warehouse}`,
-      head: ['Product', 'SKU', 'Qty', 'Unit Price', 'Total', 'Status'],
+      head: ['Product', 'SKU', 'Bin', 'Qty', 'Unit Price', 'Total', 'Status'],
       rows: split.items.map((item) => [
         item.productName,
         item.sku,
+        binById.get(item.productId) || '—',
         item.quantity,
         formatAmount(item.unitPrice),
         formatAmount(item.unitPrice * item.quantity),
         item.status.replace(/^\w/, (c) => c.toUpperCase()),
       ]),
-      colStyles: { 2: { halign: 'center' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
-      footRow: [{ content: 'Split Subtotal', colSpan: 4, styles: { halign: 'right' } }, formatAmount(split.subtotal), ''],
+      colStyles: { 3: { halign: 'center' }, 4: { halign: 'right' }, 5: { halign: 'right' } },
+      footRow: [{ content: 'Split Subtotal', colSpan: 5, styles: { halign: 'right' } }, formatAmount(split.subtotal), ''],
     }));
 
     downloadPdf(
@@ -167,6 +154,67 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
     if (!canDecide) return;
     const rejectedSplits = splits.map((s) => ({ ...s, status: 'rejected' as const, items: s.items.map((i) => ({ ...i, status: 'rejected' as const })) }));
     const updated: Order = { ...order, vendorSplits: rejectedSplits, status: 'rejected', updatedAt: new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16) };
+    onUpdateOrder(updated);
+    onClose();
+  };
+
+  // Receipt Confirmation is the one place stock actually leaves the warehouse —
+  // requires a delivery document, mirroring Purchases/Transfers/Returns/Requests.
+  // (An order already shipped under the old two-step flow skips re-upload and
+  // re-deduction — shipmentDocFile is irrelevant for that legacy path.)
+  const handleConfirmReceipt = async () => {
+    if (!receiptName.trim() || !receiptChecked) return;
+    const alreadyShipped = !!order.shippedAt;
+    if (!alreadyShipped && (!canDecide || !shipmentDocFile)) return;
+
+    setShipping(true);
+    const now = new Date().toISOString();
+    const updated: Order = {
+      ...order,
+      status: 'fulfilled',
+      receivedAt: now,
+      receivedBy: receiptName.trim(),
+      receiptConfirmed: true,
+      updatedAt: new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16),
+    };
+
+    if (!alreadyShipped) {
+      const { url: documentUrl, error: uploadError } = await uploadShipmentDocument(shipmentDocFile as File);
+      if (uploadError || !documentUrl) {
+        setShipping(false);
+        setConfirmMsg('Cannot confirm receipt: ' + (uploadError || 'upload failed'));
+        return;
+      }
+
+      const acceptedItems: { productId: string; quantity: number }[] = [];
+      splits.forEach((split) => {
+        split.items.forEach((item) => {
+          if (item.status === 'accepted') acceptedItems.push({ productId: item.productId, quantity: item.quantity });
+        });
+      });
+
+      if (acceptedItems.length > 0) {
+        const { error } = await deductStockForItems(acceptedItems, {
+          reference: order.id,
+          note: `Order ${order.id} shipped`,
+          userName: profile?.full_name || profile?.email || 'Admin',
+          historyType: 'sale',
+        });
+        if (error) {
+          setShipping(false);
+          setConfirmMsg('Cannot confirm receipt: ' + error);
+          return;
+        }
+      }
+
+      updated.shippedAt = now;
+      updated.shippedBy = profile?.full_name || profile?.email || 'Admin';
+      updated.shipmentNote = shipmentNote.trim() || null;
+      updated.shipmentDocumentUrl = documentUrl;
+      updated.shipmentDocumentName = (shipmentDocFile as File).name;
+    }
+
+    setShipping(false);
     onUpdateOrder(updated);
     onClose();
   };
@@ -298,6 +346,114 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
               </div>
             </div>
           ))}
+
+          {/* Receipt Confirmation — the one place stock actually leaves the warehouse,
+              gated on a delivery document. An order already shipped under the old
+              two-step flow (shippedAt set, receipt not yet confirmed) just needs the
+              sign-off — its stock was already deducted, so no document/re-deduction
+              is asked for. */}
+          {(canShip || order.status === 'processing' || order.status === 'fulfilled') && (
+            <div className="rounded-xl border border-gray-100 p-4 space-y-3">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Receipt Confirmation</p>
+
+              {order.receiptConfirmed ? (
+                <div className="flex items-start gap-2.5 text-sm text-gray-700">
+                  <i className="ri-file-shield-2-line text-emerald-500 mt-0.5"></i>
+                  <div>
+                    <p>Received by <span className="font-medium">{order.receivedBy}</span> on {order.receivedAt ? new Date(order.receivedAt).toLocaleString() : ''}</p>
+                    {order.shipmentNote && <p className="text-xs text-gray-400 mt-0.5">{order.shipmentNote}</p>}
+                    {order.shipmentDocumentUrl && (
+                      <a href={order.shipmentDocumentUrl} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-sky-600 hover:underline mt-0.5 inline-flex items-center gap-1">
+                        <i className="ri-file-text-line"></i>{order.shipmentDocumentName || 'View document'}
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ) : order.shippedAt ? (
+                canDecide ? (
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={receiptName}
+                      onChange={(e) => setReceiptName(e.target.value)}
+                      placeholder="Receiver's full name"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                    />
+                    <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                      <input type="checkbox" checked={receiptChecked} onChange={(e) => setReceiptChecked(e.target.checked)} className="rounded" />
+                      I confirm this order was received in good condition.
+                    </label>
+                    <button
+                      onClick={handleConfirmReceipt}
+                      disabled={!receiptName.trim() || !receiptChecked}
+                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                    >
+                      <i className="ri-quill-pen-line"></i>Confirm Receipt
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400 italic">Awaiting receipt confirmation.</p>
+                )
+              ) : canDecide ? (
+                <div className="space-y-2">
+                  {shipmentDocFile ? (
+                    <div className="flex items-center gap-2.5 border border-gray-200 rounded-lg p-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                        <i className="ri-file-text-line text-sky-500"></i>
+                      </div>
+                      <span className="text-xs font-medium text-gray-700 truncate flex-1">{shipmentDocFile.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => setShipmentDocFile(null)}
+                        className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer shrink-0"
+                      >
+                        <i className="ri-close-line text-sm"></i>
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center gap-1 py-3 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-sky-300 transition-colors">
+                      <i className="ri-upload-cloud-2-line text-lg text-gray-300"></i>
+                      <span className="text-xs font-medium text-gray-600">Click to attach pickslip / delivery document</span>
+                      <span className="text-[10px] text-gray-400">Required to confirm receipt</span>
+                      <input
+                        type="file"
+                        className="hidden"
+                        onChange={(e) => { setShipmentDocFile(e.target.files?.[0] || null); e.target.value = ''; }}
+                      />
+                    </label>
+                  )}
+                  <input
+                    type="text"
+                    value={shipmentNote}
+                    onChange={(e) => setShipmentNote(e.target.value)}
+                    placeholder="Shipment note (optional)"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-200"
+                  />
+                  <input
+                    type="text"
+                    value={receiptName}
+                    onChange={(e) => setReceiptName(e.target.value)}
+                    placeholder="Receiver's full name"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                  />
+                  <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                    <input type="checkbox" checked={receiptChecked} onChange={(e) => setReceiptChecked(e.target.checked)} className="rounded" />
+                    I confirm this order was received in good condition.
+                  </label>
+                  <button
+                    onClick={handleConfirmReceipt}
+                    disabled={!shipmentDocFile || !receiptName.trim() || !receiptChecked || shipping}
+                    title={shipmentDocFile ? undefined : 'Attach the delivery document above to enable'}
+                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                  >
+                    <i className={shipping ? 'ri-loader-4-line animate-spin' : 'ri-quill-pen-line'}></i>{shipping ? 'Confirming…' : 'Confirm Receipt'}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic">Not shipped yet.</p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}

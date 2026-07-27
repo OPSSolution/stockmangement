@@ -20,7 +20,7 @@ const mainNavItems: NavItem[] = [
   { label: 'Transfers',  icon: 'ri-swap-box-line',        path: '/transfers',  permKey: 'transfers' },
   { label: 'Requests',   icon: 'ri-file-list-3-line',     path: '/requests',   permKey: 'requests' },
   { label: 'Returns',    icon: 'ri-arrow-go-back-line',   path: '/returns',    permKey: 'returns' },
-  // { label: 'Purchases',  icon: 'ri-shopping-cart-2-line', path: '/purchases',  permKey: 'purchases' },
+  { label: 'Purchases',  icon: 'ri-shopping-cart-2-line', path: '/purchases',  permKey: 'purchases' },
   { label: 'Promotions', icon: 'ri-price-tag-3-line',     path: '/promotions', permKey: 'promotions' },
 ];
 

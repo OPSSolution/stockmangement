@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { restockReturnedItems } from '@/lib/stockDeduction';
+import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 import { downloadPdf } from '@/lib/exportPdf';
 
 interface Props {
@@ -57,6 +58,7 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
   const [finalizingAction, setFinalizingAction] = useState<'restocked' | 'discarded' | 'saving' | null>(null);
   const finalizing = finalizingAction != null;
   const [finalizeError, setFinalizeError] = useState('');
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
 
   // Always show how much of the source request has been claimed by a return so
   // far (this one plus any others) and how much is still outstanding — this is
@@ -142,9 +144,21 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
   };
 
   const finalize = async (status: 'restocked' | 'discarded') => {
+    if (status === 'restocked' && !documentFile) return;
     setFinalizeError('');
     setFinalizingAction(status);
     const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
+
+    let documentUrl: string | null = null;
+    if (status === 'restocked' && documentFile) {
+      const { url, error: uploadError } = await uploadShipmentDocument(documentFile);
+      if (uploadError || !url) {
+        setFinalizingAction(null);
+        setFinalizeError(`Failed to upload document: ${uploadError || 'unknown error'}`);
+        return;
+      }
+      documentUrl = url;
+    }
 
     // One click decides every not-yet-finalized return on this request, not just
     // the one currently open — the current return uses whatever's been edited in
@@ -173,13 +187,17 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
         inspectionNotes: target.id === ret.id ? (inspectionNotes || undefined) : target.inspectionNotes,
         completedAt: now,
         updatedAt: now,
+        ...(status === 'restocked' ? { restockDocumentUrl: documentUrl, restockDocumentName: documentFile?.name } : {}),
       });
     }
     setFinalizingAction(null);
     onClose();
   };
 
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
+    const { data: binRows } = await supabase.from('products').select('id, bin_location').in('id', items.map((i) => i.productId));
+    const binById = new Map((binRows || []).map((r) => [r.id as string, r.bin_location as string | null]));
+
     downloadPdf(
       {
         docType: 'Return',
@@ -212,17 +230,18 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
         tables: [
           {
             title: 'Returned Items',
-            head: ['Product', 'SKU', 'Qty', 'Condition', 'Unit Price', 'Total'],
+            head: ['Product', 'SKU', 'Bin', 'Qty', 'Condition', 'Unit Price', 'Total'],
             rows: items.map((item) => [
               item.productName,
               item.sku,
+              binById.get(item.productId) || '—',
               item.quantity,
               conditionOptions.find((c) => c.value === item.condition)?.label || '—',
               formatAmount(item.unitPrice),
               formatAmount(item.quantity * item.unitPrice),
             ]),
-            colStyles: { 2: { halign: 'center' }, 4: { halign: 'right' }, 5: { halign: 'right' } },
-            footRow: [{ content: 'Stock Value', colSpan: 5, styles: { halign: 'right' } }, formatAmount(ret.totalValue)],
+            colStyles: { 3: { halign: 'center' }, 5: { halign: 'right' }, 6: { halign: 'right' } },
+            footRow: [{ content: 'Stock Value', colSpan: 6, styles: { halign: 'right' } }, formatAmount(ret.totalValue)],
           },
         ],
         footerLeft: `Returned by ${ret.returnedBy}`,
@@ -434,6 +453,39 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
               )}
             </div>
           )}
+
+          {/* Restock document — required before Confirm can add stock back */}
+          {isEditable && isAdmin && (
+            <div>
+              <p className="text-sm font-semibold text-gray-700 mb-2">Restock Document</p>
+              {documentFile ? (
+                <div className="flex items-center gap-2.5 border border-gray-200 rounded-lg p-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                    <i className="ri-file-text-line text-sky-500"></i>
+                  </div>
+                  <span className="text-xs font-medium text-gray-700 truncate flex-1">{documentFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setDocumentFile(null)}
+                    className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer shrink-0"
+                  >
+                    <i className="ri-close-line text-sm"></i>
+                  </button>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center gap-1 py-4 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-emerald-300 transition-colors">
+                  <i className="ri-upload-cloud-2-line text-lg text-gray-300"></i>
+                  <span className="text-xs font-medium text-gray-600">Click to attach inspection/handover photo or note</span>
+                  <span className="text-[10px] text-gray-400">Required to confirm restock</span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => { setDocumentFile(e.target.files?.[0] || null); e.target.value = ''; }}
+                  />
+                </label>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -465,7 +517,8 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
                   </button>
                   <button
                     onClick={() => finalize('restocked')}
-                    disabled={finalizing}
+                    disabled={finalizing || !documentFile}
+                    title={documentFile ? undefined : 'Attach the restock document above to enable'}
                     className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
                   >
                     {finalizingAction === 'restocked' ? <i className="ri-loader-4-line animate-spin"></i> : <i className="ri-checkbox-circle-line"></i>}

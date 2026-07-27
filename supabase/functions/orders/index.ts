@@ -17,7 +17,15 @@ const jsonResponse = (status, body, extra = {}) =>
     },
   });
 
-const nowStamp = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
+// Deno Deploy runs in UTC, so this is still a UTC clock, but at least it's no
+// longer generated via toISOString().slice() — which silently produced a UTC
+// reading disguised as a local one wherever it got compared against genuinely
+// local browser timestamps from the same "YYYY-MM-DD HH:mm" columns.
+const nowStamp = () => {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
 
 const buildVendorSplits = (selectedLines) => {
   const grouped = new Map();

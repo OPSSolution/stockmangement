@@ -6,6 +6,7 @@ import QuickActions from './components/QuickActions';
 import DeliveryStatus from './components/DeliveryStatus';
 import RecentActivity from './components/RecentActivity';
 import WarehouseSnapshot from './components/WarehouseSnapshot';
+import PendingItems from './components/PendingItems';
 
 export default function Home() {
   return (
@@ -16,6 +17,11 @@ export default function Home() {
       {/* KPI Cards */}
       <section className="mb-6">
         <KpiCards />
+      </section>
+
+      {/* Pending Actions across all modules */}
+      <section className="mb-6">
+        <PendingItems />
       </section>
 
       {/* Middle row: Quick Actions + Warehouse Snapshot + Alerts */}

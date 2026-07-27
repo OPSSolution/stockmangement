@@ -5,6 +5,7 @@ import DashboardLayout from '@/components/feature/DashboardLayout';
 import { isReservedFieldLabel, type RequestFormTemplate, type TemplateField } from '@/pages/admin/request-templates/page';
 import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 import { deductStockForItems } from '@/lib/stockDeduction';
+import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 import { exportToCsv } from '@/lib/exportCsv';
 import { exportRequestAsForm } from '@/lib/exportRequestForm';
 import { downloadPdf, type PdfNote } from '@/lib/exportPdf';
@@ -70,6 +71,15 @@ interface StockRequest {
   review_note: string | null;
   /** Why the requester is handing this stock back, set when status becomes 'returned'. */
   return_reason: string | null;
+  /** Set once the receiver signs off that the stock arrived — flips status to 'fulfilled'. */
+  received_at: string | null;
+  received_by: string | null;
+  receipt_confirmed: boolean;
+  /** Set once dispatch is confirmed with a document — this is what actually deducts stock, not Approve. */
+  dispatched_at: string | null;
+  dispatched_by: string | null;
+  dispatch_document_url: string | null;
+  dispatch_document_name: string | null;
   /** Flagged at creation time — this stock may need to come back later (trial/consignment/etc). */
   needs_return: boolean;
   /** Which company form (e.g. UNT, SVP) this request was filled out under, if any. */
@@ -92,6 +102,7 @@ interface ProductOption {
   stock: number;
   low_stock_threshold: number;
   warehouse: string;
+  bin_location?: string | null;
 }
 
 const PRIORITIES = [
@@ -144,6 +155,16 @@ const STATUS_META: Record<StockRequest['status'], { label: string; color: string
   returned: { label: 'Returned', color: 'bg-violet-50 text-violet-600' },
 };
 
+// Dispatch doesn't get its own stored status value (still 'approved' underneath) —
+// this only changes what's displayed once Confirm Dispatch has gone through,
+// mirroring the "Complete" label the other modules show at their equivalent step.
+function requestStatusDisplay(req: Pick<StockRequest, 'status' | 'dispatched_at'>): { label: string; color: string } {
+  if (req.status === 'approved' && req.dispatched_at) {
+    return { label: 'Complete', color: 'bg-emerald-50 text-emerald-600' };
+  }
+  return STATUS_META[req.status];
+}
+
 type FilterTab = 'all' | StockRequest['status'];
 
 const emptyForm = (warehouse: string) => ({
@@ -165,10 +186,10 @@ function defaultValueForField(field: TemplateField): string | number | boolean {
 }
 
 export default function RequestsPage() {
-  const { profile, isAdmin, warehouseScope, canEdit, canDelete, canApprove } = useAuth();
+  const { profile, isAdmin, warehouseScope, canEdit, canDelete } = useAuth();
   const canSubmit = canEdit('requests');
   const canHardDelete = canDelete('requests');
-  const canApproveRequests = isAdmin || canApprove('requests');
+  const canApproveRequests = isAdmin;
   const requesterIdentity = profile?.full_name || profile?.email;
 
   const [requests, setRequests] = useState<StockRequest[]>([]);
@@ -201,6 +222,8 @@ export default function RequestsPage() {
 
   /** Per-product quantity already claimed by a return linked to the currently-viewed request. */
   const [returnProgress, setReturnProgress] = useState<Record<string, number>>({});
+  const [receiptName, setReceiptName] = useState('');
+  const [receiptChecked, setReceiptChecked] = useState(false);
 
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -223,6 +246,7 @@ export default function RequestsPage() {
           template_id: r.template_id ?? null,
           template_name: r.template_name ?? null,
           needs_return: Boolean(r.needs_return),
+          receipt_confirmed: Boolean(r.receipt_confirmed),
         }))
       );
     }
@@ -233,7 +257,7 @@ export default function RequestsPage() {
 
   useEffect(() => {
     async function loadOptions() {
-      let productsQuery = supabase.from('products').select('id, name, sku, image_url, stock, low_stock_threshold, warehouse');
+      let productsQuery = supabase.from('products').select('id, name, sku, image_url, stock, low_stock_threshold, warehouse, bin_location');
       let warehousesQuery = supabase.from('warehouses').select('name').order('name', { ascending: true });
       if (warehouseScope) {
         productsQuery = productsQuery.in('warehouse', warehouseScope);
@@ -256,6 +280,8 @@ export default function RequestsPage() {
 
   useEffect(() => {
     setPendingDocFile(null);
+    setReceiptName('');
+    setReceiptChecked(false);
   }, [viewingReq?.id]);
 
   // Swap the staged-document preview URL whenever a new file is picked, and always
@@ -472,6 +498,13 @@ export default function RequestsPage() {
         approved_at: null,
         review_note: null,
         return_reason: null,
+        received_at: null,
+        received_by: null,
+        receipt_confirmed: false,
+        dispatched_at: null,
+        dispatched_by: null,
+        dispatch_document_url: null,
+        dispatch_document_name: null,
         referral_document_url: null,
         referral_document_name: null,
         created_at: now,
@@ -521,56 +554,88 @@ export default function RequestsPage() {
     logAudit({ action: 'update', module: 'requests', description: `Request ${req.id} ${status}`, referenceId: req.id });
   };
 
-  // Approving requires attaching the referral document at the moment of approval —
-  // this is the one place that document gets set, not at request submission.
-  const handleApprove = async (req: StockRequest, file: File) => {
+  // Approve is a pure decision — no document, no stock movement. Stock only
+  // leaves the warehouse once Confirm Dispatch is done (see below), backed by
+  // a required document.
+  const handleApprove = async (req: StockRequest) => {
     if (!canApproveRequests) return;
-
-    setUploadingApproval(true);
-    const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const path = `${Date.now()}-${safeName}`;
-    const { error: uploadError } = await supabase.storage.from('request_documents').upload(path, file, { cacheControl: '3600', upsert: true });
-    if (uploadError) {
-      setUploadingApproval(false);
-      showToast('Failed to upload document: ' + uploadError.message, 'error');
-      return;
-    }
-    const { data } = supabase.storage.from('request_documents').getPublicUrl(path);
-
-    // Stock only leaves the warehouse once a request is actually approved —
-    // rejecting or cancelling a request never touches real stock.
-    const { error: deductError } = await deductStockForItems(req.items, {
-      reference: req.id,
-      note: `Approved request ${req.id}`,
-      userName: requesterIdentity || 'Admin',
-      historyType: 'request',
-    });
-    if (deductError) {
-      setUploadingApproval(false);
-      showToast('Cannot approve: ' + deductError, 'error');
-      return;
-    }
 
     const now = new Date().toISOString();
     const update = {
       status: 'approved' as const,
-      referral_document_url: data.publicUrl,
-      referral_document_name: file.name,
       approved_by: requesterIdentity || 'Admin',
       approved_at: now,
       updated_at: now,
     };
     const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
-    setUploadingApproval(false);
     if (error) {
       showToast('Failed to approve: ' + error.message, 'error');
       return;
     }
-    showToast('Request approved — stock deducted.');
+    showToast('Request approved.');
     setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, ...update } : prev));
     setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, ...update } : r)));
-    setPendingDocFile(null);
     logAudit({ action: 'update', module: 'requests', description: `Approved request ${req.id}`, referenceId: req.id });
+  };
+
+  // Confirming receipt is the one place stock actually leaves the warehouse —
+  // requires a handover document, mirroring Purchases/Transfers/Returns/Orders.
+  // (A request already dispatched under the old two-step flow skips re-upload
+  // and re-deduction — `file` is null for that legacy path.)
+  const handleConfirmReceipt = async (req: StockRequest, file: File | null) => {
+    if (!receiptName.trim() || !receiptChecked) return;
+    const alreadyDispatched = !!req.dispatched_at;
+    if (!alreadyDispatched && (!canApproveRequests || !file)) return;
+
+    setUploadingApproval(true);
+    const now = new Date().toISOString();
+    const update: Record<string, unknown> = {
+      status: 'fulfilled' as const,
+      received_at: now,
+      received_by: receiptName.trim(),
+      receipt_confirmed: true,
+      updated_at: now,
+    };
+
+    if (!alreadyDispatched) {
+      const { url, error: uploadError } = await uploadShipmentDocument(file as File);
+      if (uploadError || !url) {
+        setUploadingApproval(false);
+        showToast('Failed to upload document: ' + (uploadError || 'unknown error'), 'error');
+        return;
+      }
+
+      const { error: deductError } = await deductStockForItems(req.items, {
+        reference: req.id,
+        note: `Dispatched request ${req.id}`,
+        userName: requesterIdentity || 'Admin',
+        historyType: 'request',
+      });
+      if (deductError) {
+        setUploadingApproval(false);
+        showToast('Cannot confirm receipt: ' + deductError, 'error');
+        return;
+      }
+
+      update.dispatched_at = now;
+      update.dispatched_by = requesterIdentity || 'Admin';
+      update.dispatch_document_url = url;
+      update.dispatch_document_name = (file as File).name;
+    }
+
+    const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
+    setUploadingApproval(false);
+    if (error) {
+      showToast('Failed to confirm receipt: ' + error.message, 'error');
+      return;
+    }
+    showToast(alreadyDispatched ? 'Receipt confirmed — request fulfilled.' : 'Receipt confirmed — stock deducted.');
+    setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, ...update } : prev));
+    setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, ...update } : r)));
+    setReceiptName('');
+    setReceiptChecked(false);
+    setPendingDocFile(null);
+    logAudit({ action: 'update', module: 'requests', description: `Receipt confirmed for request ${req.id}`, referenceId: req.id });
   };
 
   const handleDocFilePick = (file: File | undefined) => {
@@ -631,6 +696,9 @@ export default function RequestsPage() {
       { header: 'Template', value: () => req.template_name || '' },
       { header: 'Custom Fields', value: () => req.custom_fields.map((f) => `${f.label}: ${f.type === 'checkbox' ? (f.value ? 'Yes' : 'No') : f.value}`).join('; ') },
       { header: 'Referral Document', value: () => req.referral_document_url || '' },
+      { header: 'Dispatched By', value: () => req.dispatched_by || '' },
+      { header: 'Dispatched At', value: () => req.dispatched_at || '' },
+      { header: 'Dispatch Document', value: () => req.dispatch_document_url || '' },
       { header: 'Reviewed By', value: () => req.reviewed_by || '' },
       { header: 'Reviewed By (2)', value: () => req.reviewed_by_2 || '' },
       { header: 'Approved By', value: () => req.approved_by || '' },
@@ -684,15 +752,16 @@ export default function RequestsPage() {
         tables: [
           {
             title: 'Products',
-            head: ['Product', 'SKU', 'Package', 'Qty'],
+            head: ['Product', 'SKU', 'Bin', 'Package', 'Qty'],
             rows: req.items.map((item) => [
               item.productName,
               item.sku,
+              products.find((p) => p.id === item.productId)?.bin_location || '—',
               item.packageWeight ? `${item.packageWeight}${item.unit || 'kg'}` : (item.unit || '—'),
               item.quantity,
             ]),
-            colStyles: { 3: { halign: 'center' } },
-            footRow: [{ content: 'Total Units', colSpan: 3, styles: { halign: 'right' } }, req.total_items],
+            colStyles: { 4: { halign: 'center' } },
+            footRow: [{ content: 'Total Units', colSpan: 4, styles: { halign: 'right' } }, req.total_items],
           },
         ],
         footerLeft: `Requested by ${req.requested_by}`,
@@ -966,7 +1035,7 @@ export default function RequestsPage() {
                   >
                     <option value="">{form.warehouse ? `Select product from ${form.warehouse}…` : 'Select a warehouse first'}</option>
                     {availableProducts.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.sku}) — {availableStock(p.stock, reserved, p.id)} available</option>
+                      <option key={p.id} value={p.id}>{p.name} ({p.sku}){p.bin_location ? ` — Bin: ${p.bin_location}` : ''} — {availableStock(p.stock, reserved, p.id)} available</option>
                     ))}
                   </select>
                   <input
@@ -1037,7 +1106,13 @@ export default function RequestsPage() {
                                     <i className="ri-box-3-line text-emerald-500 text-xs"></i>
                                   )}
                                 </div>
-                                <span className="font-medium text-gray-800">{item.productName}</span>
+                                <div>
+                                  <span className="font-medium text-gray-800">{item.productName}</span>
+                                  {(() => {
+                                    const bin = products.find((p) => p.id === item.productId)?.bin_location;
+                                    return bin ? <p className="text-[11px] text-gray-400 font-mono">Bin: {bin}</p> : null;
+                                  })()}
+                                </div>
                               </div>
                             </td>
                             <td className="px-4 py-2.5 text-gray-500 font-mono text-xs">{item.sku}</td>
@@ -1252,7 +1327,7 @@ export default function RequestsPage() {
                 <tbody className="divide-y divide-gray-50">
                   {filtered.map((req) => {
                     const priorityMeta = PRIORITIES.find((p) => p.value === req.priority) || PRIORITIES[2];
-                    const statusMeta = STATUS_META[req.status];
+                    const statusMeta = requestStatusDisplay(req);
                     const timeAgo = formatTimeAgo(req.created_at);
                     const firstItem = req.items[0];
                     const extraCount = req.items.length - 1;
@@ -1427,15 +1502,17 @@ export default function RequestsPage() {
                   <select
                     value={viewingReq.status}
                     onChange={(e) => handleStatusChange(viewingReq, e.target.value as StockRequest['status'])}
-                    className={`text-xs font-semibold px-2.5 py-1 rounded-full border-transparent focus:outline-none cursor-pointer ${STATUS_META[viewingReq.status].color}`}
+                    className={`text-xs font-semibold px-2.5 py-1 rounded-full border-transparent focus:outline-none cursor-pointer ${requestStatusDisplay(viewingReq).color}`}
                   >
                     {Object.entries(STATUS_META).map(([value, meta]) => (
-                      <option key={value} value={value}>{meta.label}</option>
+                      <option key={value} value={value}>
+                        {value === 'approved' && viewingReq.dispatched_at ? 'Complete' : meta.label}
+                      </option>
                     ))}
                   </select>
                 ) : (
-                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_META[viewingReq.status].color}`}>
-                    {STATUS_META[viewingReq.status].label}
+                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${requestStatusDisplay(viewingReq).color}`}>
+                    {requestStatusDisplay(viewingReq).label}
                   </span>
                 )}
                 <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${priorityMeta.color}`}>
@@ -1470,16 +1547,34 @@ export default function RequestsPage() {
                 <div className="mx-6 mt-3 px-4 py-3 rounded-xl bg-amber-50/60 border border-amber-100 flex items-center justify-between gap-3 flex-wrap">
                   <span className="text-xs font-semibold text-amber-700 flex items-center gap-1.5">
                     <i className="ri-time-line"></i>
-                    {canApproveRequests ? 'Awaiting decision — attach the referral document below, then Confirm' : 'Awaiting decision'}
+                    Awaiting decision
                   </span>
-                  {isOwnRequest && (
-                    <button
-                      onClick={() => handleStatusChange(viewingReq, 'cancelled')}
-                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors cursor-pointer"
-                    >
-                      Cancel Request
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {isOwnRequest && (
+                      <button
+                        onClick={() => handleStatusChange(viewingReq, 'cancelled')}
+                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors cursor-pointer"
+                      >
+                        Cancel Request
+                      </button>
+                    )}
+                    {canApproveRequests && (
+                      <>
+                        <button
+                          onClick={() => handleStatusChange(viewingReq, 'rejected')}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
+                        >
+                          <i className="ri-close-circle-line"></i>Reject
+                        </button>
+                        <button
+                          onClick={() => handleApprove(viewingReq)}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 transition-colors cursor-pointer"
+                        >
+                          <i className="ri-checkbox-circle-line"></i>Approve
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1548,21 +1643,150 @@ export default function RequestsPage() {
                       <div className="text-right flex-shrink-0 ml-3">
                         <span className="text-sm font-bold text-gray-700">×{item.quantity}</span>
                         {item.totalKg ? <p className="text-xs text-gray-400">{item.totalKg} Kg</p> : null}
-                        {viewingReq.needs_return && (() => {
-                          const returnedQty = returnProgress[item.productId] || 0;
-                          const remainingQty = Math.max(0, item.quantity - returnedQty);
-                          return (
-                            <p className={`text-[10px] mt-0.5 ${remainingQty === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                              {returnedQty > 0 ? `${returnedQty} returned · ` : ''}
-                              {remainingQty === 0 ? 'fully returned' : `${remainingQty} remaining`}
-                            </p>
-                          );
-                        })()}
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
+
+              {/* Receipt Confirmation — the one place stock actually leaves the warehouse, gated
+                  on a handover document. A request already dispatched under the old two-step
+                  flow (dispatched_at set, receipt not yet confirmed) just needs the sign-off —
+                  its stock was already deducted, so no document/re-deduction is asked for. */}
+              {(viewingReq.status === 'approved' || viewingReq.status === 'fulfilled') && (
+                <div className="px-6 mt-3">
+                  <div className="rounded-xl border border-gray-100 px-4 py-3 space-y-3">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Receipt Confirmation</p>
+
+                    {viewingReq.receipt_confirmed ? (
+                      <div className="flex items-start gap-2.5 text-sm text-gray-700">
+                        <i className="ri-file-shield-2-line text-emerald-500 mt-0.5"></i>
+                        <div>
+                          <p>Received by <span className="font-medium">{viewingReq.received_by}</span> on {new Date(viewingReq.received_at as string).toLocaleString()}</p>
+                          {viewingReq.dispatch_document_url && (
+                            <a
+                              href={viewingReq.dispatch_document_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-1.5 flex items-center gap-2.5 rounded-xl border border-gray-100 p-2 hover:bg-gray-50 transition-colors w-full sm:w-72"
+                            >
+                              {isImageFileName(viewingReq.dispatch_document_name) ? (
+                                <img
+                                  src={viewingReq.dispatch_document_url}
+                                  alt={viewingReq.dispatch_document_name || 'Receipt document'}
+                                  className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0"
+                                />
+                              ) : (
+                                <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                                  <i className="ri-file-text-line text-sky-500"></i>
+                                </div>
+                              )}
+                              <span className="text-xs font-medium text-sky-600 truncate">{viewingReq.dispatch_document_name || 'View document'}</span>
+                              <i className="ri-external-link-line text-gray-300 ml-auto shrink-0"></i>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ) : viewingReq.dispatched_at ? (
+                      (isAdmin || isOwnRequest) ? (
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            value={receiptName}
+                            onChange={(e) => setReceiptName(e.target.value)}
+                            placeholder="Receiver's full name"
+                            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                          />
+                          <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                            <input type="checkbox" checked={receiptChecked} onChange={(e) => setReceiptChecked(e.target.checked)} className="rounded" />
+                            I confirm this stock was received in good condition.
+                          </label>
+                          <button
+                            onClick={() => handleConfirmReceipt(viewingReq, null)}
+                            disabled={!receiptName.trim() || !receiptChecked}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                          >
+                            <i className="ri-quill-pen-line"></i>Confirm Receipt
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-400 italic">Awaiting receipt confirmation.</p>
+                      )
+                    ) : canApproveRequests ? (
+                      <div className="space-y-2">
+                        <div
+                          onDragOver={(e) => { e.preventDefault(); setIsDraggingDoc(true); }}
+                          onDragLeave={() => setIsDraggingDoc(false)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setIsDraggingDoc(false);
+                            handleDocFilePick(e.dataTransfer.files?.[0]);
+                          }}
+                          className={`rounded-xl border-2 border-dashed transition-colors ${isDraggingDoc ? 'border-emerald-400 bg-emerald-50/50' : 'border-gray-200'}`}
+                        >
+                          {pendingDocFile ? (
+                            <div className="flex items-center gap-2.5 p-2">
+                              {pendingDocPreview ? (
+                                <img src={pendingDocPreview} alt="Document preview" className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0" />
+                              ) : (
+                                <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                                  <i className="ri-file-text-line text-sky-500"></i>
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-medium text-gray-700 truncate">{pendingDocFile.name}</p>
+                                <p className="text-[10px] text-emerald-600 mt-0.5">Ready — Confirm Receipt below</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setPendingDocFile(null)}
+                                title="Remove"
+                                className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer shrink-0"
+                              >
+                                <i className="ri-close-line text-sm"></i>
+                              </button>
+                            </div>
+                          ) : (
+                            <label className="flex flex-col items-center justify-center gap-1 py-3 cursor-pointer">
+                              <i className="ri-upload-cloud-2-line text-lg text-gray-300"></i>
+                              <span className="text-xs font-medium text-gray-600 text-center px-2">Drop file here, or click to browse</span>
+                              <span className="text-[10px] text-gray-400">Required to confirm receipt</span>
+                              <input
+                                type="file"
+                                accept="image/*,.pdf,.doc,.docx"
+                                className="hidden"
+                                onChange={(e) => { handleDocFilePick(e.target.files?.[0]); e.target.value = ''; }}
+                              />
+                            </label>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={receiptName}
+                          onChange={(e) => setReceiptName(e.target.value)}
+                          placeholder="Receiver's full name"
+                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                        />
+                        <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                          <input type="checkbox" checked={receiptChecked} onChange={(e) => setReceiptChecked(e.target.checked)} className="rounded" />
+                          I confirm this stock was received in good condition.
+                        </label>
+                        <button
+                          onClick={() => pendingDocFile && handleConfirmReceipt(viewingReq, pendingDocFile)}
+                          disabled={!pendingDocFile || !receiptName.trim() || !receiptChecked || uploadingApproval}
+                          title={pendingDocFile ? undefined : 'Attach a handover document above to enable'}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                        >
+                          <i className={uploadingApproval ? 'ri-loader-4-line animate-spin' : 'ri-quill-pen-line'}></i>
+                          {uploadingApproval ? 'Uploading…' : 'Confirm Receipt'}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-400 italic">Awaiting receipt confirmation.</p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* People */}
               <div className="grid grid-cols-2 gap-3 px-6 mt-3">
@@ -1655,102 +1879,32 @@ export default function RequestsPage() {
                 </div>
               )}
 
-              {/* Referral document — compact card, bottom-right, out of the way of the main details above. */}
-              {(viewingReq.referral_document_url || isPending) && (
+              {/* Referral document — legacy field from before Approve was split from Confirm
+                  Dispatch; view-only now, shown only when an older request already has one. */}
+              {viewingReq.referral_document_url && (
                 <div className="px-6 mt-3 flex justify-end">
                   <div className="w-full sm:w-72">
                     <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2 text-right">Referral Document</p>
-                    {viewingReq.referral_document_url ? (
-                      <a
-                        href={viewingReq.referral_document_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2.5 rounded-xl border border-gray-100 p-2 hover:bg-gray-50 transition-colors"
-                      >
-                        {isImageFileName(viewingReq.referral_document_name) ? (
-                          <img
-                            src={viewingReq.referral_document_url}
-                            alt={viewingReq.referral_document_name || 'Referral document'}
-                            className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0"
-                          />
-                        ) : (
-                          <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
-                            <i className="ri-file-text-line text-sky-500"></i>
-                          </div>
-                        )}
-                        <span className="text-xs font-medium text-sky-600 truncate">{viewingReq.referral_document_name || 'View document'}</span>
-                        <i className="ri-external-link-line text-gray-300 ml-auto shrink-0"></i>
-                      </a>
-                    ) : canApproveRequests ? (
-                      <div
-                        onDragOver={(e) => { e.preventDefault(); setIsDraggingDoc(true); }}
-                        onDragLeave={() => setIsDraggingDoc(false)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setIsDraggingDoc(false);
-                          handleDocFilePick(e.dataTransfer.files?.[0]);
-                        }}
-                        className={`rounded-xl border-2 border-dashed transition-colors ${isDraggingDoc ? 'border-emerald-400 bg-emerald-50/50' : 'border-gray-200'}`}
-                      >
-                        {pendingDocFile ? (
-                          <div className="flex items-center gap-2.5 p-2">
-                            {pendingDocPreview ? (
-                              <img src={pendingDocPreview} alt="Document preview" className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0" />
-                            ) : (
-                              <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
-                                <i className="ri-file-text-line text-sky-500"></i>
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <p className="text-xs font-medium text-gray-700 truncate">{pendingDocFile.name}</p>
-                              <p className="text-[10px] text-emerald-600 mt-0.5">Ready — Confirm below</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setPendingDocFile(null)}
-                              title="Remove"
-                              className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer shrink-0"
-                            >
-                              <i className="ri-close-line text-sm"></i>
-                            </button>
-                          </div>
-                        ) : (
-                          <label className="flex flex-col items-center justify-center gap-1 py-3 cursor-pointer">
-                            <i className="ri-upload-cloud-2-line text-lg text-gray-300"></i>
-                            <span className="text-xs font-medium text-gray-600 text-center px-2">Drop file here, or click to browse</span>
-                            <span className="text-[10px] text-gray-400">Required to confirm approval</span>
-                            <input
-                              type="file"
-                              accept="image/*,.pdf,.doc,.docx"
-                              className="hidden"
-                              onChange={(e) => { handleDocFilePick(e.target.files?.[0]); e.target.value = ''; }}
-                            />
-                          </label>
-                        )}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-gray-400 italic text-right">No document attached yet.</p>
-                    )}
-                    {isPending && canApproveRequests && (
-                      <div className="flex items-center justify-end gap-2 mt-2">
-                        <button
-                          onClick={() => handleStatusChange(viewingReq, 'rejected')}
-                          title="Reject"
-                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
-                        >
-                          <i className="ri-close-circle-line"></i>Reject
-                        </button>
-                        <button
-                          onClick={() => pendingDocFile && handleApprove(viewingReq, pendingDocFile)}
-                          disabled={!pendingDocFile || uploadingApproval}
-                          title={pendingDocFile ? 'Confirm approval' : 'Attach a referral document above to enable'}
-                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white transition-colors hover:bg-emerald-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-emerald-500"
-                        >
-                          <i className={uploadingApproval ? 'ri-loader-4-line animate-spin' : 'ri-checkbox-circle-line'}></i>
-                          {uploadingApproval ? 'Uploading…' : 'Confirm'}
-                        </button>
-                      </div>
-                    )}
+                    <a
+                      href={viewingReq.referral_document_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2.5 rounded-xl border border-gray-100 p-2 hover:bg-gray-50 transition-colors"
+                    >
+                      {isImageFileName(viewingReq.referral_document_name) ? (
+                        <img
+                          src={viewingReq.referral_document_url}
+                          alt={viewingReq.referral_document_name || 'Referral document'}
+                          className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                          <i className="ri-file-text-line text-sky-500"></i>
+                        </div>
+                      )}
+                      <span className="text-xs font-medium text-sky-600 truncate">{viewingReq.referral_document_name || 'View document'}</span>
+                      <i className="ri-external-link-line text-gray-300 ml-auto shrink-0"></i>
+                    </a>
                   </div>
                 </div>
               )}

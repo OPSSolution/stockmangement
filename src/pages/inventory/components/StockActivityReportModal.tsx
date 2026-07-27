@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Product } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
 import { typeConfig } from './stockHistoryTypeConfig';
+import { downloadPdf, type PdfCell } from '@/lib/exportPdf';
 
 interface StockActivityReportModalProps {
   products: Product[];
@@ -10,7 +11,7 @@ interface StockActivityReportModalProps {
   onClose: () => void;
 }
 
-type Tab = 'by_product' | 'ledger';
+type Tab = 'movement' | 'ledger';
 
 function formatDateTime(ts: string) {
   const d = new Date(ts);
@@ -31,30 +32,45 @@ function csvEscape(value: string) {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-const TYPE_ORDER: StockHistoryEntry['type'][] = ['transfer_in', 'transfer_out', 'purchase', 'sale', 'request', 'return', 'adjustment'];
+// The canonical a–h line items from the Stock Movement Report spec, in report order.
+// "Internal Request" isn't part of that spec but is a real movement type this app
+// tracks (stock leaving for an internal Stock Request) — it's appended only when a
+// product actually has some, so Beginning + movements always reconciles to Closing.
+const MOVEMENT_TYPE_ORDER: StockHistoryEntry['type'][] = ['purchase', 'transfer_in', 'return', 'sale', 'transfer_out', 'adjustment', 'request'];
 
-const REPORT_LABEL_OVERRIDES: Partial<Record<StockHistoryEntry['type'], string>> = {
-  purchase: 'Order',
-  sale: 'Deliveries',
+const MOVEMENT_LABELS: Partial<Record<StockHistoryEntry['type'], string>> = {
+  purchase: 'Receive',
+  transfer_in: 'Transfer-In',
+  return: 'Return',
+  sale: 'Sale',
+  transfer_out: 'Transfer-Out',
+  adjustment: 'Adjustment (In/Out)',
+  request: 'Internal Request',
 };
 
-function reportLabel(type: StockHistoryEntry['type'] | string) {
-  return REPORT_LABEL_OVERRIDES[type as StockHistoryEntry['type']] ?? typeConfig[type]?.label ?? type;
+function movementLabel(type: string) {
+  return MOVEMENT_LABELS[type as StockHistoryEntry['type']] ?? typeConfig[type]?.label ?? type;
+}
+
+interface MovementRow {
+  key: string;
+  productName: string;
+  sku: string;
+  warehouse: string;
+  typeTotals: Partial<Record<StockHistoryEntry['type'], number>>;
+  beginning: number;
+  closing: number;
+  movements: number;
 }
 
 export default function StockActivityReportModal({ products, history, warehouses, onClose }: StockActivityReportModalProps) {
-  const [tab, setTab] = useState<Tab>('by_product');
+  const [tab, setTab] = useState<Tab>('movement');
   const [dateFrom, setDateFrom] = useState(() => toInputDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   const [dateTo, setDateTo] = useState(() => toInputDate(new Date()));
   const [filterWarehouse, setFilterWarehouse] = useState('all');
+  const [consolidateWarehouses, setConsolidateWarehouses] = useState(false);
   const [filterType, setFilterType] = useState<'all' | StockHistoryEntry['type']>('all');
   const [search, setSearch] = useState('');
-
-  const productMap = useMemo(() => {
-    const map = new Map<string, Product>();
-    products.forEach((p) => map.set(p.id, p));
-    return map;
-  }, [products]);
 
   const periodLabel = useMemo(() => {
     if (!dateFrom && !dateTo) return 'All time';
@@ -63,73 +79,147 @@ export default function StockActivityReportModal({ products, history, warehouses
     return `Through ${formatDateShort(dateTo)}`;
   }, [dateFrom, dateTo]);
 
-  const filtered = useMemo(() => {
+  const periodStart = useMemo(() => (dateFrom ? new Date(dateFrom) : null), [dateFrom]);
+  const periodEnd = useMemo(() => {
+    if (!dateTo) return null;
+    const d = new Date(dateTo);
+    d.setHours(23, 59, 59, 999);
+    return d;
+  }, [dateTo]);
+
+  // Every entry for a product, oldest first — the backward calculation below needs
+  // the *full* trail (not just what falls inside the chosen dates) to rewind from
+  // the product's current stock back to its balance at the start/end of the period.
+  const historyByProduct = useMemo(() => {
+    const map = new Map<string, StockHistoryEntry[]>();
+    history.forEach((h) => {
+      const list = map.get(h.productId);
+      if (list) list.push(h); else map.set(h.productId, [h]);
+    });
+    map.forEach((list) => list.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()));
+    return map;
+  }, [history]);
+
+  // One row per product (or per SKU when consolidating across warehouses). Beginning/
+  // Closing are rewound from the product's live stock: Closing = current stock minus
+  // everything that happened after the period; Beginning = Closing minus everything
+  // that happened during the period. A product with zero movement in the window still
+  // gets a correct (unchanged) balance instead of just being dropped from the report.
+  const movementRows = useMemo((): MovementRow[] => {
+    const scopeProducts = products.filter((p) => {
+      if (filterWarehouse !== 'all' && p.warehouse !== filterWarehouse) return false;
+      if (search.trim()) {
+        const haystack = `${p.name} ${p.sku}`.toLowerCase();
+        if (!haystack.includes(search.trim().toLowerCase())) return false;
+      }
+      return true;
+    });
+
+    const perProduct = scopeProducts.map((p) => {
+      const entries = historyByProduct.get(p.id) ?? [];
+      const afterPeriod = periodEnd ? entries.filter((h) => new Date(h.timestamp) > periodEnd) : [];
+      const inPeriod = entries.filter((h) => {
+        const t = new Date(h.timestamp);
+        if (periodStart && t < periodStart) return false;
+        if (periodEnd && t > periodEnd) return false;
+        return true;
+      });
+      const closing = p.stock - afterPeriod.reduce((s, h) => s + h.quantity, 0);
+      const beginning = closing - inPeriod.reduce((s, h) => s + h.quantity, 0);
+      const typeTotals: Partial<Record<StockHistoryEntry['type'], number>> = {};
+      inPeriod.forEach((h) => { typeTotals[h.type] = (typeTotals[h.type] ?? 0) + h.quantity; });
+      return { productId: p.id, productName: p.name, sku: p.sku, warehouse: p.warehouse, beginning, closing, typeTotals, movements: inPeriod.length };
+    });
+
+    if (!consolidateWarehouses || filterWarehouse !== 'all') {
+      return perProduct.map((r) => ({ key: r.productId, productName: r.productName, sku: r.sku, warehouse: r.warehouse, typeTotals: r.typeTotals, beginning: r.beginning, closing: r.closing, movements: r.movements }));
+    }
+
+    // Consolidated: merge every warehouse's row for the same SKU into one combined line.
+    const bySku = new Map<string, MovementRow>();
+    perProduct.forEach((r) => {
+      const existing = bySku.get(r.sku);
+      if (!existing) {
+        bySku.set(r.sku, { key: r.sku, productName: r.productName, sku: r.sku, warehouse: 'All Warehouses', typeTotals: { ...r.typeTotals }, beginning: r.beginning, closing: r.closing, movements: r.movements });
+        return;
+      }
+      existing.beginning += r.beginning;
+      existing.closing += r.closing;
+      existing.movements += r.movements;
+      MOVEMENT_TYPE_ORDER.forEach((t) => {
+        const v = r.typeTotals[t];
+        if (v) existing.typeTotals[t] = (existing.typeTotals[t] ?? 0) + v;
+      });
+    });
+    return Array.from(bySku.values()).sort((a, b) => a.productName.localeCompare(b.productName));
+  }, [products, historyByProduct, filterWarehouse, consolidateWarehouses, search, periodStart, periodEnd]);
+
+  const activeMovementTypes = useMemo(
+    () => MOVEMENT_TYPE_ORDER.filter((t) => movementRows.some((r) => r.typeTotals[t])),
+    [movementRows]
+  );
+
+  const movementTotals = useMemo(() => {
+    const totals: Partial<Record<StockHistoryEntry['type'], number>> & { beginning: number; closing: number } = { beginning: 0, closing: 0 };
+    movementRows.forEach((r) => {
+      totals.beginning += r.beginning;
+      totals.closing += r.closing;
+      activeMovementTypes.forEach((t) => { totals[t] = (totals[t] ?? 0) + (r.typeTotals[t] ?? 0); });
+    });
+    return totals;
+  }, [movementRows, activeMovementTypes]);
+
+  // Raw ledger — every individual entry, independent of the movement rewind above.
+  const ledgerEntries = useMemo(() => {
     return history.filter((h) => {
       const d = new Date(h.timestamp);
-
       if (dateFrom && d < new Date(dateFrom)) return false;
       if (dateTo) {
         const end = new Date(dateTo);
         end.setHours(23, 59, 59, 999);
         if (d > end) return false;
       }
-
       if (filterWarehouse !== 'all' && h.warehouse !== filterWarehouse) return false;
       if (filterType !== 'all' && h.type !== filterType) return false;
-
       if (search.trim()) {
-        const p = productMap.get(h.productId);
+        const p = products.find((prod) => prod.id === h.productId);
         const haystack = `${p?.name ?? ''} ${p?.sku ?? ''} ${h.productId}`.toLowerCase();
         if (!haystack.includes(search.trim().toLowerCase())) return false;
       }
-
       return true;
     });
-  }, [history, dateFrom, dateTo, filterWarehouse, filterType, search, productMap]);
+  }, [history, dateFrom, dateTo, filterWarehouse, filterType, search, products]);
 
-  const totals = useMemo(() => {
-    const net = filtered.reduce((s, h) => s + h.quantity, 0);
-    return { net, movements: filtered.length };
-  }, [filtered]);
-
-  const typeTotals = useMemo(() => {
-    const map = new Map<string, number>();
-    filtered.forEach((h) => map.set(h.type, (map.get(h.type) ?? 0) + h.quantity));
-    return TYPE_ORDER.filter((t) => map.has(t)).map((t) => ({ type: t, total: map.get(t)! }));
-  }, [filtered]);
-
-  const activeTypes = useMemo(() => typeTotals.map((t) => t.type), [typeTotals]);
-
-  const cardsTotal = useMemo(
-    () => typeTotals.filter((t) => t.type !== 'adjustment').reduce((s, t) => s + t.total, 0),
-    [typeTotals]
-  );
-
-  const byProduct = useMemo(() => {
-    const map = new Map<string, { productId: string; warehouse: string; typeTotals: Partial<Record<StockHistoryEntry['type'], number>>; movements: number; lastActivity: string; volume: number }>();
-    filtered.forEach((h) => {
-      let existing = map.get(h.productId);
-      if (!existing) {
-        existing = { productId: h.productId, warehouse: h.warehouse, typeTotals: {}, movements: 0, lastActivity: h.timestamp, volume: 0 };
-        map.set(h.productId, existing);
-      }
-      existing.typeTotals[h.type] = (existing.typeTotals[h.type] ?? 0) + h.quantity;
-      existing.movements += 1;
-      existing.volume += Math.abs(h.quantity);
-      if (new Date(h.timestamp) > new Date(existing.lastActivity)) existing.lastActivity = h.timestamp;
+  const exportMovementCsv = () => {
+    const header = ['Product', 'SKU', 'Warehouse', 'Beginning Stock', ...activeMovementTypes.map(movementLabel), 'Closing Stock'];
+    const rows = [header];
+    movementRows.forEach((r) => {
+      rows.push([
+        r.productName, r.sku, r.warehouse, String(r.beginning),
+        ...activeMovementTypes.map((t) => String(r.typeTotals[t] ?? 0)),
+        String(r.closing),
+      ]);
     });
-    return Array.from(map.values()).sort((a, b) => b.volume - a.volume);
-  }, [filtered]);
+    rows.push(['TOTAL', '', '', String(movementTotals.beginning), ...activeMovementTypes.map((t) => String(movementTotals[t] ?? 0)), String(movementTotals.closing)]);
+    const csv = rows.map((r) => r.map((field) => csvEscape(field)).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `stock-movement-${dateFrom || 'all'}-to-${dateTo || 'all'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
-  const exportCsv = () => {
+  const exportLedgerCsv = () => {
     const rows = [['Date', 'Product', 'SKU', 'Type', 'Warehouse', 'Quantity', 'Stock Before', 'Stock After', 'Reference', 'User', 'Note']];
-    filtered.forEach((h) => {
-      const p = productMap.get(h.productId);
+    ledgerEntries.forEach((h) => {
+      const p = products.find((prod) => prod.id === h.productId);
       rows.push([
         formatDateTime(h.timestamp),
         p?.name ?? h.productId,
         p?.sku ?? '',
-        reportLabel(h.type),
+        movementLabel(h.type),
         h.warehouse,
         String(h.quantity),
         String(h.stockBefore),
@@ -144,23 +234,92 @@ export default function StockActivityReportModal({ products, history, warehouses
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `stock-activity-${dateFrom || 'all'}-to-${dateTo || 'all'}.csv`;
+    a.download = `stock-ledger-${dateFrom || 'all'}-to-${dateTo || 'all'}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  const scopeLabel = filterWarehouse === 'all'
+    ? (consolidateWarehouses ? 'All Warehouses (consolidated by SKU)' : 'All Warehouses')
+    : filterWarehouse;
+
+  const handleDownloadPdf = () => {
+    const head = ['Product', 'SKU', 'Warehouse', 'Beg.', ...activeMovementTypes.map(movementLabel), 'Closing'];
+    const rows = movementRows.map((r) => [
+      r.productName,
+      r.sku,
+      r.warehouse,
+      r.beginning,
+      ...activeMovementTypes.map((t) => r.typeTotals[t] ?? 0),
+      r.closing,
+    ]);
+    const numericColStart = 3;
+    const numericColCount = 2 + activeMovementTypes.length;
+    const colStyles = Object.fromEntries(
+      Array.from({ length: numericColCount }, (_, i) => [numericColStart + i, { halign: 'right' as const }])
+    );
+    const footRow: PdfCell[] = [
+      { content: 'TOTAL', colSpan: 3, styles: { halign: 'right' } },
+      movementTotals.beginning,
+      ...activeMovementTypes.map((t) => movementTotals[t] ?? 0),
+      movementTotals.closing,
+    ];
+
+    downloadPdf(
+      {
+        docType: 'Stock Movement Report',
+        docId: `SMR-${dateFrom || 'start'}_${dateTo || 'now'}`,
+        subtitle: `${scopeLabel} · ${periodLabel}`,
+        infoBoxes: [
+          {
+            title: 'Period',
+            rows: [
+              { label: 'Range', value: periodLabel },
+              { label: 'Scope', value: scopeLabel },
+            ],
+          },
+          {
+            title: 'Summary',
+            rows: [
+              { label: 'Products', value: String(movementRows.length) },
+              { label: 'Total Beginning', value: String(movementTotals.beginning) },
+              { label: 'Total Closing', value: String(movementTotals.closing) },
+            ],
+          },
+        ],
+        tables: [
+          {
+            title: 'Stock Movement by Product',
+            head,
+            rows,
+            colStyles,
+            footRow,
+          },
+        ],
+        footerLeft: 'Stock Movement Report',
+      },
+      `stock-movement-report-${dateFrom || 'all'}-to-${dateTo || 'all'}.pdf`
+    );
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-xl h-[95vh] flex flex-col">
+      <div className="bg-white rounded-2xl w-full max-w-6xl shadow-xl h-[95vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 shrink-0">
           <div>
-            <h2 className="text-base font-bold text-gray-900">Stock Activity Report</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Every stock movement across products · {periodLabel}</p>
+            <h2 className="text-base font-bold text-gray-900">Stock Movement Report</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Beginning → Receive/Transfer/Return/Sale/Adjustment → Closing · {periodLabel}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={exportCsv}
+              onClick={handleDownloadPdf}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
+            >
+              <i className="ri-printer-line"></i> Print / PDF
+            </button>
+            <button
+              onClick={tab === 'movement' ? exportMovementCsv : exportLedgerCsv}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap"
             >
               <i className="ri-download-2-line"></i> Export CSV
@@ -206,14 +365,23 @@ export default function StockActivityReportModal({ products, history, warehouses
             </select>
           )}
 
-          <select
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value as typeof filterType)}
-            className="py-1.5 px-2.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer text-gray-600"
-          >
-            <option value="all">All Types</option>
-            {Object.keys(typeConfig).map((key) => <option key={key} value={key}>{reportLabel(key)}</option>)}
-          </select>
+          {warehouses.length > 1 && filterWarehouse === 'all' && (
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer whitespace-nowrap">
+              <input type="checkbox" checked={consolidateWarehouses} onChange={(e) => setConsolidateWarehouses(e.target.checked)} className="rounded" />
+              Consolidate by SKU
+            </label>
+          )}
+
+          {tab === 'ledger' && (
+            <select
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value as typeof filterType)}
+              className="py-1.5 px-2.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer text-gray-600"
+            >
+              <option value="all">All Types</option>
+              {MOVEMENT_TYPE_ORDER.map((t) => <option key={t} value={t}>{movementLabel(t)}</option>)}
+            </select>
+          )}
 
           <div className="relative ml-auto">
             <div className="w-4 h-4 flex items-center justify-center absolute left-2.5 top-1/2 -translate-y-1/2">
@@ -228,34 +396,35 @@ export default function StockActivityReportModal({ products, history, warehouses
           </div>
         </div>
 
-        {/* Stats summary */}
-        <div className="flex items-stretch gap-0 border-b border-gray-100 shrink-0 divide-x divide-gray-100">
-          {typeTotals.filter(({ type }) => type !== 'adjustment').map(({ type, total }) => {
-            const cfg = typeConfig[type] ?? typeConfig.adjustment;
+        {/* Stats summary — the a–h line items, totaled across every product in scope */}
+        <div className="flex items-stretch gap-0 border-b border-gray-100 shrink-0 divide-x divide-gray-100 overflow-x-auto">
+          <div className="flex-1 min-w-[84px] flex flex-col items-center justify-center py-4 px-2">
+            <p className="text-lg font-bold text-gray-700">{movementTotals.beginning}</p>
+            <p className="text-xs text-gray-400 whitespace-nowrap">Beginning</p>
+          </div>
+          {activeMovementTypes.map((t) => {
+            const cfg = typeConfig[t] ?? typeConfig.adjustment;
+            const total = movementTotals[t] ?? 0;
             return (
-              <div key={type} className="flex-1 min-w-0 flex flex-col items-center justify-center py-4 px-2">
+              <div key={t} className="flex-1 min-w-[84px] flex flex-col items-center justify-center py-4 px-2">
                 <div className="w-5 h-5 flex items-center justify-center mb-1">
                   <i className={`${cfg.icon} ${cfg.color} text-base`}></i>
                 </div>
                 <p className={`text-lg font-bold ${cfg.color}`}>{total > 0 ? '+' : ''}{total}</p>
-                <p className="text-xs text-gray-400">{reportLabel(type)}</p>
+                <p className="text-xs text-gray-400 whitespace-nowrap">{movementLabel(t)}</p>
               </div>
             );
           })}
-
-          <div className="flex-1 min-w-0 flex flex-col items-center justify-center py-4 px-2">
-            <div className="w-5 h-5 flex items-center justify-center mb-1">
-              <i className={`ri-scales-3-line text-base ${cardsTotal >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}></i>
-            </div>
-            <p className={`text-lg font-bold ${cardsTotal >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{cardsTotal > 0 ? '+' : ''}{cardsTotal}</p>
-            <p className="text-xs text-gray-400">Total</p>
+          <div className="flex-1 min-w-[84px] flex flex-col items-center justify-center py-4 px-2">
+            <p className="text-lg font-bold text-gray-900">{movementTotals.closing}</p>
+            <p className="text-xs text-gray-400 whitespace-nowrap">Closing</p>
           </div>
         </div>
 
         {/* Tabs */}
         <div className="flex items-center gap-1 px-6 pt-3 shrink-0">
           {([
-            { key: 'by_product', label: 'By Product' },
+            { key: 'movement', label: 'Stock Movement' },
             { key: 'ledger', label: 'Full Ledger' },
           ] as { key: Tab; label: string }[]).map((t) => (
             <button
@@ -272,83 +441,82 @@ export default function StockActivityReportModal({ products, history, warehouses
 
         {/* Body */}
         <div className="overflow-auto flex-1 px-6 pb-4">
-          {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-              <div className="w-10 h-10 flex items-center justify-center mb-3">
-                <i className="ri-history-line text-3xl"></i>
+          {tab === 'movement' ? (
+            movementRows.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                <div className="w-10 h-10 flex items-center justify-center mb-3">
+                  <i className="ri-file-chart-line text-3xl"></i>
+                </div>
+                <p className="text-sm">No products in this scope.</p>
               </div>
-              <p className="text-sm">No stock activity in this period.</p>
-            </div>
-          ) : tab === 'by_product' ? (
-            <div>
+            ) : (
               <table className="w-full text-sm border-separate border-spacing-0">
                 <thead>
                   <tr className="text-left text-xs text-gray-400">
                     <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 pr-4 border-b border-gray-100">Product</th>
                     <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 px-4 border-b border-gray-100">Warehouse</th>
-                    {activeTypes.map((t) => (
-                      <th key={t} className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 px-4 text-right whitespace-nowrap border-b border-gray-100">{reportLabel(t)}</th>
+                    <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 px-4 text-right whitespace-nowrap border-b border-gray-100">Beginning</th>
+                    {activeMovementTypes.map((t) => (
+                      <th key={t} className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 px-4 text-right whitespace-nowrap border-b border-gray-100">{movementLabel(t)}</th>
                     ))}
-                    <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 pl-5 pr-4 text-right border-l border-b border-gray-100 whitespace-nowrap">Total</th>
-                    <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 pl-4 text-right whitespace-nowrap border-b border-gray-100">Last Activity</th>
+                    <th className="sticky top-0 z-10 bg-white font-medium pt-4 pb-2 pl-5 pr-4 text-right border-l border-b border-gray-100 whitespace-nowrap">Closing</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {byProduct.map((row) => {
-                    const p = productMap.get(row.productId);
-                    const rowTotal = Object.values(row.typeTotals).reduce((s, v) => s + (v ?? 0), 0);
-                    return (
-                      <tr
-                        key={row.productId}
-                        onClick={() => { setSearch(p?.sku ?? row.productId); setTab('ledger'); }}
-                        className="border-t border-gray-50 hover:bg-gray-50 cursor-pointer"
-                      >
-                        <td className="py-2.5 pr-4">
-                          <p className="font-medium text-gray-800">{p?.name ?? row.productId}</p>
-                          <p className="text-xs text-gray-400">{p?.sku ?? '—'}</p>
-                        </td>
-                        <td className="py-2.5 px-4 text-gray-600 whitespace-nowrap">{row.warehouse}</td>
-                        {activeTypes.map((t) => {
-                          const v = row.typeTotals[t];
-                          return (
-                            <td key={t} className={`py-2.5 px-4 text-right font-medium whitespace-nowrap ${!v ? 'text-gray-300' : v > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                              {v ? `${v > 0 ? '+' : ''}${v}` : '—'}
-                            </td>
-                          );
-                        })}
-                        <td className={`py-2.5 pl-5 pr-4 text-right font-semibold border-l border-gray-100 whitespace-nowrap ${rowTotal === 0 ? 'text-gray-400' : rowTotal > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          {rowTotal > 0 ? '+' : ''}{rowTotal}
-                        </td>
-                        <td className="py-2.5 pl-4 text-right text-gray-400 text-xs whitespace-nowrap">{formatDateTime(row.lastActivity)}</td>
-                      </tr>
-                    );
-                  })}
+                  {movementRows.map((row) => (
+                    <tr
+                      key={row.key}
+                      onClick={() => { setSearch(row.sku); setTab('ledger'); }}
+                      className="border-t border-gray-50 hover:bg-gray-50 cursor-pointer"
+                    >
+                      <td className="py-2.5 pr-4">
+                        <p className="font-medium text-gray-800">{row.productName}</p>
+                        <p className="text-xs text-gray-400">{row.sku}</p>
+                      </td>
+                      <td className="py-2.5 px-4 text-gray-600 whitespace-nowrap">{row.warehouse}</td>
+                      <td className="py-2.5 px-4 text-right text-gray-700 whitespace-nowrap">{row.beginning}</td>
+                      {activeMovementTypes.map((t) => {
+                        const v = row.typeTotals[t];
+                        return (
+                          <td key={t} className={`py-2.5 px-4 text-right font-medium whitespace-nowrap ${!v ? 'text-gray-300' : v > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {v ? `${v > 0 ? '+' : ''}${v}` : '—'}
+                          </td>
+                        );
+                      })}
+                      <td className="py-2.5 pl-5 pr-4 text-right font-semibold text-gray-900 border-l border-gray-100 whitespace-nowrap">{row.closing}</td>
+                    </tr>
+                  ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-gray-200">
                     <td className="py-2.5 pr-4 font-semibold text-gray-800">Total</td>
                     <td className="py-2.5 px-4"></td>
-                    {activeTypes.map((t) => {
-                      const v = typeTotals.find((tt) => tt.type === t)?.total ?? 0;
+                    <td className="py-2.5 px-4 text-right font-semibold text-gray-800 whitespace-nowrap">{movementTotals.beginning}</td>
+                    {activeMovementTypes.map((t) => {
+                      const v = movementTotals[t] ?? 0;
                       return (
                         <td key={t} className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${v === 0 ? 'text-gray-300' : v > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                           {v ? `${v > 0 ? '+' : ''}${v}` : '—'}
                         </td>
                       );
                     })}
-                    <td className={`py-2.5 pl-5 pr-4 text-right font-semibold border-l border-gray-100 whitespace-nowrap ${totals.net === 0 ? 'text-gray-400' : totals.net > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {totals.net > 0 ? '+' : ''}{totals.net}
-                    </td>
-                    <td className="py-2.5 pl-4"></td>
+                    <td className="py-2.5 pl-5 pr-4 text-right font-semibold text-gray-900 border-l border-gray-100 whitespace-nowrap">{movementTotals.closing}</td>
                   </tr>
                 </tfoot>
               </table>
+            )
+          ) : ledgerEntries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+              <div className="w-10 h-10 flex items-center justify-center mb-3">
+                <i className="ri-history-line text-3xl"></i>
+              </div>
+              <p className="text-sm">No stock activity in this period.</p>
             </div>
           ) : (
             <div className="space-y-2 pt-4">
-              {filtered.map((entry) => {
+              {ledgerEntries.map((entry) => {
                 const cfg = typeConfig[entry.type] ?? typeConfig.adjustment;
-                const p = productMap.get(entry.productId);
+                const p = products.find((prod) => prod.id === entry.productId);
                 return (
                   <div key={entry.id} className="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors">
                     <div className={`w-8 h-8 rounded-lg ${cfg.bg} flex items-center justify-center shrink-0 mt-0.5`}>
@@ -362,7 +530,7 @@ export default function StockActivityReportModal({ products, history, warehouses
                         </span>
                       </div>
                       <div className="flex items-center gap-3 mt-1 flex-wrap">
-                        <span className={`text-xs font-semibold ${cfg.color}`}>{reportLabel(entry.type)}</span>
+                        <span className={`text-xs font-semibold ${cfg.color}`}>{movementLabel(entry.type)}</span>
                         <span className="text-xs text-gray-300">·</span>
                         <span className="text-xs text-gray-400">{entry.warehouse}</span>
                         <span className="text-xs text-gray-300">·</span>

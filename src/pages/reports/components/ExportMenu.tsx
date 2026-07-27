@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
+import type { ReportSummary } from '../page';
 import {
   exportAllReportsCsv,
-  exportMonthlySnapshotCsv,
+  exportRevenueCsv,
   exportTopProductsCsv,
   exportCategoryBreakdownCsv,
   exportReturnReasonsCsv,
@@ -10,15 +11,21 @@ import {
   exportReportsPdf,
 } from '../utils/exportUtils';
 
+interface ExportMenuProps {
+  summary: ReportSummary | null;
+  periodLabel: string;
+  formatAmount: (amount: number) => string;
+}
+
 interface ExportOption {
   label: string;
   sublabel: string;
   icon: string;
-  action: () => void;
+  action: (summary: ReportSummary) => void;
   divider?: boolean;
 }
 
-export default function ExportMenu() {
+export default function ExportMenu({ summary, periodLabel, formatAmount }: ExportMenuProps) {
   const [open, setOpen] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -34,11 +41,14 @@ export default function ExportMenu() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const handleExport = async (id: string, action: () => void) => {
+  const disabled = !summary;
+
+  const handleExport = async (id: string, action: (summary: ReportSummary) => void) => {
+    if (!summary) return;
     setExporting(id);
     setOpen(false);
     await new Promise((r) => setTimeout(r, 300));
-    action();
+    action(summary);
     setExporting(null);
     setSuccess(id);
     setTimeout(() => setSuccess(null), 2500);
@@ -47,15 +57,15 @@ export default function ExportMenu() {
   const csvOptions: ExportOption[] = [
     {
       label: 'Full Report (All Sections)',
-      sublabel: 'Monthly + Products + Warehouses + Vendors',
+      sublabel: 'Revenue + Products + Warehouses + Vendors',
       icon: 'ri-file-text-line',
-      action: exportAllReportsCsv,
+      action: (s) => exportAllReportsCsv(s, periodLabel),
     },
     {
-      label: 'Monthly Snapshot',
-      sublabel: 'Revenue, orders, returns by month',
+      label: 'Revenue by Month',
+      sublabel: 'Revenue, orders, returns (YTD)',
       icon: 'ri-calendar-line',
-      action: exportMonthlySnapshotCsv,
+      action: exportRevenueCsv,
       divider: true,
     },
     {
@@ -96,9 +106,10 @@ export default function ExportMenu() {
       <div className="flex items-center gap-2">
         {/* PDF button */}
         <button
-          onClick={() => handleExport('pdf', exportReportsPdf)}
-          disabled={exporting === 'pdf'}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-60"
+          onClick={() => handleExport('pdf', (s) => exportReportsPdf(s, periodLabel, formatAmount))}
+          disabled={disabled || exporting === 'pdf'}
+          title={disabled ? 'Waiting for report data to load…' : undefined}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {exporting === 'pdf' ? (
             <i className="ri-loader-4-line animate-spin text-base"></i>
@@ -113,7 +124,9 @@ export default function ExportMenu() {
         {/* CSV dropdown button */}
         <button
           onClick={() => setOpen(!open)}
-          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors cursor-pointer whitespace-nowrap"
+          disabled={disabled}
+          title={disabled ? 'Waiting for report data to load…' : undefined}
+          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <i className="ri-file-excel-line text-base"></i>
           Export CSV

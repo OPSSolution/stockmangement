@@ -1,9 +1,13 @@
 import type { Order } from '@/mocks/orders';
 import type { Product } from '@/mocks/inventory';
+import { nowStamp } from '@/lib/timestamp';
 
 export interface OrderLineDraft {
   productId: string;
   quantity: number | '';
+  /** UI-only aid — narrows this line's product picker to one warehouse. Not sent
+   * to the backend; the actual warehouse always comes from the chosen product. */
+  warehouse?: string;
 }
 
 export interface OrderCreateDraft {
@@ -32,11 +36,12 @@ export function mapProductRow(row: Record<string, unknown>): Product {
     productType: (row.product_type as Product['productType']) || 'piece',
     status: row.status as Product['status'],
     lastUpdated: row.last_updated as string,
+    binLocation: (row.bin_location as string) || undefined,
   };
 }
 
 export function buildOrderInsert(draft: OrderCreateDraft, products: Product[]) {
-  const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const now = nowStamp();
   const selectedLines = draft.lines
     .map((line) => ({ ...line, quantity: Number(line.quantity) || 0, product: products.find((p) => p.id === line.productId) }))
     .filter((line): line is { productId: string; quantity: number; product: Product } => Boolean(line.product) && line.quantity > 0);
@@ -90,7 +95,7 @@ export function buildOrderInsert(draft: OrderCreateDraft, products: Product[]) {
 
 export function mapOrderToDraft(order: Order): OrderCreateDraft {
   const lines = order.vendorSplits.flatMap((split) =>
-    split.items.map((item) => ({ productId: item.productId, quantity: item.quantity }))
+    split.items.map((item) => ({ productId: item.productId, quantity: item.quantity, warehouse: item.warehouse }))
   );
 
   return {
@@ -101,12 +106,12 @@ export function mapOrderToDraft(order: Order): OrderCreateDraft {
     address: order.address,
     city: order.city,
     notes: order.notes ?? '',
-    lines: lines.length > 0 ? lines : [{ productId: '', quantity: 1 }],
+    lines,
   };
 }
 
 export function buildOrderUpdate(draft: OrderCreateDraft, products: Product[]) {
-  const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const now = nowStamp();
   const selectedLines = draft.lines
     .map((line) => ({ ...line, quantity: Number(line.quantity) || 0, product: products.find((p) => p.id === line.productId) }))
     .filter((line): line is { productId: string; quantity: number; product: Product } => Boolean(line.product) && line.quantity > 0);

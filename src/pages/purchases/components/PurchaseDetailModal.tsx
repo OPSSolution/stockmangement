@@ -3,45 +3,81 @@ import type { PurchaseOrder, PurchaseStatus } from '@/mocks/purchases';
 import PurchaseStatusBadge from './PurchaseStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
 
+interface StatusChangeExtra {
+  receivedQty?: Record<string, number>;
+  documentFile?: File;
+  reviewNote?: string;
+}
+
 interface Props {
   po: PurchaseOrder;
   onClose: () => void;
-  onStatusChange: (id: string, status: PurchaseStatus, receiptData?: { receivedQty: Record<string, number> }) => void;
+  onStatusChange: (id: string, status: PurchaseStatus, extra?: StatusChangeExtra) => void;
+  uploading?: boolean;
+  /** Only an admin may approve/reject or move a PO through its ordered/received workflow. */
+  canDecide: boolean;
+  /** The submitter may withdraw their own still-pending purchase, even without canDecide. */
+  canCancel: boolean;
 }
 
 const workflow: { from: PurchaseStatus; to: PurchaseStatus; label: string; icon: string; color: string }[] = [
-  { from: 'submitted', to: 'approved', label: 'Approve PO', icon: 'ri-checkbox-circle-line', color: 'bg-sky-500 hover:bg-sky-600' },
+  { from: 'pending', to: 'approved', label: 'Approve', icon: 'ri-checkbox-circle-line', color: 'bg-emerald-500 hover:bg-emerald-600' },
   { from: 'approved', to: 'ordered', label: 'Mark as Ordered', icon: 'ri-shopping-cart-2-line', color: 'bg-violet-500 hover:bg-violet-600' },
   { from: 'ordered', to: 'received', label: 'Confirm Receipt', icon: 'ri-check-double-line', color: 'bg-emerald-500 hover:bg-emerald-600' },
 ];
 
-export default function PurchaseDetailModal({ po, onClose, onStatusChange }: Props) {
+export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploading, canDecide, canCancel }: Props) {
   const { formatAmount } = useCurrency();
   const [receivedQty, setReceivedQty] = useState<Record<string, number>>(
     Object.fromEntries(po.items.map((i) => [i.productId, i.orderedQty]))
   );
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
 
   const action = workflow.find((w) => w.from === po.status);
   const isReceiving = po.status === 'ordered';
+  const isPending = po.status === 'pending';
 
+  // Close immediately instead of waiting on the network round-trip — feedback
+  // comes via the toast once the status change actually resolves.
   const handleAction = () => {
-    if (!action) return;
-    onStatusChange(po.id, action.to, isReceiving ? { receivedQty } : undefined);
+    if (!canDecide || !action) return;
+    if (isReceiving) {
+      if (!documentFile) return;
+      onStatusChange(po.id, action.to, { receivedQty, documentFile });
+      onClose();
+      return;
+    }
+    onStatusChange(po.id, action.to);
+    onClose();
   };
 
-  const handleCancel = () => onStatusChange(po.id, 'cancelled');
+  const handleReject = () => {
+    if (!canDecide) return;
+    const note = window.prompt('Why is this purchase being rejected? (optional)');
+    if (note === null) return;
+    onStatusChange(po.id, 'rejected', { reviewNote: note.trim() || undefined });
+    onClose();
+  };
+
+  const handleCancel = () => {
+    if (!canCancel) return;
+    if (!window.confirm(`Cancel ${po.id}?`)) return;
+    onStatusChange(po.id, 'cancelled');
+    onClose();
+  };
 
   const subtotal = po.items.reduce((sum, i) => sum + i.orderedQty * i.unitCost, 0);
 
-  const stepOrder: PurchaseStatus[] = ['draft', 'submitted', 'approved', 'ordered', 'received'];
+  const stepOrder: PurchaseStatus[] = ['pending', 'approved', 'ordered', 'received'];
   const steps = [
-    { key: 'submitted', label: 'Submitted', icon: 'ri-send-plane-line' },
+    { key: 'pending', label: 'Pending', icon: 'ri-time-line' },
     { key: 'approved', label: 'Approved', icon: 'ri-checkbox-circle-line' },
     { key: 'ordered', label: 'Ordered', icon: 'ri-shopping-cart-2-line' },
-    { key: 'received', label: 'Received', icon: 'ri-check-double-line' },
+    { key: 'received', label: 'Complete', icon: 'ri-check-double-line' },
   ];
   const currentIdx = stepOrder.indexOf(po.status);
   const isActive = (key: string) => stepOrder.indexOf(key as PurchaseStatus) <= currentIdx;
+  const showProgress = po.status !== 'cancelled' && po.status !== 'rejected';
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -66,7 +102,7 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange }: Pro
 
         <div className="px-6 py-5 space-y-6">
           {/* Progress Tracker */}
-          {po.status !== 'cancelled' && po.status !== 'draft' && (
+          {showProgress && (
             <div className="flex items-center gap-0">
               {steps.map((step, idx) => {
                 const done = isActive(step.key);
@@ -96,6 +132,9 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange }: Pro
               <div className="flex justify-between"><span className="text-gray-500">Contact</span><span className="text-gray-700">{po.vendorContact}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Email</span><span className="text-gray-700 text-xs">{po.vendorEmail}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Requested by</span><span className="text-gray-700">{po.requestedBy}</span></div>
+              {po.submittedBy && po.submittedBy !== po.requestedBy && (
+                <div className="flex justify-between"><span className="text-gray-500">Logged by</span><span className="text-gray-700">{po.submittedBy}</span></div>
+              )}
               {po.approvedBy && <div className="flex justify-between"><span className="text-gray-500">Approved by</span><span className="text-gray-700">{po.approvedBy}</span></div>}
             </div>
             <div className="bg-gray-50 rounded-lg p-4 space-y-2">
@@ -184,10 +223,24 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange }: Pro
             </div>
           </div>
 
+          {/* Reason (why this was requested) */}
+          {po.reason && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+              <i className="ri-sticky-note-line mr-2"></i>{po.reason}
+            </div>
+          )}
+
           {/* Notes */}
           {po.notes && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
               <i className="ri-sticky-note-line mr-2"></i>{po.notes}
+            </div>
+          )}
+
+          {/* Rejection reason */}
+          {po.status === 'rejected' && po.reviewNote && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
+              <i className="ri-close-circle-line mr-2"></i>{po.reviewNote}
             </div>
           )}
 
@@ -198,29 +251,75 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange }: Pro
               Enter the actual received quantity for each item. Stock will be auto-updated upon confirmation.
             </div>
           )}
+
+          {/* Delivery document — required before stock can be confirmed received */}
+          {isReceiving && (
+            <div>
+              <p className="text-sm font-semibold text-gray-700 mb-2">Delivery Document</p>
+              {documentFile ? (
+                <div className="flex items-center gap-2.5 border border-gray-200 rounded-lg p-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                    <i className="ri-file-text-line text-sky-500"></i>
+                  </div>
+                  <span className="text-xs font-medium text-gray-700 truncate flex-1">{documentFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setDocumentFile(null)}
+                    className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer shrink-0"
+                  >
+                    <i className="ri-close-line text-sm"></i>
+                  </button>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center gap-1 py-4 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-emerald-300 transition-colors">
+                  <i className="ri-upload-cloud-2-line text-lg text-gray-300"></i>
+                  <span className="text-xs font-medium text-gray-600">Click to attach delivery note / receipt photo</span>
+                  <span className="text-[10px] text-gray-400">Required to confirm receipt</span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => { setDocumentFile(e.target.files?.[0] || null); e.target.value = ''; }}
+                  />
+                </label>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100">
-          {(po.status === 'submitted' || po.status === 'approved') && (
+          {canCancel && (po.status === 'pending' || po.status === 'approved') && (
             <button
               onClick={handleCancel}
               className="text-xs text-red-500 hover:text-red-700 underline cursor-pointer"
             >
-              Cancel PO
+              {isPending ? 'Cancel Request' : 'Cancel PO'}
             </button>
           )}
           <div className="flex gap-3 ml-auto">
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap">
               Close
             </button>
-            {action && po.status !== 'cancelled' && (
+            {isPending && canDecide && (
+              <button
+                onClick={handleReject}
+                className="px-4 py-2 text-sm font-semibold text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <i className="ri-close-circle-line mr-1.5"></i>Reject
+              </button>
+            )}
+            {action && po.status !== 'cancelled' && po.status !== 'rejected' && canDecide && (
               <button
                 onClick={handleAction}
-                className={`px-5 py-2 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${action.color}`}
+                disabled={(isReceiving && !documentFile) || uploading}
+                title={isReceiving && !documentFile ? 'Attach the delivery document above to enable' : undefined}
+                className={`px-5 py-2 text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${action.color}`}
               >
-                <i className={`${action.icon} mr-1.5`}></i>{action.label}
+                <i className={`${uploading ? 'ri-loader-4-line animate-spin' : action.icon} mr-1.5`}></i>{uploading ? 'Uploading…' : action.label}
               </button>
+            )}
+            {action && po.status !== 'cancelled' && po.status !== 'rejected' && !canDecide && (
+              <span className="text-xs text-gray-400 italic self-center">Only an admin can advance this order.</span>
             )}
           </div>
         </div>

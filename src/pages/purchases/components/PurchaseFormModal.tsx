@@ -17,6 +17,7 @@ interface FormData {
   vendorContact: string;
   vendorEmail: string;
   warehouse: 'BM Warehouse' | 'Vendor Warehouse';
+  reason: string;
   notes: string;
   expectedDelivery: string;
   items: NewPOItem[];
@@ -33,6 +34,7 @@ interface ProductOption {
   sku: string;
   image_url?: string | null;
   price: number;
+  bin_location?: string | null;
 }
 
 interface VendorOption {
@@ -48,6 +50,7 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
     vendorContact: '',
     vendorEmail: '',
     warehouse: 'BM Warehouse',
+    reason: '',
     notes: '',
     expectedDelivery: '',
     items: [],
@@ -59,22 +62,33 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [vendors, setVendors] = useState<VendorOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [nextId, setNextId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
+    fetchNextId();
   }, []);
 
   const fetchData = async () => {
     setLoading(true);
     const [prodRes, vendRes] = await Promise.all([
-      supabase.from('products').select('id, name, sku, image_url, price'),
+      supabase.from('products').select('id, name, sku, image_url, price, bin_location'),
       supabase.from('vendors').select('name, contacts, payment_terms'),
     ]);
     if (prodRes.error) console.error(prodRes.error);
-    else setProducts((prodRes.data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price })));
+    else setProducts((prodRes.data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, bin_location: p.bin_location })));
     if (vendRes.error) console.error(vendRes.error);
     else setVendors((vendRes.data || []).map((v) => ({ name: v.name, contacts: v.contacts || [], payment_terms: v.payment_terms })));
     setLoading(false);
+  };
+
+  // Best-effort preview only — the real ID is (re)computed the same way at
+  // submit time, so this can drift by one if another PO is created in between.
+  const fetchNextId = async () => {
+    const { data, error } = await supabase.from('purchases').select('id');
+    if (error || !data) return;
+    const maxNum = data.reduce((max, row) => Math.max(max, parseInt((row.id as string).replace('PO-', '')) || 0), 0);
+    setNextId(`PO-${String(maxNum + 1).padStart(2, '0')}`);
   };
 
   const selectedVendorData = vendors.find((v) => v.name === form.vendor);
@@ -140,8 +154,15 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
           <div>
-            <h2 className="text-lg font-bold text-gray-900">Create Purchase Order</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Submit a new purchase order to a vendor</p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-bold text-gray-900">Create Purchase Order</h2>
+              {nextId && (
+                <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  {nextId}
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-gray-500 mt-0.5">Submit a new purchase order to a vendor — an admin reviews it before it can be ordered</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 cursor-pointer">
             <i className="ri-close-line text-gray-500"></i>
@@ -212,6 +233,17 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
             </div>
           </div>
 
+          <div>
+            <label className="text-sm font-medium text-gray-700 block mb-1.5">Reason</label>
+            <textarea
+              value={form.reason}
+              onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
+              rows={2}
+              placeholder="Why is this being purchased? (optional, helps the approver decide)"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 placeholder-gray-400 resize-none"
+            />
+          </div>
+
           {/* Items */}
           <div>
             <label className="text-sm font-medium text-gray-700 block mb-2">Order Items *</label>
@@ -227,7 +259,7 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                   >
                     <option value="">Select product…</option>
                     {productOptions.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+                      <option key={p.id} value={p.id}>{p.name} ({p.sku}){p.bin_location ? ` — Bin: ${p.bin_location}` : ''}</option>
                     ))}
                   </select>
                   <input
@@ -271,7 +303,9 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {form.items.map((item) => (
+                    {form.items.map((item) => {
+                      const bin = products.find((p) => p.id === item.productId)?.bin_location;
+                      return (
                       <tr key={item.productId}>
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2.5">
@@ -284,7 +318,7 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                             </div>
                             <div>
                               <p className="font-medium text-gray-800 text-sm">{item.productName}</p>
-                              <p className="text-xs text-gray-400 font-mono">{item.sku}</p>
+                              <p className="text-xs text-gray-400 font-mono">{item.sku}{bin ? ` · Bin: ${bin}` : ''}</p>
                             </div>
                           </div>
                         </td>
@@ -297,7 +331,8 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                   <tfoot className="bg-gray-50 border-t border-gray-200 divide-y divide-gray-100">
                     <tr>

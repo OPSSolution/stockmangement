@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import { logAudit } from '../lib/auditLog';
 
@@ -113,12 +113,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Tracks whose profile/permissions are currently loaded, so a spurious re-fire
+  // of the same session (e.g. Supabase re-validating on tab focus, or a silent
+  // token refresh) doesn't rebuild `profile` into a new object — every page that
+  // keys a data-fetch effect off `warehouseScope` (derived from `profile`) would
+  // otherwise refetch every time the user switches back to the tab.
+  const loadedUserIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     // onAuthStateChange fires INITIAL_SESSION immediately on mount, so getSession() is redundant
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       const appSession = s as AppSession | null;
-      setSession(appSession);
-      setUser(appSession?.user ?? null);
+      const nextUserId = appSession?.user?.id ?? null;
+
       // Keep the Express API's auth token in sync with the Supabase session —
       // server/middleware/auth.ts verifies this token against Supabase.
       if (appSession?.access_token) {
@@ -126,6 +133,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         localStorage.removeItem('sm_access_token');
       }
+
+      setSession(appSession);
+      setUser(appSession?.user ?? null);
+
+      if (nextUserId && nextUserId === loadedUserIdRef.current) {
+        return;
+      }
+      loadedUserIdRef.current = nextUserId;
+
       if (appSession?.user) {
         // Re-enter loading while the profile fetch is in flight (e.g. right after
         // sign-in) so ProtectedRoute shows a spinner instead of bouncing to /login

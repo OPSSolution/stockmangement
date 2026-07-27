@@ -35,12 +35,12 @@ function sumInto(reserved: Record<string, number>, items: LineItem[] | null | un
 export async function getReservedQuantities(exclude: ReservationExclusions = {}): Promise<Record<string, number>> {
   const reserved: Record<string, number> = {};
 
-  // Requests: stock is deducted the moment a request is approved, so only
-  // 'pending' ones are still just a promise against real stock — an 'approved'
-  // request is already baked into products.stock and must not be counted here too.
+  // Requests: stock is only deducted at Confirm Dispatch (dispatched_at set), not
+  // at Approve — so both 'pending' and 'approved-but-not-yet-dispatched' requests
+  // are still just a promise against real stock.
   const [{ data: requests }, { data: orders }, { data: transfers }, { data: deliveries }] = await Promise.all([
-    supabase.from('stock_requests').select('id, items').eq('status', 'pending'),
-    supabase.from('orders').select('id, vendor_splits').in('status', ['pending', 'accepted', 'partial', 'processing']),
+    supabase.from('stock_requests').select('id, items').in('status', ['pending', 'approved']).is('dispatched_at', null),
+    supabase.from('orders').select('id, vendor_splits').in('status', ['pending', 'accepted', 'partial']),
     supabase.from('transfers').select('id, items').in('status', ['requested', 'approved', 'in_transit']),
     supabase.from('deliveries').select('id, items_detail').in('status', ['prepare', 'ready', 'in_transit']),
   ]);
@@ -49,14 +49,17 @@ export async function getReservedQuantities(exclude: ReservationExclusions = {})
     .filter((r) => r.id !== exclude.excludeRequestId)
     .forEach((r) => sumInto(reserved, r.items as LineItem[]));
 
-  // Orders decide per line item — an 'accepted' item is deducted immediately on
-  // confirm (see OrderDetailModal.handleConfirm), so only still-'pending' items
-  // (including the undecided remainder of a 'partial' order) are still just reserved.
+  // Orders decide per line item, but accepting no longer deducts stock — that
+  // only happens once the order actually ships (Confirm Shipment). So both
+  // still-'pending' items and already-'accepted'-but-not-shipped items are
+  // reserved; only 'rejected' items never tie up stock. Orders that have
+  // shipped move to 'processing'/'fulfilled' and are excluded from this query
+  // entirely since their accepted items are already reflected in real stock.
   (orders || [])
     .filter((o) => o.id !== exclude.excludeOrderId)
     .forEach((o) => {
       ((o.vendor_splits as { items?: (LineItem & { status?: string })[] }[]) || []).forEach((split) =>
-        sumInto(reserved, (split.items || []).filter((i) => i.status === 'pending'))
+        sumInto(reserved, (split.items || []).filter((i) => i.status !== 'rejected'))
       );
     });
 
@@ -96,8 +99,8 @@ export async function getReservationDetailsForProduct(productId: string): Promis
   const details: ReservationDetail[] = [];
 
   const [{ data: requests }, { data: orders }, { data: transfers }, { data: deliveries }] = await Promise.all([
-    supabase.from('stock_requests').select('id, items, status').eq('status', 'pending'),
-    supabase.from('orders').select('id, vendor_splits, status').in('status', ['pending', 'accepted', 'partial', 'processing']),
+    supabase.from('stock_requests').select('id, items, status').in('status', ['pending', 'approved']).is('dispatched_at', null),
+    supabase.from('orders').select('id, vendor_splits, status').in('status', ['pending', 'accepted', 'partial']),
     supabase.from('transfers').select('id, items, status').in('status', ['requested', 'approved', 'in_transit']),
     supabase.from('deliveries').select('id, items_detail, status').in('status', ['prepare', 'ready', 'in_transit']),
   ]);
@@ -108,9 +111,9 @@ export async function getReservationDetailsForProduct(productId: string): Promis
   });
 
   (orders || []).forEach((o) => {
-    const pendingItems = ((o.vendor_splits as { items?: (LineItem & { status?: string })[] }[]) || [])
-      .flatMap((split) => (split.items || []).filter((i) => i.status === 'pending'));
-    const quantity = qtyForProduct(pendingItems, productId);
+    const unshippedItems = ((o.vendor_splits as { items?: (LineItem & { status?: string })[] }[]) || [])
+      .flatMap((split) => (split.items || []).filter((i) => i.status !== 'rejected'));
+    const quantity = qtyForProduct(unshippedItems, productId);
     if (quantity > 0) details.push({ source: 'Order', id: o.id, status: o.status, quantity });
   });
 

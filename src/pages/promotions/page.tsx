@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
+import { nowStamp } from '@/lib/timestamp';
 
 type FilterTab = 'all' | PromotionStatus;
 
@@ -54,7 +55,13 @@ function mapPromotion(row: Record<string, unknown>): Promotion {
     getQty: row.get_qty as number | undefined,
     products: (row.products as unknown as Promotion['products']) || [],
     bundleItems: (row.bundle_items as unknown as Promotion['bundleItems']) || undefined,
+    documentUrl: row.document_url as string | null,
+    documentName: row.document_name as string | null,
   };
+}
+
+function isImageFileName(name: string | null | undefined) {
+  return !!name && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
 }
 
 export default function PromotionsPage() {
@@ -112,7 +119,7 @@ export default function PromotionsPage() {
   const tabCount = (key: FilterTab) => key === 'all' ? promos.length : promos.filter((p) => p.status === key).length;
 
   const toggleStatus = async (id: string, newStatus: PromotionStatus) => {
-    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const now = nowStamp();
     const { error } = await supabase.from('promotions').update({ status: newStatus, updated_at: now }).eq('id', id);
     if (error) {
       console.error(error);
@@ -130,7 +137,7 @@ export default function PromotionsPage() {
   };
 
   const handleFormSubmit = async (data: any) => {
-    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const now = nowStamp();
     const maxNum = promos.length > 0 ? Math.max(...promos.map(p => parseInt(p.id.replace('PROMO-', '')) || 0)) : 0;
     const newId = `PROMO-${String(maxNum + 1).padStart(3, '0')}`;
 
@@ -155,6 +162,8 @@ export default function PromotionsPage() {
       get_qty: data.getQty || null,
       products: data.products || [],
       bundle_items: data.bundleItems || null,
+      document_url: data.documentUrl || null,
+      document_name: data.documentName || null,
     });
 
     if (error) {
@@ -480,6 +489,32 @@ export default function PromotionsPage() {
                                 <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
                                   <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Description</p>
                                   <p className="text-sm text-gray-600">{p.description}</p>
+                                </div>
+                              )}
+                              {p.documentUrl && (
+                                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Document</p>
+                                  <a
+                                    href={p.documentUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="flex items-center gap-2.5 rounded-xl border border-gray-100 p-2 hover:bg-gray-50 transition-colors"
+                                  >
+                                    {isImageFileName(p.documentName) ? (
+                                      <img
+                                        src={p.documentUrl}
+                                        alt={p.documentName || 'Promotion document'}
+                                        className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0"
+                                      />
+                                    ) : (
+                                      <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                                        <i className="ri-file-text-line text-sky-500"></i>
+                                      </div>
+                                    )}
+                                    <span className="text-xs font-medium text-sky-600 truncate">{p.documentName || 'View document'}</span>
+                                    <i className="ri-external-link-line text-gray-300 ml-auto shrink-0"></i>
+                                  </a>
                                 </div>
                               )}
                               {p.minOrderAmount && (

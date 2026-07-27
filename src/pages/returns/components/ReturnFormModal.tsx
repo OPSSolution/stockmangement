@@ -4,6 +4,7 @@ import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
+import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 
 interface RequestOptionItem {
   productId: string;
@@ -44,6 +45,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
   const isTerminal = !!ret && (ret.status === 'restocked' || ret.status === 'discarded');
   const { formatAmount } = useCurrency();
   const { isAdmin } = useAuth();
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [form, setForm] = useState({
     returnedBy: ret?.returnedBy ?? '',
     // No Reason field in the UI anymore — per-item Condition (Good/Damaged) already
@@ -167,6 +169,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
         imageUrl: reqItem.imageUrl,
         quantity: reqItem.remaining,
         unitPrice: productPrices[reqItem.productId] || 0,
+        condition: 'good',
       };
       return { ...prev, items: [...prev.items, newItem] };
     });
@@ -186,16 +189,16 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
     }));
   };
 
-  // Good/New/Fair go straight back to available stock; Damaged/Defective are still
-  // counted in stock but placed on hold — see restockReturnedItems in stockDeduction.ts.
-  const setItemGood = (productId: string, good: boolean) => {
+  // Good goes straight back to available stock; On Hold is still counted in
+  // stock but withheld from sale — see restockReturnedItems in stockDeduction.ts.
+  const setItemOnHold = (productId: string, onHold: boolean) => {
     setForm((prev) => ({
       ...prev,
-      items: prev.items.map((i) => (i.productId === productId ? { ...i, condition: good ? 'good' : 'damaged' } : i)),
+      items: prev.items.map((i) => (i.productId === productId ? { ...i, condition: onHold ? 'damaged' : 'good' } : i)),
     }));
   };
 
-  const handleFinalize = (status: ReturnStatus) => {
+  const handleFinalize = async (status: ReturnStatus) => {
     if (!form.requestId) {
       setError('Select the stock request this return is for.');
       return;
@@ -215,14 +218,23 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
       return;
     }
 
-    // Confirming decides real stock right away — every item needs a Good/Not Good
-    // call first so there's no ambiguity about which pile it lands in.
-    if (status === 'restocked' && form.items.some((item) => !item.condition)) {
-      setError('Mark every item Good or Not Good before confirming.');
+    if (status === 'restocked' && !documentFile) {
+      setError('Attach a restock document before confirming.');
       return;
     }
 
     setError('');
+
+    let documentUrl: string | null = null;
+    if (status === 'restocked' && documentFile) {
+      const { url, error: uploadError } = await uploadShipmentDocument(documentFile);
+      if (uploadError || !url) {
+        setError(`Failed to upload document: ${uploadError || 'unknown error'}`);
+        return;
+      }
+      documentUrl = url;
+    }
+
     const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
     const completedAt = ['restocked', 'discarded'].includes(status)
       ? form.completedAt || ret?.completedAt || now
@@ -251,6 +263,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
       createdAt: ret?.createdAt || now,
       updatedAt: now,
       completedAt,
+      ...(status === 'restocked' ? { restockDocumentUrl: documentUrl, restockDocumentName: documentFile?.name } : {}),
     });
   };
 
@@ -405,24 +418,16 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
                           </div>
                           <div>
                             <label className="block text-[10px] font-medium text-gray-500 mb-1">Condition</label>
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => setItemGood(reqItem.productId, true)}
+                            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all ${isTerminal ? 'cursor-not-allowed' : 'cursor-pointer'} ${formItem.condition === 'damaged' ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}>
+                              <input
+                                type="checkbox"
+                                checked={formItem.condition === 'damaged'}
                                 disabled={isTerminal}
-                                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all disabled:cursor-not-allowed ${isTerminal ? '' : 'cursor-pointer'} ${formItem.condition === 'good' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
-                              >
-                                ✅ Good
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setItemGood(reqItem.productId, false)}
-                                disabled={isTerminal}
-                                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all disabled:cursor-not-allowed ${isTerminal ? '' : 'cursor-pointer'} ${formItem.condition === 'damaged' ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
-                              >
-                                ❌ Damaged
-                              </button>
-                            </div>
+                                onChange={(e) => setItemOnHold(reqItem.productId, e.target.checked)}
+                                className="w-3.5 h-3.5 rounded border-gray-300 text-orange-600 focus:ring-orange-400 cursor-pointer disabled:cursor-not-allowed"
+                              />
+                              On Hold
+                            </label>
                           </div>
                         </div>
                       )}
@@ -452,6 +457,38 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
             <textarea value={form.inspectionNotes} onChange={(e) => setForm((prev) => ({ ...prev, inspectionNotes: e.target.value }))} rows={3} disabled={isTerminal} placeholder="Condition of the returned stock, or any remarks" className={`${inputClass} resize-none disabled:opacity-60 disabled:cursor-not-allowed`} />
           </section>
 
+          {!isTerminal && ret && isAdmin && (
+            <section>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Restock Document</label>
+              {documentFile ? (
+                <div className="flex items-center gap-2.5 border border-gray-200 rounded-lg p-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                    <i className="ri-file-text-line text-sky-500"></i>
+                  </div>
+                  <span className="text-xs font-medium text-gray-700 truncate flex-1">{documentFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setDocumentFile(null)}
+                    className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer shrink-0"
+                  >
+                    <i className="ri-close-line text-sm"></i>
+                  </button>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center gap-1 py-4 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-emerald-300 transition-colors">
+                  <i className="ri-upload-cloud-2-line text-lg text-gray-300"></i>
+                  <span className="text-xs font-medium text-gray-600">Click to attach inspection/handover photo or note</span>
+                  <span className="text-[10px] text-gray-400">Required to confirm restock</span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => { setDocumentFile(e.target.files?.[0] || null); e.target.value = ''; }}
+                  />
+                </label>
+              )}
+            </section>
+          )}
+
           {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-3">{error}</div>}
         </form>
 
@@ -462,7 +499,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
               : !ret
               ? 'Create the return first — an admin decides Confirm or Reject afterward.'
               : isAdmin
-              ? 'Confirm applies the Good/Not Good decision to stock right away. Reject leaves stock untouched.'
+              ? 'Confirm applies the On Hold decision to stock right away. Reject leaves stock untouched.'
               : 'Saved for an admin to confirm or reject.'}
           </p>
           <div className="flex items-center gap-3">
@@ -493,7 +530,8 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
                 <button
                   type="button"
                   onClick={() => handleFinalize('restocked')}
-                  disabled={submitting}
+                  disabled={submitting || !documentFile}
+                  title={documentFile ? undefined : 'Attach the restock document above to enable'}
                   className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                 >
                   {submittingAction === 'restocked' ? <i className="ri-loader-4-line animate-spin"></i> : <i className="ri-checkbox-circle-line"></i>}

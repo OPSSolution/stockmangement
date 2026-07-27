@@ -32,6 +32,23 @@ export const emptyLiveStats: LiveStats = {
   pendingPurchases: 0, purchasesValue: 0, activeReturns: 0,
 };
 
+// Supabase normally hands back jsonb columns already parsed into arrays, but
+// a value stored as a JSON-encoded string (e.g. from a manual edit or a
+// stray JSON.stringify before an update) comes back as a string instead —
+// which has a `.length` but no `.map`, so guard against that here.
+export function asArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed as T[];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 function mapWarehouse(row: Record<string, unknown>): Warehouse {
   return {
     id: row.id as string,
@@ -51,12 +68,13 @@ function mapWarehouse(row: Record<string, unknown>): Warehouse {
     outboundToday: row.outbound_today as number,
     lastAudit: row.last_audit as string,
     notes: row.notes as string | undefined,
-    zones: (row.zones as unknown as Warehouse['zones']) || [],
-    staff: (row.staff as unknown as Warehouse['staff']) || [],
-    monthlyActivity: (row.monthly_activity as unknown as Warehouse['monthlyActivity']) || [],
+    zones: asArray(row.zones),
+    staff: asArray(row.staff),
+    monthlyActivity: asArray(row.monthly_activity),
     country: (row.country as string) || 'Malaysia',
     pendingPickups: (row.pending_pickups as number) || 0,
-    vendorNames: (row.vendor_names as string[]) || [],
+    vendorNames: asArray<string>(row.vendor_names),
+    binLocations: asArray<string>(row.bin_locations),
   };
 }
 
@@ -161,6 +179,8 @@ export interface WarehouseProductRow {
   low_stock_threshold: number;
   price: number;
   status: 'in_stock' | 'low_stock' | 'out_of_stock';
+  /** Put-away location, e.g. "A.1.1" (Aisle A, Cabinet 1, Position 1). */
+  bin_location: string | null;
 }
 
 export type ActivityKind = 'transfer_in' | 'transfer_out' | 'purchase' | 'return';
@@ -188,7 +208,7 @@ export async function fetchWarehouseProductsAndActivity(
     { data: purchases },
     { data: returns },
   ] = await Promise.all([
-    supabase.from('products').select('id, name, sku, category, vendor, stock, low_stock_threshold, price, status').eq('warehouse', warehouseName),
+    supabase.from('products').select('id, name, sku, category, vendor, stock, low_stock_threshold, price, status, bin_location').eq('warehouse', warehouseName),
     supabase.from('transfers').select('id, from_warehouse, status, total_items, reason, created_at').eq('to_warehouse', warehouseName),
     supabase.from('transfers').select('id, to_warehouse, status, total_items, reason, created_at').eq('from_warehouse', warehouseName),
     supabase.from('purchases').select('id, vendor, status, total, total_items, created_at').eq('warehouse', warehouseName),

@@ -68,6 +68,11 @@ export default function WarehouseDetailPage() {
   const [savingVendors, setSavingVendors] = useState(false);
   const [vendorsError, setVendorsError] = useState<string | null>(null);
 
+  const [editingBinLocations, setEditingBinLocations] = useState(false);
+  const [binLocationsDraft, setBinLocationsDraft] = useState<string[]>([]);
+  const [savingBinLocations, setSavingBinLocations] = useState(false);
+  const [binLocationsError, setBinLocationsError] = useState<string | null>(null);
+
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -223,6 +228,37 @@ export default function WarehouseDetailPage() {
     logAudit({ action: 'update', module: 'warehouses', description: `Updated approved vendor list for "${warehouse.name}"`, referenceId: warehouse.id });
   };
 
+  const openEditBinLocations = () => {
+    if (!warehouse) return;
+    setBinLocationsDraft(warehouse.binLocations ?? []);
+    setBinLocationsError(null);
+    setEditingBinLocations(true);
+  };
+
+  const addBinLocationRow = () => setBinLocationsDraft((prev) => [...prev, '']);
+  const removeBinLocationRow = (i: number) => setBinLocationsDraft((prev) => prev.filter((_, idx) => idx !== i));
+  const updateBinLocationRow = (i: number, value: string) =>
+    setBinLocationsDraft((prev) => prev.map((b, idx) => (idx === i ? value : b)));
+
+  const saveBinLocations = async () => {
+    if (!warehouse) return;
+    const cleaned = Array.from(new Set(binLocationsDraft.map((b) => b.trim()).filter(Boolean)));
+    setSavingBinLocations(true);
+    setBinLocationsError(null);
+    const { error } = await supabase
+      .from('warehouses')
+      .update({ bin_locations: cleaned })
+      .eq('id', warehouse.id);
+    setSavingBinLocations(false);
+    if (error) {
+      setBinLocationsError(error.message);
+      return;
+    }
+    setWarehouse({ ...warehouse, binLocations: cleaned });
+    setEditingBinLocations(false);
+    logAudit({ action: 'update', module: 'warehouses', description: `Updated bin location list for "${warehouse.name}" (${cleaned.length} bins)`, referenceId: warehouse.id });
+  };
+
   const confirmDelete = async () => {
     if (!warehouse) return;
     setDeleting(true);
@@ -237,11 +273,15 @@ export default function WarehouseDetailPage() {
     navigate('/warehouses');
   };
 
-  // Render nothing while the warehouse is still loading (rather than a
-  // spinner) — the guard still prevents the "not found" state below from
-  // flashing before the fetch has actually had a chance to resolve.
   if (loading) {
-    return null;
+    return (
+      <DashboardLayout title="Warehouse Details">
+        <div className="flex items-center justify-center py-16 text-gray-400">
+          <i className="ri-loader-4-line animate-spin text-xl mr-2"></i>
+          <span className="text-sm">Loading warehouse...</span>
+        </div>
+      </DashboardLayout>
+    );
   }
 
   if (notFound || !warehouse) {
@@ -413,6 +453,33 @@ export default function WarehouseDetailPage() {
         )}
       </div>
 
+      {/* Bin Locations — the physical bin/rack codes defined for this warehouse (Put Away) */}
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5 mb-5">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Bin Locations</p>
+          {showEdit && (
+            <button
+              onClick={openEditBinLocations}
+              className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+              title="Edit"
+            >
+              <i className="ri-edit-line text-xs"></i>
+            </button>
+          )}
+        </div>
+        {(warehouse.binLocations ?? []).length === 0 ? (
+          <p className="text-xs text-gray-400">No bin locations defined yet — add codes like "A.1.1" (Aisle A, Cabinet 1, Position 1) so products can be put away and found again.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {(warehouse.binLocations ?? []).map((bin) => (
+              <span key={bin} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono font-medium bg-sky-50 text-sky-700 border border-sky-200">
+                <i className="ri-map-pin-2-line"></i>{bin}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Live Operations — real counts from products, transfers, purchases, returns */}
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5 mb-5">
         <div className="flex items-center gap-2 mb-4">
@@ -466,6 +533,7 @@ export default function WarehouseDetailPage() {
                   <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Product</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">SKU</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Category</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Bin Location</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Stock</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Status</th>
                   <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Price</th>
@@ -485,6 +553,12 @@ export default function WarehouseDetailPage() {
                         <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{p.sku}</span>
                       </td>
                       <td className="px-4 py-3 text-gray-600">{p.category}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center gap-1 text-xs ${p.bin_location ? 'font-mono font-medium text-gray-700' : 'text-gray-300 italic'}`}>
+                          <i className="ri-map-pin-2-line"></i>
+                          {p.bin_location || 'Not set'}
+                        </span>
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2 min-w-[90px]">
                           <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -760,6 +834,52 @@ export default function WarehouseDetailPage() {
               <button onClick={() => setEditingVendors(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 font-medium cursor-pointer">Cancel</button>
               <button onClick={saveVendors} disabled={savingVendors} className="px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer">
                 {savingVendors ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Bin Locations modal */}
+      {editingBinLocations && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+              <h2 className="text-lg font-semibold text-gray-900">Bin Locations</h2>
+              <button onClick={() => setEditingBinLocations(false)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
+                <i className="ri-close-line text-lg"></i>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-3">
+              {binLocationsError && (
+                <div className="px-3 py-2.5 bg-red-50 border border-red-100 rounded-lg text-sm text-red-700 flex items-center gap-2">
+                  <i className="ri-error-warning-line"></i>
+                  {binLocationsError}
+                </div>
+              )}
+              <p className="text-xs text-gray-400 mb-2">Define the physical bin/rack codes in this warehouse, e.g. "A.1.1" for Aisle A, Cabinet 1, Position 1.</p>
+              {binLocationsDraft.map((bin, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. A.1.1"
+                    value={bin}
+                    onChange={(e) => updateBinLocationRow(i, e.target.value)}
+                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button onClick={() => removeBinLocationRow(i)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer flex-shrink-0">
+                    <i className="ri-delete-bin-line text-sm"></i>
+                  </button>
+                </div>
+              ))}
+              <button onClick={addBinLocationRow} className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-gray-300 text-sm text-gray-500 hover:border-emerald-300 hover:text-emerald-600 transition-colors cursor-pointer">
+                <i className="ri-add-line"></i> Add Bin Location
+              </button>
+            </div>
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={() => setEditingBinLocations(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 font-medium cursor-pointer">Cancel</button>
+              <button onClick={saveBinLocations} disabled={savingBinLocations} className="px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer">
+                {savingBinLocations ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>

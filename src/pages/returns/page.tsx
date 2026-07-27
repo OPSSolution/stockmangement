@@ -19,7 +19,7 @@ const tabs: { key: FilterTab; label: string }[] = [
   { key: 'pending', label: 'Pending' },
   { key: 'inspecting', label: 'Inspecting' },
   { key: 'approved', label: 'Approved' },
-  { key: 'restocked', label: 'Restocked' },
+  { key: 'restocked', label: 'Complete' },
   { key: 'discarded', label: 'Discarded' },
 ];
 
@@ -48,6 +48,8 @@ function mapReturn(row: Record<string, unknown>): ReturnRequest {
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     completedAt: row.completed_at as string | undefined,
+    restockDocumentUrl: (row.restock_document_url as string) || null,
+    restockDocumentName: (row.restock_document_name as string) || null,
   };
 }
 
@@ -68,6 +70,8 @@ function toDbReturn(ret: ReturnRequest): Record<string, unknown> {
     created_at: ret.createdAt,
     updated_at: ret.updatedAt,
     completed_at: ret.completedAt || null,
+    restock_document_url: ret.restockDocumentUrl || null,
+    restock_document_name: ret.restockDocumentName || null,
   };
 }
 
@@ -188,6 +192,8 @@ export default function ReturnsPage() {
     if (updates.assignedTo !== undefined) dbUpdates.assigned_to = updates.assignedTo;
     if (updates.updatedAt) dbUpdates.updated_at = updates.updatedAt;
     if (updates.completedAt) dbUpdates.completed_at = updates.completedAt;
+    if (updates.restockDocumentUrl !== undefined) dbUpdates.restock_document_url = updates.restockDocumentUrl;
+    if (updates.restockDocumentName !== undefined) dbUpdates.restock_document_name = updates.restockDocumentName;
 
     const { error } = await supabase.from('returns').update(dbUpdates).eq('id', id);
     if (error) {
@@ -317,7 +323,7 @@ export default function ReturnsPage() {
               { label: 'Pending Review', value: kpi.pending, icon: 'ri-time-line', color: 'text-amber-600', bg: 'bg-amber-50', click: 'pending' as FilterTab },
               { label: 'Under Inspection', value: kpi.inspecting, icon: 'ri-search-eye-line', color: 'text-sky-600', bg: 'bg-sky-50', click: 'inspecting' as FilterTab },
               { label: 'Approved', value: kpi.approved, icon: 'ri-checkbox-circle-line', color: 'text-violet-600', bg: 'bg-violet-50', click: 'approved' as FilterTab },
-              { label: 'Restocked', value: kpi.restocked, icon: 'ri-archive-stack-line', color: 'text-emerald-600', bg: 'bg-emerald-50', click: 'restocked' as FilterTab },
+              { label: 'Complete', value: kpi.restocked, icon: 'ri-archive-stack-line', color: 'text-emerald-600', bg: 'bg-emerald-50', click: 'restocked' as FilterTab },
               { label: 'Discarded', value: kpi.discarded, icon: 'ri-delete-bin-line', color: 'text-red-600', bg: 'bg-red-50', click: 'discarded' as FilterTab },
               { label: 'Restocked Value', value: formatAmount(kpi.totalRestockedValue), icon: 'ri-archive-2-line', color: 'text-teal-600', bg: 'bg-teal-50', click: 'restocked' as FilterTab },
             ].map((card) => (

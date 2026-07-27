@@ -11,15 +11,16 @@ import { useCurrency } from '@/contexts/CurrencyContext';
 
 type Period = 'daily' | 'monthly' | 'yearly';
 
-interface ModuleData {
+export interface ModuleData {
   count: number;
   revenue?: number;
   total?: number;
-  refunded?: number;
+  /** Internal worth of returned stock — not a customer refund (see server route comment). */
+  value?: number;
   statusBreakdown?: Record<string, number>;
 }
 
-interface PeriodData {
+export interface PeriodData {
   orders: ModuleData;
   deliveries: ModuleData;
   transfers: ModuleData;
@@ -29,12 +30,27 @@ interface PeriodData {
 }
 
 interface TrendPoint { label: string; orders: number; revenue: number; }
+export interface RevenuePoint { date: string; label: string; revenue: number; orders: number; returns: number; }
+/** onHoldRate — live on_hold_stock/stock snapshot, not a period-scoped return rate (returns are tied to stock requests, not orders — see server route comment). */
+export interface TopProduct { productId: string; productName: string; sku: string; category: string; unitsSold: number; revenue: number; onHoldRate: number; trend: 'up' | 'down' | 'stable'; }
+export interface CategoryBreakdownItem { category: string; revenue: number; unitsSold: number; onHoldUnits: number; onHoldRate: number; color: string; }
+export interface ReturnReasonItem { reason: string; count: number; value: number; percentage: number; }
+export interface WarehousePerf { warehouse: string; inbound: number; outbound: number; returns: number; fulfillmentRate: number; avgProcessingDays: number; }
+export interface VendorPerf { vendor: string; totalOrders: number; fulfillmentRate: number; rejectedOrders: number; avgDeliveryDays: number; revenue: number; }
 
-interface ReportSummary {
+export interface ReportSummary {
   period: Period;
   current: PeriodData;
   previous: PeriodData;
   trend: TrendPoint[];
+  revenueDaily: RevenuePoint[];
+  revenueMonthly: RevenuePoint[];
+  topProducts: TopProduct[];
+  categoryBreakdown: CategoryBreakdownItem[];
+  returnReasons: ReturnReasonItem[];
+  warehousePerformance: WarehousePerf[];
+  vendorPerformance: VendorPerf[];
+  warehouseOptions: string[];
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -115,11 +131,14 @@ function navigatePeriod(period: Period, value: string, dir: -1 | 1): string {
   return String(Number(value) + dir);
 }
 
+// UTC throughout — matches the server's pattern-matching (server/routes/functions.ts),
+// which is also UTC-based. Using local wall-clock here (as 'monthly' used to) could pick
+// a different month than the backend near a month boundary in non-UTC timezones.
 function defaultValue(period: Period): string {
   const now = new Date();
   if (period === 'daily') return now.toISOString().slice(0, 10);
-  if (period === 'monthly') return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  return String(now.getFullYear());
+  if (period === 'monthly') return now.toISOString().slice(0, 7);
+  return String(now.getUTCFullYear());
 }
 
 function TrendChart({ trend, formatAmount }: { trend: TrendPoint[]; formatAmount: (n: number) => string }) {
@@ -287,7 +306,7 @@ export default function ReportsPage() {
       case 'Returns':
         return [
           { label: 'Returns',   value: String(cur?.returns.count ?? 0),              curr: cur?.returns.count    ?? 0,   prev: prv?.returns.count    ?? 0,    icon: 'ri-arrow-go-back-line',   bg: 'bg-red-50',     color: 'text-red-500' },
-          { label: 'Refunded',  value: formatAmount(cur?.returns.refunded ?? 0),      curr: cur?.returns.refunded ?? 0,   prev: prv?.returns.refunded ?? 0,    icon: 'ri-money-dollar-circle-line', bg: 'bg-sky-50', color: 'text-sky-600' },
+          { label: 'Return Value', value: formatAmount(cur?.returns.value ?? 0),      curr: cur?.returns.value ?? 0,   prev: prv?.returns.value ?? 0,    icon: 'ri-money-dollar-circle-line', bg: 'bg-sky-50', color: 'text-sky-600' },
           { label: 'Approved',  value: String(sb('returns','approved')),              curr: sb('returns','approved'),     prev: psb('returns','approved'),     icon: 'ri-checkbox-circle-line', bg: 'bg-emerald-50', color: 'text-emerald-600' },
           { label: 'Pending',   value: String(sb('returns','pending')),               curr: sb('returns','pending'),      prev: psb('returns','pending'),      icon: 'ri-time-line',            bg: 'bg-amber-50',   color: 'text-amber-600' },
         ];
@@ -308,7 +327,7 @@ export default function ReportsPage() {
     { label: 'Deliveries', icon: 'ri-truck-line',            bg: 'bg-sky-50',     iconColor: 'text-sky-600',     count: cur?.deliveries.count ?? 0, prevCount: prv?.deliveries.count ?? 0, value: 0,                         prevValue: 0,                          showValue: false, valueLabel: '',            statusBreakdown: cur?.deliveries.statusBreakdown ?? {} },
     { label: 'Transfers',  icon: 'ri-swap-box-line',         bg: 'bg-violet-50',  iconColor: 'text-violet-600',  count: cur?.transfers.count  ?? 0, prevCount: prv?.transfers.count  ?? 0, value: 0,                         prevValue: 0,                          showValue: false, valueLabel: '',            statusBreakdown: cur?.transfers.statusBreakdown  ?? {} },
     { label: 'Purchases',  icon: 'ri-shopping-cart-2-line',  bg: 'bg-amber-50',   iconColor: 'text-amber-600',   count: cur?.purchases.count  ?? 0, prevCount: prv?.purchases.count  ?? 0, value: cur?.purchases.total ?? 0, prevValue: prv?.purchases.total ?? 0,  showValue: true,  valueLabel: 'Total Value', statusBreakdown: cur?.purchases.statusBreakdown  ?? {} },
-    { label: 'Returns',    icon: 'ri-arrow-go-back-line',    bg: 'bg-red-50',     iconColor: 'text-red-500',     count: cur?.returns.count    ?? 0, prevCount: prv?.returns.count    ?? 0, value: cur?.returns.refunded ?? 0,prevValue: prv?.returns.refunded ?? 0, showValue: true,  valueLabel: 'Refunded',   statusBreakdown: cur?.returns.statusBreakdown    ?? {} },
+    { label: 'Returns',    icon: 'ri-arrow-go-back-line',    bg: 'bg-red-50',     iconColor: 'text-red-500',     count: cur?.returns.count    ?? 0, prevCount: prv?.returns.count    ?? 0, value: cur?.returns.value ?? 0,prevValue: prv?.returns.value ?? 0, showValue: true,  valueLabel: 'Return Value',   statusBreakdown: cur?.returns.statusBreakdown    ?? {} },
     { label: 'Promotions', icon: 'ri-price-tag-3-line',      bg: 'bg-pink-50',    iconColor: 'text-pink-500',    count: cur?.promotions.count ?? 0, prevCount: prv?.promotions.count ?? 0, value: 0,                         prevValue: 0,                          showValue: false, valueLabel: '',            statusBreakdown: cur?.promotions.statusBreakdown ?? {} },
   ];
 
@@ -345,7 +364,7 @@ export default function ReportsPage() {
             <i className="ri-arrow-right-s-line text-gray-500"></i>
           </button>
         </div>
-        <ExportMenu />
+        <ExportMenu summary={summary} periodLabel={periodLabel(period, periodValue)} formatAmount={formatAmount} />
       </div>
 
       {/* Filter bar — single scrollable row */}
@@ -376,8 +395,9 @@ export default function ReportsPage() {
           <select value={warehouse} onChange={(e) => setWarehouse(e.target.value)}
             className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300">
             <option value="">All Warehouses</option>
-            <option value="BM Warehouse">BM Warehouse</option>
-            <option value="Vendor Warehouse">Vendor Warehouse</option>
+            {(summary?.warehouseOptions ?? (warehouse ? [warehouse] : [])).map((w) => (
+              <option key={w} value={w}>{w}</option>
+            ))}
           </select>
         </div>
       </div>
@@ -447,9 +467,9 @@ export default function ReportsPage() {
             <div className="space-y-2">
               {[
                 { label: 'Avg Order Value',       value: totalOrders > 0 ? formatAmount(totalRevenue / totalOrders) : '—',                  bg: 'bg-emerald-50', textLabel: 'text-emerald-700', textValue: 'text-emerald-800' },
-                { label: 'Return Rate',            value: totalOrders > 0 ? (((cur?.returns.count ?? 0) / totalOrders) * 100).toFixed(1) + '%' : '—', bg: 'bg-sky-50', textLabel: 'text-sky-700', textValue: 'text-sky-800' },
+                { label: 'Restock Rate',           value: (() => { const decided = sb('returns','restocked') + sb('returns','discarded'); return decided > 0 ? ((sb('returns','restocked') / decided) * 100).toFixed(1) + '%' : '—'; })(), bg: 'bg-sky-50', textLabel: 'text-sky-700', textValue: 'text-sky-800' },
                 { label: 'Purchases Value',        value: formatAmount(cur?.purchases.total  ?? 0),                                          bg: 'bg-violet-50',  textLabel: 'text-violet-700', textValue: 'text-violet-800' },
-                { label: 'Refunds Issued',         value: formatAmount(cur?.returns.refunded ?? 0),                                          bg: 'bg-amber-50',   textLabel: 'text-amber-700',  textValue: 'text-amber-800' },
+                { label: 'Return Value',           value: formatAmount(cur?.returns.value ?? 0),                                             bg: 'bg-amber-50',   textLabel: 'text-amber-700',  textValue: 'text-amber-800' },
                 { label: 'Active Promotions',      value: String(cur?.promotions.statusBreakdown?.active ?? 0),                              bg: 'bg-pink-50',    textLabel: 'text-pink-700',   textValue: 'text-pink-800' },
                 { label: 'Transfers Initiated',    value: String(cur?.transfers.count ?? 0),                                                 bg: 'bg-gray-50',    textLabel: 'text-gray-600',   textValue: 'text-gray-800' },
               ].map((row) => (
@@ -540,14 +560,14 @@ export default function ReportsPage() {
         <div className="flex-1 h-px bg-gray-100"></div>
       </div>
 
-      <div className="mb-5"><RevenueChart /></div>
+      <div className="mb-5"><RevenueChart daily={summary?.revenueDaily ?? []} monthly={summary?.revenueMonthly ?? []} loading={loading} /></div>
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 mb-5">
-        <div className="lg:col-span-3"><TopProductsTable /></div>
-        <div className="lg:col-span-2"><CategoryBreakdownChart /></div>
+        <div className="lg:col-span-3"><TopProductsTable products={summary?.topProducts ?? []} loading={loading} /></div>
+        <div className="lg:col-span-2"><CategoryBreakdownChart data={summary?.categoryBreakdown ?? []} loading={loading} /></div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-        <div className="lg:col-span-2"><ReturnReasonsChart /></div>
-        <div className="lg:col-span-3"><WarehousePerformancePanel /></div>
+        <div className="lg:col-span-2"><ReturnReasonsChart data={summary?.returnReasons ?? []} loading={loading} /></div>
+        <div className="lg:col-span-3"><WarehousePerformancePanel warehouses={summary?.warehousePerformance ?? []} vendors={summary?.vendorPerformance ?? []} loading={loading} /></div>
       </div>
     </DashboardLayout>
   );

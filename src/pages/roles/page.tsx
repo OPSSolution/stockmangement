@@ -44,7 +44,7 @@ const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
       { key: 'warehouses', label: 'Warehouses', icon: 'ri-building-2-line',      actions: ['edit', 'delete'] },
       { key: 'transfers',  label: 'Transfers',  icon: 'ri-swap-box-line',        actions: [] },
       { key: 'returns',    label: 'Returns',    icon: 'ri-arrow-go-back-line',   actions: ['edit', 'delete'] },
-      { key: 'purchases',  label: 'Purchases',  icon: 'ri-shopping-cart-2-line', actions: [] },
+      { key: 'purchases',  label: 'Purchases',  icon: 'ri-shopping-cart-2-line', actions: ['approve'] },
       { key: 'promotions', label: 'Promotions', icon: 'ri-price-tag-3-line',     actions: [] },
       { key: 'vendors',    label: 'Vendors',    icon: 'ri-store-2-line',         actions: ['edit', 'delete'] },
     ],

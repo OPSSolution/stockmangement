@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { Product, ProductType } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { asArray } from '@/pages/warehouses/warehouseShared';
 
 interface ProductFormModalProps {
   product: Product | null;
@@ -33,6 +34,7 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [warehouseVendors, setWarehouseVendors] = useState<Record<string, string[]>>({});
+  const [warehouseBinLocations, setWarehouseBinLocations] = useState<Record<string, string[]>>({});
   const [skuManuallyEdited, setSkuManuallyEdited] = useState(Boolean(product));
   const [form, setForm] = useState<ProductFormState>({
     name: '',
@@ -44,6 +46,8 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
     lowStockThreshold: 10,
     price: 0,
     productType: 'pack' as ProductType,
+    expiryDate: '',
+    binLocation: '',
   });
 
   useEffect(() => {
@@ -60,11 +64,12 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
 
   useEffect(() => {
     const loadWarehouses = async () => {
-      const { data, error } = await supabase.from('warehouses').select('name, vendor_names').order('name', { ascending: true });
+      const { data, error } = await supabase.from('warehouses').select('name, vendor_names, bin_locations').order('name', { ascending: true });
       if (!error && data && data.length > 0) {
         const names = data.map((w) => w.name as string);
         setWarehouses(names);
-        setWarehouseVendors(Object.fromEntries(data.map((w) => [w.name as string, (w.vendor_names as string[]) || []])));
+        setWarehouseVendors(Object.fromEntries(data.map((w) => [w.name as string, asArray<string>(w.vendor_names)])));
+        setWarehouseBinLocations(Object.fromEntries(data.map((w) => [w.name as string, asArray<string>(w.bin_locations)])));
         setForm((prev) => (prev.warehouse ? prev : { ...prev, warehouse: warehouseScope?.[0] || names[0] }));
       }
     };
@@ -72,6 +77,7 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
   }, [warehouseScope]);
 
   const vendorOptions = warehouseVendors[form.warehouse] || [];
+  const binLocationOptions = warehouseBinLocations[form.warehouse] || [];
 
   useEffect(() => {
     if (product) {
@@ -86,6 +92,8 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
         price: product.price,
         productType: product.productType,
         imageUrl: product.imageUrl,
+        expiryDate: product.expiryDate || '',
+        binLocation: product.binLocation ?? '',
       });
       setSkuManuallyEdited(true);
     } else {
@@ -225,6 +233,22 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
               )}
             </div>
             <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Bin Location (optional)</label>
+              <select
+                name="binLocation"
+                value={form.binLocation ?? ''}
+                onChange={handleChange}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
+              >
+                <option value="">Not set</option>
+                {binLocationOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                {form.binLocation && !binLocationOptions.includes(form.binLocation) && <option value={form.binLocation}>{form.binLocation}</option>}
+              </select>
+              {binLocationOptions.length === 0 && (
+                <p className="text-[11px] text-gray-400 mt-1">No bin locations defined for this warehouse yet — add some from the warehouse's detail page.</p>
+              )}
+            </div>
+            <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Initial Stock</label>
               <input
                 type="number"
@@ -232,6 +256,16 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
                 value={form.stock}
                 onChange={handleChange}
                 min={0}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Expiry Date (optional)</label>
+              <input
+                type="date"
+                name="expiryDate"
+                value={form.expiryDate || ''}
+                onChange={handleChange}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
               />
             </div>

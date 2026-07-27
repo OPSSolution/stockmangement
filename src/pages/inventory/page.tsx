@@ -18,6 +18,8 @@ import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit, diffFields } from '@/lib/auditLog';
 import { resolveOnHoldStock, type OnHoldResolution } from '@/lib/stockDeduction';
+import { formatDateTime } from '@/lib/formatDateTime';
+import { nowStamp } from '@/lib/timestamp';
 
 const CATEGORY_STORAGE_KEY = 'inventory_categories';
 
@@ -45,6 +47,8 @@ function mapProduct(row: Record<string, unknown>): Product {
     productType: (row.product_type as Product['productType']) || 'pack',
     status: row.status as Product['status'],
     lastUpdated: row.last_updated as string,
+    expiryDate: (row.expiry_date as string) || undefined,
+    binLocation: (row.bin_location as string) || undefined,
   };
 }
 
@@ -61,6 +65,7 @@ function mapHistory(row: Record<string, unknown>): StockHistoryEntry {
     warehouse: row.warehouse as string,
     user: row.user_name as string,
     timestamp: row.created_at as string,
+    expiryDate: (row.expiry_date as string) || undefined,
   };
 }
 
@@ -251,7 +256,7 @@ export default function InventoryPage() {
   }, [warehouseScope, scopedVendorNames, allVendorNames]);
 
   const handleSaveProduct = async (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string }) => {
-    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const now = nowStamp();
     const status = deriveStatus(data.stock, data.lowStockThreshold);
     const before = data.id ? products.find((p) => p.id === data.id) : undefined;
 
@@ -267,6 +272,8 @@ export default function InventoryPage() {
         low_stock_threshold: data.lowStockThreshold,
         price: data.price,
         product_type: data.productType,
+        expiry_date: data.expiryDate || null,
+        bin_location: data.binLocation || null,
         status,
         last_updated: now,
       }).eq('id', data.id);
@@ -286,6 +293,7 @@ export default function InventoryPage() {
           { key: 'stock', label: 'Stock' },
           { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
           { key: 'price', label: 'Price' },
+          { key: 'expiryDate', label: 'Expiry Date' },
           { key: 'status', label: 'Status' },
         ]) : [];
         // Image URLs (often long data URIs) aren't readable as raw before/after
@@ -317,6 +325,8 @@ export default function InventoryPage() {
         low_stock_threshold: data.lowStockThreshold,
         price: data.price,
         product_type: data.productType,
+        expiry_date: data.expiryDate || null,
+        bin_location: data.binLocation || null,
         status,
         last_updated: now,
       });
@@ -334,18 +344,23 @@ export default function InventoryPage() {
     setShowAddModal(false);
   };
 
-  const handleAdjust = async (productId: string, delta: number, type: string, note: string) => {
+  const handleAdjust = async (productId: string, delta: number, type: string, note: string, expiryDate?: string) => {
     const target = products.find((p) => p.id === productId);
     if (!target) return;
 
     const newStock = Math.max(0, target.stock + delta);
-    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const now = nowStamp();
 
-    const { error: updateError } = await supabase.from('products').update({
+    // Expiry only ever tracks the most recently received batch — only overwrite
+    // it when this adjustment actually brings a new date in with incoming stock.
+    const productUpdate: Record<string, unknown> = {
       stock: newStock,
       status: deriveStatus(newStock, target.lowStockThreshold),
       last_updated: now,
-    }).eq('id', productId);
+    };
+    if (delta > 0 && expiryDate) productUpdate.expiry_date = expiryDate;
+
+    const { error: updateError } = await supabase.from('products').update(productUpdate).eq('id', productId);
 
     if (updateError) {
       console.error(updateError);
@@ -368,13 +383,15 @@ export default function InventoryPage() {
       warehouse: target.warehouse,
       user_name: 'Admin',
       created_at: now,
+      expiry_date: delta > 0 ? expiryDate || null : null,
     });
 
     if (historyError) console.error(historyError);
 
-    setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, stock: newStock, status: newStatus, lastUpdated: now } : p)));
+    const newExpiryDate = delta > 0 && expiryDate ? expiryDate : target.expiryDate;
+    setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, stock: newStock, status: newStatus, lastUpdated: now, expiryDate: newExpiryDate } : p)));
     setHistory((prev) => [
-      { id: historyId, productId, type: type as StockHistoryEntry['type'], quantity: delta, stockBefore: target.stock, stockAfter: newStock, reference: 'ADJ-MANUAL', note: note || 'Manual stock adjustment', warehouse: target.warehouse, user: 'Admin', timestamp: now },
+      { id: historyId, productId, type: type as StockHistoryEntry['type'], quantity: delta, stockBefore: target.stock, stockAfter: newStock, reference: 'ADJ-MANUAL', note: note || 'Manual stock adjustment', warehouse: target.warehouse, user: 'Admin', timestamp: now, expiryDate: delta > 0 ? expiryDate : undefined },
       ...prev,
     ]);
     setAdjustProduct(null);
@@ -426,7 +443,7 @@ export default function InventoryPage() {
       return;
     }
 
-    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const now = nowStamp();
     const newOnHold = Math.max(0, (target.onHoldStock || 0) - quantity);
     const newStock = resolution === 'discard' ? Math.max(0, target.stock - quantity) : target.stock;
     const newStatus = deriveStatus(newStock, target.lowStockThreshold);
@@ -623,7 +640,7 @@ export default function InventoryPage() {
                         <div className="w-8 h-8 flex items-center justify-center bg-sky-50 rounded-lg shrink-0">
                           <i className="ri-file-chart-line text-sky-600 text-sm"></i>
                         </div>
-                        Stock Report
+                        Stock Movement Report
                       </button>
                       <div className="border-t border-gray-50 my-1"></div>
                       <button
@@ -642,7 +659,7 @@ export default function InventoryPage() {
                             { header: 'Low Stock Threshold', value: (p) => p.lowStockThreshold },
                             { header: 'Price', value: (p) => p.price },
                             { header: 'Status', value: (p) => p.status },
-                            { header: 'Last Updated', value: (p) => p.lastUpdated },
+                            { header: 'Last Updated', value: (p) => formatDateTime(p.lastUpdated) },
                           ]);
                           setShowActionsMenu(false);
                         }}

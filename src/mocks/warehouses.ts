@@ -45,6 +45,8 @@ export interface Warehouse {
   notes?: string;
   /** Vendors approved/available for this warehouse — scopes the Vendor picker on Add Product. */
   vendorNames?: string[];
+  /** Bin/rack codes defined for this warehouse (e.g. "A.1.1") — the registry a product's bin_location gets set from. */
+  binLocations?: string[];
 }
 
 export const warehouses: Warehouse[] = [

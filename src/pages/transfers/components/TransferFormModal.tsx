@@ -44,6 +44,7 @@ interface ProductOption {
   image_url?: string | null;
   stock: number;
   warehouse: string;
+  bin_location?: string | null;
 }
 
 export default function TransferFormModal({ onClose, onSubmit }: TransferFormModalProps) {
@@ -65,9 +66,9 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
   useEffect(() => {
     const fetchProducts = async () => {
       setLoading(true);
-      const { data, error } = await supabase.from('products').select('id, name, sku, image_url, stock, warehouse');
+      const { data, error } = await supabase.from('products').select('id, name, sku, image_url, stock, warehouse, bin_location');
       if (error) console.error(error);
-      else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, stock: p.stock, warehouse: p.warehouse })));
+      else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, stock: p.stock, warehouse: p.warehouse, bin_location: p.bin_location })));
       setLoading(false);
     };
 
@@ -264,7 +265,7 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                   >
                     <option value="">Select product from {form.fromWarehouse}…</option>
                     {availableProducts.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.sku}) — {availableStock(p.stock, reserved, p.id)} available</option>
+                      <option key={p.id} value={p.id}>{p.name} ({p.sku}){p.bin_location ? ` — Bin: ${p.bin_location}` : ''} — {availableStock(p.stock, reserved, p.id)} available</option>
                     ))}
                   </select>
                   <input
@@ -304,7 +305,9 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {form.items.map((item) => (
+                    {form.items.map((item) => {
+                      const bin = products.find((p) => p.id === item.productId)?.bin_location;
+                      return (
                       <tr key={item.productId}>
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2.5">
@@ -315,7 +318,10 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                                 <i className="ri-box-3-line text-emerald-500 text-xs"></i>
                               )}
                             </div>
-                            <span className="font-medium text-gray-800">{item.productName}</span>
+                            <div>
+                              <span className="font-medium text-gray-800">{item.productName}</span>
+                              {bin && <p className="text-[11px] text-gray-400 font-mono">Bin: {bin}</p>}
+                            </div>
                           </div>
                         </td>
                         <td className="px-4 py-2.5 text-gray-500 font-mono text-xs">{item.sku}</td>
@@ -326,7 +332,8 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

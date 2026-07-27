@@ -12,6 +12,8 @@ export interface StockHistoryEntry {
   warehouse: string;
   user: string;
   timestamp: string;
+  /** Expiry date of the batch received in this entry, when the stock is incoming. */
+  expiryDate?: string;
 }
 
 export const stockHistory: StockHistoryEntry[] = [

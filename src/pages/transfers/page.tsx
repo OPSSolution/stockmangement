@@ -8,9 +8,11 @@ import TransferFormModal from './components/TransferFormModal';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { moveStockBetweenWarehouses } from '@/lib/stockDeduction';
+import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 import { logAudit } from '@/lib/auditLog';
 import { exportToCsv } from '@/lib/exportCsv';
 import { notifyAdmins } from '@/lib/notifyAdmins';
+import { nowStamp } from '@/lib/timestamp';
 
 type FilterTab = 'all' | TransferStatus;
 
@@ -19,7 +21,7 @@ const tabs: { key: FilterTab; label: string }[] = [
   { key: 'requested', label: 'Requested' },
   { key: 'approved', label: 'Approved' },
   { key: 'in_transit', label: 'In Transit' },
-  { key: 'received', label: 'Received' },
+  { key: 'received', label: 'Complete' },
   { key: 'cancelled', label: 'Cancelled' },
 ];
 function mapTransfer(row: Record<string, unknown>): StockTransfer {
@@ -38,6 +40,8 @@ function mapTransfer(row: Record<string, unknown>): StockTransfer {
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     completedAt: row.completed_at as string | undefined,
+    receiptDocumentUrl: (row.receipt_document_url as string) || null,
+    receiptDocumentName: (row.receipt_document_name as string) || null,
   };
 }
 
@@ -104,24 +108,29 @@ export default function TransfersPage() {
     totalUnits: transfers.filter((t) => t.status !== 'cancelled').reduce((s, t) => s + t.totalItems, 0),
   }), [transfers]);
 
-  const handleStatusChange = async (id: string, status: TransferStatus) => {
+  const handleStatusChange = async (id: string, status: TransferStatus, documentFile?: File) => {
     if (statusChanging) return;
     const transfer = transfers.find((t) => t.id === id);
+    if (status === 'received' && !documentFile) return;
 
-    if (status === 'approved' || status === 'in_transit' || status === 'received') {
-      const isReceivingWarehouse = isAdmin || (transfer && warehouseScope?.includes(transfer.toWarehouse));
-      const isSendingWarehouse = isAdmin || (transfer && warehouseScope?.includes(transfer.fromWarehouse));
-      const allowed = status === 'received' ? isReceivingWarehouse : isSendingWarehouse;
-      if (!allowed) {
-        const warehouse = status === 'received' ? transfer?.toWarehouse : transfer?.fromWarehouse;
-        const action = status === 'approved' ? 'approve' : status === 'in_transit' ? 'mark in transit' : 'confirm receipt of';
-        window.alert(`Only ${warehouse ?? 'the responsible warehouse'} can ${action} this transfer.`);
-        return;
-      }
+    if ((status === 'approved' || status === 'in_transit' || status === 'received') && !isAdmin) {
+      const action = status === 'approved' ? 'approve' : status === 'in_transit' ? 'mark in transit' : 'confirm receipt of';
+      window.alert(`Only an admin can ${action} this transfer.`);
+      return;
     }
 
     setStatusChanging(true);
     try {
+      let documentUrl: string | null = null;
+      if (documentFile) {
+        const { url, error: uploadError } = await uploadShipmentDocument(documentFile);
+        if (uploadError || !url) {
+          window.alert(`Failed to upload delivery document: ${uploadError || 'unknown error'}`);
+          return;
+        }
+        documentUrl = url;
+      }
+
       if (status === 'received' && transfer) {
         const { error: fulfillError } = await moveStockBetweenWarehouses(transfer.items, {
           fromWarehouse: transfer.fromWarehouse,
@@ -135,10 +144,14 @@ export default function TransfersPage() {
         }
       }
 
-      const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+      const now = nowStamp();
       const updateData: Record<string, unknown> = { status, updated_at: now };
       if (status === 'approved') updateData.approved_by = 'Admin';
-      if (status === 'received') updateData.completed_at = now;
+      if (status === 'received') {
+        updateData.completed_at = now;
+        updateData.receipt_document_url = documentUrl;
+        updateData.receipt_document_name = documentFile?.name;
+      }
 
       const { error } = await supabase.from('transfers').update(updateData).eq('id', id);
       if (error) {
@@ -151,7 +164,11 @@ export default function TransfersPage() {
 
         const patch: Partial<StockTransfer> = { status, updatedAt: now };
         if (status === 'approved') patch.approvedBy = 'Admin';
-        if (status === 'received') patch.completedAt = now;
+        if (status === 'received') {
+          patch.completedAt = now;
+          patch.receiptDocumentUrl = documentUrl;
+          patch.receiptDocumentName = documentFile?.name;
+        }
 
         setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
         setSelectedTransfer((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
@@ -163,8 +180,19 @@ export default function TransfersPage() {
   };
 
   const handleFormSubmit = async (data: any) => {
-    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
-    const maxNum = transfers.length > 0 ? Math.max(...transfers.map(t => parseInt(t.id.replace('TRF-', '')) || 0)) : 0;
+    const now = nowStamp();
+
+    // Compute the next ID from a fresh, unfiltered read of every transfer — the
+    // locally loaded `transfers` list can be scoped to warehouseScope, which
+    // undercounts the real max ID and collides with a transfer outside that scope.
+    const { data: existingTransfers, error: fetchError } = await supabase.from('transfers').select('id');
+    if (fetchError) {
+      console.error(fetchError);
+      setSuccessMsg('Failed to create transfer.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+      return;
+    }
+    const maxNum = (existingTransfers || []).reduce((max, row) => Math.max(max, parseInt((row.id as string).replace('TRF-', '')) || 0), 0);
     const newId = `TRF-${String(maxNum + 1).padStart(4, '0')}`;
     const totalItems = data.items.reduce((s: number, i: { quantity: number }) => s + i.quantity, 0);
 
@@ -234,7 +262,7 @@ export default function TransfersPage() {
               { label: 'Requested', value: kpi.requested, icon: 'ri-time-line', color: 'text-amber-600', bg: 'bg-amber-50', click: 'requested' as FilterTab },
               { label: 'Approved', value: kpi.approved, icon: 'ri-checkbox-circle-line', color: 'text-sky-600', bg: 'bg-sky-50', click: 'approved' as FilterTab },
               { label: 'In Transit', value: kpi.in_transit, icon: 'ri-truck-line', color: 'text-violet-600', bg: 'bg-violet-50', click: 'in_transit' as FilterTab },
-              { label: 'Received', value: kpi.received, icon: 'ri-check-double-line', color: 'text-emerald-600', bg: 'bg-emerald-50', click: 'received' as FilterTab },
+              { label: 'Complete', value: kpi.received, icon: 'ri-check-double-line', color: 'text-emerald-600', bg: 'bg-emerald-50', click: 'received' as FilterTab },
               { label: 'Total Units Moved', value: kpi.totalUnits, icon: 'ri-archive-line', color: 'text-gray-600', bg: 'bg-gray-100', click: 'all' as FilterTab },
             ].map((card) => (
               <button
@@ -403,8 +431,8 @@ export default function TransfersPage() {
           transfer={selectedTransfer}
           onClose={() => setSelectedTransfer(null)}
           onStatusChange={handleStatusChange}
-          isSendingWarehouse={isAdmin || !!warehouseScope?.includes(selectedTransfer.fromWarehouse)}
-          isReceivingWarehouse={isAdmin || !!warehouseScope?.includes(selectedTransfer.toWarehouse)}
+          isSendingWarehouse={isAdmin}
+          isReceivingWarehouse={isAdmin}
           statusChanging={statusChanging}
         />
       )}

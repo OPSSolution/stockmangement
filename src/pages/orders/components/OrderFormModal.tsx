@@ -23,13 +23,16 @@ const emptyDraft: OrderCreateDraft = {
   address: '',
   city: '',
   notes: '',
-  lines: [{ productId: '', quantity: 1 }],
+  lines: [],
 };
 
 export default function OrderFormModal({ products, reserved, initialDraft, title = 'Create Order', submitLabel = 'Create Order', onClose, onSave }: OrderFormModalProps) {
   const { formatAmount } = useCurrency();
   const [draft, setDraft] = useState<OrderCreateDraft>(initialDraft ?? emptyDraft);
   const [error, setError] = useState('');
+  const [pickerWarehouse, setPickerWarehouse] = useState('');
+  const [pickerProduct, setPickerProduct] = useState('');
+  const [pickerQty, setPickerQty] = useState(1);
 
   useEffect(() => {
     if (initialDraft) {
@@ -42,11 +45,29 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
     return sum + (product ? product.price * (Number(line.quantity) || 0) : 0);
   }, 0);
 
-  const updateLine = (index: number, field: 'productId' | 'quantity', value: string | number | '') => {
-    setDraft((prev) => ({
-      ...prev,
-      lines: prev.lines.map((line, i) => i === index ? { ...line, [field]: value } : line),
-    }));
+  const selectedWarehouses = Array.from(new Set(
+    draft.lines
+      .map((line) => products.find((p) => p.id === line.productId)?.warehouse)
+      .filter((w): w is string => Boolean(w))
+  ));
+
+  const warehouseOptions = Array.from(new Set(products.map((p) => p.warehouse))).sort();
+
+  // Products already added don't show up again in the picker — one line per product.
+  const pickerProducts = pickerWarehouse
+    ? products.filter((p) => p.warehouse === pickerWarehouse && !draft.lines.some((l) => l.productId === p.id))
+    : [];
+  const pickerProductObj = products.find((p) => p.id === pickerProduct);
+
+  const handleAddItem = () => {
+    if (!pickerProduct) return;
+    setDraft((prev) => ({ ...prev, lines: [...prev.lines, { productId: pickerProduct, quantity: pickerQty, warehouse: pickerWarehouse }] }));
+    setPickerProduct('');
+    setPickerQty(1);
+  };
+
+  const handleRemoveItem = (index: number) => {
+    setDraft((prev) => ({ ...prev, lines: prev.lines.filter((_, i) => i !== index) }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -99,38 +120,106 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Items</p>
-              <button type="button" onClick={() => setDraft({ ...draft, lines: [...draft.lines, { productId: '', quantity: 1 }] })} className="text-xs font-medium text-emerald-700 hover:underline cursor-pointer">
-                + Add item
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Items</p>
+            {selectedWarehouses.length > 1 && (
+              <p className="text-[11px] text-sky-700 bg-sky-50 rounded-lg px-2.5 py-1.5">
+                <i className="ri-information-line mr-1"></i>
+                Items span {selectedWarehouses.length} warehouses ({selectedWarehouses.join(', ')}) — this order will be split into a separate fulfillment group per warehouse.
+              </p>
+            )}
+
+            {/* Picker — select warehouse, then product, then quantity, then Add */}
+            <div className="flex gap-2 flex-wrap">
+              <select
+                value={pickerWarehouse}
+                onChange={(e) => { setPickerWarehouse(e.target.value); setPickerProduct(''); }}
+                className="w-36 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
+              >
+                <option value="">Warehouse</option>
+                {warehouseOptions.map((w) => <option key={w} value={w}>{w}</option>)}
+              </select>
+              <select
+                value={pickerProduct}
+                onChange={(e) => setPickerProduct(e.target.value)}
+                disabled={!pickerWarehouse}
+                className="flex-1 min-w-40 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer disabled:bg-gray-50 disabled:text-gray-400"
+              >
+                <option value="">{pickerWarehouse ? 'Select product' : 'Select warehouse first'}</option>
+                {pickerProducts.map((p) => <option key={p.id} value={p.id}>{p.name}{p.binLocation ? ` (Bin: ${p.binLocation})` : ''} — {availableStock(p.stock, reserved, p.id)} available</option>)}
+              </select>
+              <input
+                type="number"
+                min={1}
+                max={pickerProductObj ? availableStock(pickerProductObj.stock, reserved, pickerProductObj.id) : undefined}
+                value={pickerQty}
+                onChange={(e) => setPickerQty(e.target.value === '' ? 1 : parseInt(e.target.value))}
+                className="w-20 border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-emerald-200"
+              />
+              <button
+                type="button"
+                onClick={handleAddItem}
+                disabled={!pickerProduct}
+                className="px-4 py-2.5 bg-emerald-500 text-white text-sm font-medium rounded-lg hover:bg-emerald-600 disabled:opacity-40 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <i className="ri-add-line mr-1"></i>Add
               </button>
             </div>
 
-            {draft.lines.map((line, index) => {
-              const product = products.find((p) => p.id === line.productId);
-              return (
-                <div key={index} className="grid grid-cols-[1fr_80px_32px] gap-2">
-                  <select value={line.productId} onChange={(e) => updateLine(index, 'productId', e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200">
-                    <option value="">Select product</option>
-                    {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({availableStock(p.stock, reserved, p.id)} available)</option>)}
-                  </select>
-                  <input
-                    type="number"
-                    min={1}
-                    max={product ? availableStock(product.stock, reserved, product.id) : undefined}
-                    value={line.quantity}
-                    onChange={(e) => updateLine(index, 'quantity', e.target.value === '' ? '' : parseInt(e.target.value))}
-                    onBlur={() => {
-                      if (!line.quantity || Number(line.quantity) < 1) updateLine(index, 'quantity', 1);
-                    }}
-                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                  />
-                  <button type="button" onClick={() => setDraft({ ...draft, lines: draft.lines.filter((_, i) => i !== index) })} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500 cursor-pointer">
-                    <i className="ri-delete-bin-line"></i>
-                  </button>
-                </div>
-              );
-            })}
+            {/* Added items */}
+            {draft.lines.length > 0 ? (
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Product</th>
+                      <th className="text-center px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Qty</th>
+                      <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Price</th>
+                      <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Total</th>
+                      <th className="px-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {draft.lines.map((line, index) => {
+                      const product = products.find((p) => p.id === line.productId);
+                      return (
+                        <tr key={index}>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
+                                {product?.imageUrl ? (
+                                  <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <i className="ri-box-3-line text-emerald-500 text-xs"></i>
+                                )}
+                              </div>
+                              <div>
+                                <p className="font-medium text-gray-800">{product?.name ?? '—'}</p>
+                                <p className="text-[11px] text-gray-400">
+                                  {product?.sku} · {product?.warehouse ?? line.warehouse}
+                                  {product?.binLocation && <> · <span className="font-mono">Bin: {product.binLocation}</span></>}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 text-center text-gray-700">{line.quantity}</td>
+                          <td className="px-3 py-2.5 text-right text-gray-600">{formatAmount(product?.price ?? 0)}</td>
+                          <td className="px-3 py-2.5 text-right font-semibold text-gray-800">{formatAmount((product?.price ?? 0) * (Number(line.quantity) || 0))}</td>
+                          <td className="px-2 py-2.5 text-right">
+                            <button type="button" onClick={() => handleRemoveItem(index)} className="w-7 h-7 flex items-center justify-center rounded hover:bg-red-50 text-gray-400 hover:text-red-500 cursor-pointer">
+                              <i className="ri-delete-bin-line text-sm"></i>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="border border-dashed border-gray-200 rounded-lg py-6 text-center text-sm text-gray-400">
+                No items added yet
+              </div>
+            )}
           </div>
 
           <textarea value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} rows={3} placeholder="Notes..." className="w-full resize-none px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />

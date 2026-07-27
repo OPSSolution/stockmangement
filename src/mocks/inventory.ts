@@ -16,6 +16,10 @@ export interface Product {
   productType: ProductType;
   status: 'in_stock' | 'low_stock' | 'out_of_stock';
   lastUpdated: string;
+  /** Expiry date of the most recently received batch. */
+  expiryDate?: string;
+  /** Physical put-away location, e.g. "A.1.1" (Aisle A, Cabinet 1, Position 1) — set from the Warehouse detail page. */
+  binLocation?: string | null;
 }
 
 export interface StockAlert {

@@ -6,7 +6,7 @@ interface StockAdjustModalProps {
   product: Product;
   history?: StockHistoryEntry[];
   onClose: () => void;
-  onAdjust: (productId: string, delta: number, type: string, note: string) => void;
+  onAdjust: (productId: string, delta: number, type: string, note: string, expiryDate?: string) => void;
 }
 
 const adjustTypes = [
@@ -43,6 +43,7 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
   const [mode, setMode] = useState<'add' | 'remove'>('add');
   const [quantity, setQuantity] = useState(0);
   const [note, setNote] = useState('');
+  const [expiryDate, setExpiryDate] = useState('');
   const [error, setError] = useState('');
 
   const delta = mode === 'remove' ? -Math.abs(quantity) : Math.abs(quantity);
@@ -63,7 +64,7 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
     if (quantity <= 0) { setError('Quantity must be greater than 0.'); return; }
     if (newStock < 0) { setError('Cannot reduce stock below 0.'); return; }
     setError('');
-    onAdjust(product.id, delta, adjustType, note);
+    onAdjust(product.id, delta, adjustType, note, mode === 'add' ? expiryDate || undefined : undefined);
   };
 
   return (
@@ -163,6 +164,19 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
               />
             </div>
+
+            {/* Expiry date — only meaningful when stock is coming in */}
+            {mode === 'add' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Expiry Date (optional)</label>
+                <input
+                  type="date"
+                  value={expiryDate}
+                  onChange={(e) => setExpiryDate(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
+                />
+              </div>
+            )}
 
           {/* Note */}
           <div>

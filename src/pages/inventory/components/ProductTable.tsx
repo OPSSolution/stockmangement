@@ -3,6 +3,7 @@ import { Product } from '@/mocks/inventory';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { availableStock } from '@/lib/stockReservations';
+import { formatDateTime } from '@/lib/formatDateTime';
 
 interface ProductTableProps {
   products: Product[];
@@ -27,6 +28,14 @@ const statusConfig = {
   low_stock: { label: 'Low Stock', cls: 'bg-amber-50 text-amber-700' },
   out_of_stock: { label: 'Out of Stock', cls: 'bg-red-50 text-red-600' },
 };
+
+/** Expired → red, within 30 days → amber, otherwise → gray. */
+function expiryTone(expiryDate: string): string {
+  const daysLeft = (new Date(expiryDate).getTime() - Date.now()) / 86400000;
+  if (daysLeft < 0) return 'text-red-600';
+  if (daysLeft <= 30) return 'text-amber-600';
+  return 'text-gray-400';
+}
 
 export default function ProductTable({ products, reserved, onEdit, onDelete, onAdjust, onViewHistory }: ProductTableProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -73,6 +82,11 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
                     <div>
                       <p className="font-medium text-gray-800 leading-tight">{p.name}</p>
                       <p className="text-xs text-gray-400">{p.id}</p>
+                      {p.expiryDate && (
+                        <p className={`text-xs mt-0.5 ${expiryTone(p.expiryDate)}`}>
+                          <i className="ri-calendar-close-line mr-0.5"></i>Exp {new Date(p.expiryDate).toLocaleDateString()}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </td>
@@ -86,6 +100,11 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
                   <div className="flex flex-col">
                     <span className="text-gray-700 text-xs font-medium">{p.warehouse}</span>
                     {p.vendor && <span className="text-gray-400 text-xs">{p.vendor}</span>}
+                    {p.binLocation && (
+                      <span className="text-gray-400 text-xs mt-0.5" title="Bin location">
+                        <i className="ri-map-pin-2-line mr-0.5"></i>{p.binLocation}
+                      </span>
+                    )}
                   </div>
                 </td>
                 <td className="py-3 px-4 text-right">
@@ -108,7 +127,7 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
                     {statusConfig[p.status].label}
                   </span>
                 </td>
-                <td className="py-3 px-4 text-xs text-gray-400 whitespace-nowrap">{p.lastUpdated}</td>
+                <td className="py-3 px-4 text-xs text-gray-400 whitespace-nowrap">{formatDateTime(p.lastUpdated)}</td>
                 <td className="py-3 px-4 relative">
                   <div className="flex items-center gap-1">
                     {showAdjust && (

@@ -1,35 +1,21 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useState } from 'react';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import type { RevenuePoint } from '../page';
 
 type View = 'daily' | 'monthly';
 
-interface DataPoint { date: string; revenue: number; orders: number; returns: number; }
+interface RevenueChartProps {
+  daily: RevenuePoint[];
+  monthly: RevenuePoint[];
+  loading: boolean;
+}
 
-export default function RevenueChart() {
+export default function RevenueChart({ daily, monthly, loading }: RevenueChartProps) {
   const { formatAmount } = useCurrency();
   const [view, setView] = useState<View>('daily');
-  const [dailyData, setDailyData] = useState<DataPoint[]>([]);
-  const [monthlyData, setMonthlyData] = useState<DataPoint[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    setLoading(true);
-    const [dailyRes, monthlyRes] = await Promise.all([
-      supabase.from('daily_revenue').select('date, revenue, orders, returns').order('date', { ascending: true }),
-      supabase.from('monthly_snapshots').select('month, revenue, orders, returns').order('month', { ascending: true }),
-    ]);
-    if (dailyRes.data) setDailyData(dailyRes.data.map((d) => ({ date: d.date, revenue: d.revenue, orders: d.orders, returns: d.returns })));
-    if (monthlyRes.data) setMonthlyData(monthlyRes.data.map((m) => ({ date: m.month, revenue: m.revenue, orders: m.orders, returns: m.returns })));
-    setLoading(false);
-  };
-
-  const data = view === 'daily' ? dailyData : monthlyData;
-  const maxRevenue = data.length > 0 ? Math.max(...data.map((d) => d.revenue)) : 1;
+  const data = view === 'daily' ? daily : monthly;
+  const maxRevenue = data.length > 0 ? Math.max(...data.map((d) => d.revenue), 1) : 1;
   const totalRevenue = data.reduce((s, d) => s + d.revenue, 0);
   const totalOrders = data.reduce((s, d) => s + d.orders, 0);
   const totalReturns = data.reduce((s, d) => s + d.returns, 0);
@@ -76,6 +62,8 @@ export default function RevenueChart() {
           <i className="ri-loader-4-line animate-spin text-xl mr-2"></i>
           <span className="text-sm">Loading...</span>
         </div>
+      ) : data.length === 0 ? (
+        <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No data for this period</div>
       ) : (
         <div className="flex items-end gap-1.5 h-40 overflow-x-auto pb-1">
           {data.map((d, i) => {
@@ -97,7 +85,7 @@ export default function RevenueChart() {
                     </div>
                   </div>
                 </div>
-                <p className="text-xs text-gray-400 whitespace-nowrap" style={{ fontSize: '10px' }}>{d.date.replace('May ', '')}</p>
+                <p className="text-xs text-gray-400 whitespace-nowrap" style={{ fontSize: '10px' }}>{d.label}</p>
               </div>
             );
           })}

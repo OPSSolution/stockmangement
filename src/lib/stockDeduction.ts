@@ -144,6 +144,54 @@ export async function restockReturnedItems(
   return { error: results.find((r) => r !== null) ?? null };
 }
 
+interface ReceiveLine {
+  productId: string;
+  quantity: number;
+}
+
+/**
+ * Physically adds received purchase-order stock onto each product and logs a
+ * stock_history entry per item — called when a Purchase Order is marked Received.
+ * Mirrors restockReturnedItems but for inbound POs instead of customer returns.
+ */
+export async function receivePurchaseOrderItems(
+  items: ReceiveLine[],
+  opts: { reference: string; userName: string }
+): Promise<{ error: string | null }> {
+  const now = new Date().toISOString();
+
+  for (const item of items) {
+    if (!item.productId || !item.quantity) continue;
+
+    const { data: product, error: fetchErr } = await supabase.from('products').select('*').eq('id', item.productId).single();
+    if (fetchErr || !product) return { error: fetchErr?.message || `Product ${item.productId} not found` };
+
+    const newStock = product.stock + item.quantity;
+    const { error: updateErr } = await supabase.from('products').update({
+      stock: newStock,
+      status: deriveStatus(newStock, product.low_stock_threshold),
+      last_updated: now,
+    }).eq('id', product.id);
+    if (updateErr) return { error: updateErr.message };
+
+    await supabase.from('stock_history').insert({
+      id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      product_id: product.id,
+      type: 'purchase',
+      quantity: item.quantity,
+      stock_before: product.stock,
+      stock_after: newStock,
+      reference: opts.reference,
+      note: `Purchase order ${opts.reference} received`,
+      warehouse: product.warehouse,
+      user_name: opts.userName,
+      created_at: now,
+    });
+  }
+
+  return { error: null };
+}
+
 export type OnHoldResolution = 'release' | 'discard';
 
 interface ResolveOnHoldOptions {

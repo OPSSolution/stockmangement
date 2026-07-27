@@ -32,6 +32,14 @@ function mapOrder(row: Record<string, unknown>): Order {
     itemCount: Number(row.item_count || row.itemCount || 0),
     vendorSplits: (row.vendor_splits as unknown as Order['vendorSplits']) || (row.vendorSplits as unknown as Order['vendorSplits']) || [],
     notes: (row.notes as string | undefined) || undefined,
+    shippedAt: (row.shipped_at as string | null) ?? null,
+    shippedBy: (row.shipped_by as string | null) ?? null,
+    shipmentNote: (row.shipment_note as string | null) ?? null,
+    shipmentDocumentUrl: (row.shipment_document_url as string | null) ?? null,
+    shipmentDocumentName: (row.shipment_document_name as string | null) ?? null,
+    receivedAt: (row.received_at as string | null) ?? null,
+    receivedBy: (row.received_by as string | null) ?? null,
+    receiptConfirmed: Boolean(row.receipt_confirmed),
   };
 }
 
@@ -139,6 +147,14 @@ export default function OrdersPage() {
           status: updated.status,
           vendor_splits: updated.vendorSplits,
           updated_at: updated.updatedAt,
+          shipped_at: updated.shippedAt,
+          shipped_by: updated.shippedBy,
+          shipment_note: updated.shipmentNote,
+          shipment_document_url: updated.shipmentDocumentUrl,
+          shipment_document_name: updated.shipmentDocumentName,
+          received_at: updated.receivedAt,
+          received_by: updated.receivedBy,
+          receipt_confirmed: updated.receiptConfirmed,
         })
         .eq('id', updated.id);
 
@@ -253,9 +269,9 @@ export default function OrdersPage() {
   const filterTabs: { key: FilterStatus; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'pending', label: 'Pending' },
-    { key: 'accepted', label: 'Accepted' },
+    { key: 'accepted', label: 'Approved' },
     { key: 'partial', label: 'Partial' },
-    { key: 'processing', label: 'Processing' },
+    { key: 'processing', label: 'Complete' },
     { key: 'fulfilled', label: 'Fulfilled' },
     { key: 'rejected', label: 'Rejected' },
   ];
@@ -274,7 +290,7 @@ export default function OrdersPage() {
             {[
               { label: 'Total Orders', value: orders.length, icon: 'ri-shopping-bag-3-line', color: 'text-gray-800', bg: 'bg-gray-100' },
               { label: 'Pending Review', value: counts.pending, icon: 'ri-time-line', color: 'text-amber-700', bg: 'bg-amber-50' },
-              { label: 'Accepted / Processing', value: counts.accepted + counts.processing, icon: 'ri-checkbox-circle-line', color: 'text-emerald-700', bg: 'bg-emerald-50' },
+              { label: 'Approved / Complete', value: counts.accepted + counts.processing, icon: 'ri-checkbox-circle-line', color: 'text-emerald-700', bg: 'bg-emerald-50' },
               { label: 'Revenue (Accepted)', value: formatAmount(totalRevenue), icon: 'ri-money-dollar-circle-line', color: 'text-violet-700', bg: 'bg-violet-50' },
             ].map((kpi) => (
               <div key={kpi.label} className="bg-white rounded-xl px-5 py-4 flex items-center gap-4">

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { PromotionType } from '@/mocks/promotions';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { uploadPromotionDocument } from '@/lib/uploadPromotionDocument';
 
 interface FormData {
   name: string;
@@ -16,6 +17,8 @@ interface FormData {
   bundlePrice: number;
   buyQty: number;
   getQty: number;
+  documentUrl?: string;
+  documentName?: string;
 }
 
 interface Props {
@@ -58,10 +61,25 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<string | null>(null);
+  const [isDraggingDoc, setIsDraggingDoc] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [docError, setDocError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchProducts();
   }, []);
+
+  useEffect(() => {
+    if (!documentFile || !documentFile.type.startsWith('image/')) {
+      setDocumentPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(documentFile);
+    setDocumentPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [documentFile]);
 
   const fetchProducts = async () => {
     setLoading(true);
@@ -101,8 +119,23 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = () => {
-    if (validate()) onSubmit(form);
+  const handleSubmit = async () => {
+    if (!validate()) return;
+
+    if (!documentFile) {
+      onSubmit(form);
+      return;
+    }
+
+    setUploadingDoc(true);
+    setDocError(null);
+    const { url, error } = await uploadPromotionDocument(documentFile);
+    setUploadingDoc(false);
+    if (error || !url) {
+      setDocError('Failed to upload document: ' + (error || 'unknown error'));
+      return;
+    }
+    onSubmit({ ...form, documentUrl: url, documentName: documentFile.name });
   };
 
   return (
@@ -264,6 +297,63 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
             />
           </div>
 
+          {/* Supporting Document */}
+          <div>
+            <label className="text-sm font-medium text-gray-700 block mb-1.5">Supporting Document</label>
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDraggingDoc(true); }}
+              onDragLeave={() => setIsDraggingDoc(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDraggingDoc(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) { setDocumentFile(file); setDocError(null); }
+              }}
+              className={`rounded-xl border-2 border-dashed transition-colors ${isDraggingDoc ? 'border-emerald-400 bg-emerald-50/50' : 'border-gray-200'}`}
+            >
+              {documentFile ? (
+                <div className="flex items-center gap-2.5 p-2">
+                  {documentPreview ? (
+                    <img src={documentPreview} alt="Document preview" className="w-10 h-10 rounded-lg object-cover border border-gray-100 shrink-0" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+                      <i className="ri-file-text-line text-sky-500"></i>
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-gray-700 truncate">{documentFile.name}</p>
+                    <p className="text-[10px] text-emerald-600 mt-0.5">Ready — uploaded when you launch this promotion</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setDocumentFile(null); setDocError(null); }}
+                    title="Remove"
+                    className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer shrink-0"
+                  >
+                    <i className="ri-close-line text-sm"></i>
+                  </button>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center gap-1 py-3 cursor-pointer">
+                  <i className="ri-upload-cloud-2-line text-lg text-gray-300"></i>
+                  <span className="text-xs font-medium text-gray-600 text-center px-2">Drop file here, or click to browse</span>
+                  <span className="text-[10px] text-gray-400">Optional — campaign brief, approval memo, banner artwork, etc.</span>
+                  <input
+                    type="file"
+                    accept="image/*,.pdf,.doc,.docx"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) { setDocumentFile(file); setDocError(null); }
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+            {docError && <p className="text-xs text-red-500 mt-1">{docError}</p>}
+          </div>
+
           {/* Product Selection */}
           <div>
             <label className="text-sm font-medium text-gray-700 block mb-2">Applicable Products *</label>
@@ -343,8 +433,13 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer whitespace-nowrap">
             Cancel
           </button>
-          <button onClick={() => { if (validate()) onSubmit({ ...form }); }} className="px-5 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap">
-            <i className="ri-flashlight-line mr-1.5"></i>Launch Promotion
+          <button
+            onClick={handleSubmit}
+            disabled={uploadingDoc}
+            className="px-5 py-2 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+          >
+            <i className={uploadingDoc ? 'ri-loader-4-line animate-spin mr-1.5' : 'ri-flashlight-line mr-1.5'}></i>
+            {uploadingDoc ? 'Uploading…' : 'Launch Promotion'}
           </button>
         </div>
       </div>

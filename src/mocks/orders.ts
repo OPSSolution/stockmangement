@@ -38,6 +38,17 @@ export interface Order {
   itemCount: number;
   vendorSplits: VendorSplit[];
   notes?: string;
+  /** Set when picking/packing hands the order off — references the printed pickslip. */
+  shippedAt?: string | null;
+  shippedBy?: string | null;
+  shipmentNote?: string | null;
+  /** Delivery/pickslip document attached at Confirm Shipment — required before stock leaves. */
+  shipmentDocumentUrl?: string | null;
+  shipmentDocumentName?: string | null;
+  /** Set once the receiver signs off that the order arrived — flips status to 'fulfilled'. */
+  receivedAt?: string | null;
+  receivedBy?: string | null;
+  receiptConfirmed?: boolean;
 }
 
 export const orders: Order[] = [

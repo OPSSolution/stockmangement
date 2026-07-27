@@ -24,6 +24,9 @@ export interface StockTransfer {
   expectedArrival?: string;
   completedAt?: string;
   reason: string;
+  /** Delivery document attached at Confirm Received — required before stock moves. */
+  receiptDocumentUrl?: string | null;
+  receiptDocumentName?: string | null;
 }
 
 export const transfers: StockTransfer[] = [

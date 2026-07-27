@@ -1,4 +1,7 @@
-export type PurchaseStatus = 'draft' | 'submitted' | 'approved' | 'ordered' | 'received' | 'cancelled';
+/** pending -> approved -> ordered -> received, or rejected/cancelled along the way.
+ * A single Purchase Order record carries the whole lifecycle — there is no
+ * separate "Purchase Request" stage that spawns a second row on approval. */
+export type PurchaseStatus = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'ordered' | 'received';
 
 export interface PurchaseItem {
   productId: string;
@@ -22,13 +25,23 @@ export interface PurchaseOrder {
   subtotal: number;
   tax: number;
   total: number;
+  /** Why this purchase is being requested — optional, shown while pending/rejected. */
+  reason?: string;
   requestedBy: string;
+  /** Who logged this into the system — may differ from requestedBy (who's actually asking). */
+  submittedBy?: string;
+  /** Rejection reason, set when status becomes 'rejected'. */
+  reviewNote?: string;
   approvedBy?: string;
+  approvedAt?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
   expectedDelivery?: string;
   receivedAt?: string;
+  /** Delivery document attached at Confirm Receipt — required before stock is added. */
+  receiptDocumentUrl?: string | null;
+  receiptDocumentName?: string | null;
 }
 
 export const purchaseOrders: PurchaseOrder[] = [
@@ -38,7 +51,7 @@ export const purchaseOrders: PurchaseOrder[] = [
     vendorContact: 'Kevin Lam',
     vendorEmail: 'kevin@techsupply.co',
     warehouse: 'BM Warehouse',
-    status: 'submitted',
+    status: 'pending',
     totalItems: 200,
     subtotal: 2598.00,
     tax: 155.88,

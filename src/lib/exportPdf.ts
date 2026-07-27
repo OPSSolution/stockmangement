@@ -412,6 +412,40 @@ function drawTimeline(doc: jsPDF, entries: PdfTimelineEntry[], startY: number): 
   return y;
 }
 
+/** Receiver / Approval sign-off — every downloadable PDF ends with this so the
+ * printed copy can be signed and dated by hand, regardless of what document
+ * type it is. */
+function drawSignatureBlock(doc: jsPDF, startY: number): number {
+  const blockH = 80;
+  let y = ensureSpace(doc, startY, blockH);
+  y += 12;
+
+  const gap = 12;
+  const boxW = (CONTENT_W - gap) / 2;
+  const labels = ['Receiver', 'Approval'];
+
+  labels.forEach((label, idx) => {
+    const x = MARGIN + idx * (boxW + gap);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    setText(doc, TEXT_DARK);
+    doc.text(label, x, y);
+
+    // Deliberately blank below the label — no line, no "Signature" caption.
+    // It's obvious what the space under a Receiver/Approval header is for.
+    const dateY = y + 54;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    setText(doc, TEXT_MID);
+    doc.text('Date:', x, dateY);
+    setDraw(doc, BORDER);
+    doc.line(x + 28, dateY + 2, x + boxW, dateY + 2);
+  });
+
+  return y + blockH;
+}
+
 function drawFooters(doc: jsPDF, footerLeft?: string) {
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
@@ -448,6 +482,8 @@ export function buildPdf(rawSpec: PdfDoc): jsPDF {
   if (spec.timeline && spec.timeline.length > 0) {
     y = drawTimeline(doc, spec.timeline, y);
   }
+
+  y = drawSignatureBlock(doc, y);
 
   drawFooters(doc, spec.footerLeft);
   return doc;

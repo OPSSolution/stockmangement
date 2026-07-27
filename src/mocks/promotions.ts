@@ -41,6 +41,8 @@ export interface Promotion {
   updatedAt: string;
   totalRevenue: number;
   totalUnitsSold: number;
+  documentUrl?: string | null;
+  documentName?: string | null;
 }
 
 export const promotions: Promotion[] = [

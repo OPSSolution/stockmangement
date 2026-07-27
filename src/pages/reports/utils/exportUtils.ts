@@ -1,11 +1,4 @@
-import {
-  monthlySnapshots,
-  topProducts,
-  categoryBreakdown,
-  returnReasonBreakdown,
-  warehousePerformance,
-  vendorPerformance,
-} from '@/mocks/reports';
+import type { ReportSummary } from '../page';
 
 // ─── CSV helpers ────────────────────────────────────────────────────────────
 
@@ -30,109 +23,107 @@ function downloadCsv(filename: string, rows: string[]): void {
   URL.revokeObjectURL(url);
 }
 
+// Stored monetary values are USD (the KHR toggle only converts for display —
+// see src/lib/currency.ts) — CSVs export the raw stored figure, so they're
+// labeled by their real unit rather than whatever the viewer's toggle shows.
+
 // ─── CSV exports ─────────────────────────────────────────────────────────────
 
-export function exportMonthlySnapshotCsv(): void {
-  const header = toCsvRow(['Month', 'Revenue (RM)', 'Orders', 'Returns', 'Transfers', 'Purchases', 'Avg Order Value (RM)']);
-  const dataRows = monthlySnapshots.map((m) =>
-    toCsvRow([m.month, m.revenue, m.orders, m.returns, m.transfers, m.purchases, m.avgOrderValue.toFixed(2)])
-  );
-  const ytdRevenue = monthlySnapshots.reduce((s, m) => s + m.revenue, 0);
-  const ytdOrders = monthlySnapshots.reduce((s, m) => s + m.orders, 0);
-  const ytdReturns = monthlySnapshots.reduce((s, m) => s + m.returns, 0);
-  const ytdTransfers = monthlySnapshots.reduce((s, m) => s + m.transfers, 0);
-  const ytdPurchases = monthlySnapshots.reduce((s, m) => s + m.purchases, 0);
-  const avgAov = (monthlySnapshots.reduce((s, m) => s + m.avgOrderValue, 0) / monthlySnapshots.length).toFixed(2);
-  const totalsRow = toCsvRow(['YTD Total', ytdRevenue, ytdOrders, ytdReturns, ytdTransfers, ytdPurchases, avgAov]);
-  downloadCsv('StockManagement_Monthly_Report.csv', [header, ...dataRows, totalsRow]);
+export function exportRevenueCsv(summary: ReportSummary): void {
+  const header = toCsvRow(['Month', 'Revenue (USD)', 'Orders', 'Returns']);
+  const dataRows = summary.revenueMonthly.map((m) => toCsvRow([m.date, m.revenue.toFixed(2), m.orders, m.returns]));
+  const ytdRevenue = summary.revenueMonthly.reduce((s, m) => s + m.revenue, 0);
+  const ytdOrders = summary.revenueMonthly.reduce((s, m) => s + m.orders, 0);
+  const ytdReturns = summary.revenueMonthly.reduce((s, m) => s + m.returns, 0);
+  const totalsRow = toCsvRow(['YTD Total', ytdRevenue.toFixed(2), ytdOrders, ytdReturns]);
+  downloadCsv('StockManagement_Revenue_By_Month.csv', [header, ...dataRows, totalsRow]);
 }
 
-export function exportTopProductsCsv(): void {
-  const header = toCsvRow(['Rank', 'Product Name', 'SKU', 'Category', 'Units Sold', 'Revenue (RM)', 'Return Rate (%)', 'Trend']);
-  const dataRows = topProducts.map((p, i) =>
-    toCsvRow([i + 1, p.productName, p.sku, p.category, p.unitsSold, p.revenue.toFixed(2), p.returnRate, p.trend])
+export function exportTopProductsCsv(summary: ReportSummary): void {
+  const header = toCsvRow(['Rank', 'Product Name', 'SKU', 'Category', 'Units Sold', 'Revenue (USD)', 'On Hold Rate (%)', 'Trend']);
+  const dataRows = summary.topProducts.map((p, i) =>
+    toCsvRow([i + 1, p.productName, p.sku, p.category, p.unitsSold, p.revenue.toFixed(2), p.onHoldRate, p.trend])
   );
   downloadCsv('StockManagement_Top_Products.csv', [header, ...dataRows]);
 }
 
-export function exportCategoryBreakdownCsv(): void {
-  const header = toCsvRow(['Category', 'Revenue (RM)', 'Units Sold', 'Return Rate (%)']);
-  const dataRows = categoryBreakdown.map((c) =>
-    toCsvRow([c.category, c.revenue.toFixed(2), c.unitsSold, c.returnRate])
+export function exportCategoryBreakdownCsv(summary: ReportSummary): void {
+  const header = toCsvRow(['Category', 'Revenue (USD)', 'Units Sold', 'On Hold Units', 'On Hold Rate (%)']);
+  const dataRows = summary.categoryBreakdown.map((c) =>
+    toCsvRow([c.category, c.revenue.toFixed(2), c.unitsSold, c.onHoldUnits, c.onHoldRate])
   );
   downloadCsv('StockManagement_Category_Breakdown.csv', [header, ...dataRows]);
 }
 
-export function exportReturnReasonsCsv(): void {
-  const header = toCsvRow(['Return Reason', 'Count', 'Value (RM)', 'Percentage (%)']);
-  const dataRows = returnReasonBreakdown.map((r) =>
+export function exportReturnReasonsCsv(summary: ReportSummary): void {
+  const header = toCsvRow(['Return Reason', 'Count', 'Value (USD)', 'Percentage (%)']);
+  const dataRows = summary.returnReasons.map((r) =>
     toCsvRow([r.reason, r.count, r.value.toFixed(2), r.percentage])
   );
   downloadCsv('StockManagement_Return_Reasons.csv', [header, ...dataRows]);
 }
 
-export function exportWarehousePerformanceCsv(): void {
+export function exportWarehousePerformanceCsv(summary: ReportSummary): void {
   const header = toCsvRow(['Warehouse', 'Inbound Units', 'Outbound Units', 'Returns', 'Fulfillment Rate (%)', 'Avg Processing Days']);
-  const dataRows = warehousePerformance.map((w) =>
+  const dataRows = summary.warehousePerformance.map((w) =>
     toCsvRow([w.warehouse, w.inbound, w.outbound, w.returns, w.fulfillmentRate, w.avgProcessingDays])
   );
   downloadCsv('StockManagement_Warehouse_Performance.csv', [header, ...dataRows]);
 }
 
-export function exportVendorPerformanceCsv(): void {
-  const header = toCsvRow(['Vendor', 'Fulfillment Rate (%)', 'Total Orders', 'Rejected', 'Avg Delivery Days', 'Revenue (RM)']);
-  const dataRows = vendorPerformance.map((v) =>
-    toCsvRow([v.vendor, v.fulfillmentRate, v.totalOrders, v.rejectedOrders, v.avgDeliveryDays, v.revenue])
+export function exportVendorPerformanceCsv(summary: ReportSummary): void {
+  const header = toCsvRow(['Vendor', 'Fulfillment Rate (%)', 'Total Orders', 'Rejected', 'Avg Delivery Days', 'Revenue (USD)']);
+  const dataRows = summary.vendorPerformance.map((v) =>
+    toCsvRow([v.vendor, v.fulfillmentRate, v.totalOrders, v.rejectedOrders, v.avgDeliveryDays, v.revenue.toFixed(2)])
   );
   downloadCsv('StockManagement_Vendor_Performance.csv', [header, ...dataRows]);
 }
 
-export function exportAllReportsCsv(): void {
+export function exportAllReportsCsv(summary: ReportSummary, periodLabel: string): void {
   const sections: string[] = [];
 
   sections.push('STOCKMANAGEMENT — FULL REPORTS EXPORT');
-  sections.push(`Generated: ${new Date().toLocaleDateString('en-MY', { day: '2-digit', month: 'long', year: 'numeric' })}`);
+  sections.push(`Period: ${periodLabel}`);
+  sections.push(`Generated: ${new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'long', year: 'numeric' })}`);
   sections.push('');
 
-  sections.push('=== MONTHLY SNAPSHOT ===');
-  sections.push(toCsvRow(['Month', 'Revenue (RM)', 'Orders', 'Returns', 'Transfers', 'Purchases', 'Avg Order Value (RM)']));
-  monthlySnapshots.forEach((m) =>
-    sections.push(toCsvRow([m.month, m.revenue, m.orders, m.returns, m.transfers, m.purchases, m.avgOrderValue.toFixed(2)]))
-  );
+  sections.push('=== REVENUE BY MONTH (YTD) ===');
+  sections.push(toCsvRow(['Month', 'Revenue (USD)', 'Orders', 'Returns']));
+  summary.revenueMonthly.forEach((m) => sections.push(toCsvRow([m.date, m.revenue.toFixed(2), m.orders, m.returns])));
   sections.push('');
 
   sections.push('=== TOP PRODUCTS ===');
-  sections.push(toCsvRow(['Rank', 'Product Name', 'SKU', 'Category', 'Units Sold', 'Revenue (RM)', 'Return Rate (%)', 'Trend']));
-  topProducts.forEach((p, i) =>
+  sections.push(toCsvRow(['Rank', 'Product Name', 'SKU', 'Category', 'Units Sold', 'Revenue (USD)', 'Return Rate (%)', 'Trend']));
+  summary.topProducts.forEach((p, i) =>
     sections.push(toCsvRow([i + 1, p.productName, p.sku, p.category, p.unitsSold, p.revenue.toFixed(2), p.returnRate, p.trend]))
   );
   sections.push('');
 
   sections.push('=== CATEGORY BREAKDOWN ===');
-  sections.push(toCsvRow(['Category', 'Revenue (RM)', 'Units Sold', 'Return Rate (%)']));
-  categoryBreakdown.forEach((c) =>
-    sections.push(toCsvRow([c.category, c.revenue.toFixed(2), c.unitsSold, c.returnRate]))
+  sections.push(toCsvRow(['Category', 'Revenue (USD)', 'Units Sold', 'Return Count', 'Return Rate (%)']));
+  summary.categoryBreakdown.forEach((c) =>
+    sections.push(toCsvRow([c.category, c.revenue.toFixed(2), c.unitsSold, c.returnCount, c.returnRate]))
   );
   sections.push('');
 
   sections.push('=== RETURN REASONS ===');
-  sections.push(toCsvRow(['Return Reason', 'Count', 'Value (RM)', 'Percentage (%)']));
-  returnReasonBreakdown.forEach((r) =>
+  sections.push(toCsvRow(['Return Reason', 'Count', 'Value (USD)', 'Percentage (%)']));
+  summary.returnReasons.forEach((r) =>
     sections.push(toCsvRow([r.reason, r.count, r.value.toFixed(2), r.percentage]))
   );
   sections.push('');
 
   sections.push('=== WAREHOUSE PERFORMANCE ===');
   sections.push(toCsvRow(['Warehouse', 'Inbound', 'Outbound', 'Returns', 'Fulfillment Rate (%)', 'Avg Processing Days']));
-  warehousePerformance.forEach((w) =>
+  summary.warehousePerformance.forEach((w) =>
     sections.push(toCsvRow([w.warehouse, w.inbound, w.outbound, w.returns, w.fulfillmentRate, w.avgProcessingDays]))
   );
   sections.push('');
 
   sections.push('=== VENDOR PERFORMANCE ===');
-  sections.push(toCsvRow(['Vendor', 'Fulfillment Rate (%)', 'Total Orders', 'Rejected', 'Avg Delivery Days', 'Revenue (RM)']));
-  vendorPerformance.forEach((v) =>
-    sections.push(toCsvRow([v.vendor, v.fulfillmentRate, v.totalOrders, v.rejectedOrders, v.avgDeliveryDays, v.revenue]))
+  sections.push(toCsvRow(['Vendor', 'Fulfillment Rate (%)', 'Total Orders', 'Rejected', 'Avg Delivery Days', 'Revenue (USD)']));
+  summary.vendorPerformance.forEach((v) =>
+    sections.push(toCsvRow([v.vendor, v.fulfillmentRate, v.totalOrders, v.rejectedOrders, v.avgDeliveryDays, v.revenue.toFixed(2)]))
   );
 
   downloadCsv('StockManagement_Full_Report.csv', sections);
@@ -140,33 +131,34 @@ export function exportAllReportsCsv(): void {
 
 // ─── PDF export (browser print + styled HTML) ────────────────────────────────
 
-export function exportReportsPdf(): void {
-  const latest = monthlySnapshots[monthlySnapshots.length - 1];
-  const previous = monthlySnapshots[monthlySnapshots.length - 2];
-  const revGrowth = (((latest.revenue - previous.revenue) / previous.revenue) * 100).toFixed(1);
-  const returnRate = ((latest.returns / latest.orders) * 100).toFixed(1);
-  const ytdRevenue = monthlySnapshots.reduce((s, m) => s + m.revenue, 0);
-  const ytdOrders = monthlySnapshots.reduce((s, m) => s + m.orders, 0);
-  const generatedDate = new Date().toLocaleDateString('en-MY', { day: '2-digit', month: 'long', year: 'numeric' });
+export function exportReportsPdf(summary: ReportSummary, periodLabel: string, formatAmount: (n: number) => string): void {
+  const generatedDate = new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'long', year: 'numeric' });
+  const monthly = summary.revenueMonthly;
+  const latest = monthly[monthly.length - 1];
+  const previous = monthly[monthly.length - 2];
+  const revGrowth = latest && previous && previous.revenue > 0 ? (((latest.revenue - previous.revenue) / previous.revenue) * 100).toFixed(1) : null;
+  const ytdRevenue = monthly.reduce((s, m) => s + m.revenue, 0);
+  const ytdOrders = monthly.reduce((s, m) => s + m.orders, 0);
+  const ytdReturns = monthly.reduce((s, m) => s + m.returns, 0);
+  const decidedReturns = (summary.current.returns.statusBreakdown?.restocked || 0) + (summary.current.returns.statusBreakdown?.discarded || 0);
+  const restockRate = decidedReturns > 0 ? (((summary.current.returns.statusBreakdown?.restocked || 0) / decidedReturns) * 100).toFixed(1) : null;
+  const topProduct = summary.topProducts[0];
 
-  const monthlyRows = monthlySnapshots.map((m, i) => {
-    const prev = monthlySnapshots[i - 1];
-    const growth = prev ? (((m.revenue - prev.revenue) / prev.revenue) * 100).toFixed(1) : null;
+  const monthlyRows = monthly.map((m, i) => {
+    const prev = monthly[i - 1];
+    const growth = prev && prev.revenue > 0 ? (((m.revenue - prev.revenue) / prev.revenue) * 100).toFixed(1) : null;
     const growthHtml = growth
       ? `<span style="font-size:11px;color:${Number(growth) >= 0 ? '#10b981' : '#ef4444'};margin-left:6px">${Number(growth) >= 0 ? '+' : ''}${growth}%</span>`
       : '';
     return `<tr>
-      <td>${m.month}${i === monthlySnapshots.length - 1 ? ' <span style="color:#10b981;font-size:11px">(current)</span>' : ''}</td>
-      <td style="text-align:right;font-weight:600">RM ${m.revenue.toLocaleString('en-MY')}${growthHtml}</td>
+      <td>${m.date}${i === monthly.length - 1 ? ' <span style="color:#10b981;font-size:11px">(current)</span>' : ''}</td>
+      <td style="text-align:right;font-weight:600">${formatAmount(m.revenue)}${growthHtml}</td>
       <td style="text-align:right">${m.orders}</td>
-      <td style="text-align:right;color:${m.returns > 30 ? '#ef4444' : '#f59e0b'}">${m.returns}</td>
-      <td style="text-align:right">${m.transfers}</td>
-      <td style="text-align:right">${m.purchases}</td>
-      <td style="text-align:right">RM ${m.avgOrderValue.toFixed(2)}</td>
+      <td style="text-align:right;color:#f59e0b">${m.returns}</td>
     </tr>`;
   }).join('');
 
-  const productRows = topProducts.map((p, i) => {
+  const productRows = summary.topProducts.map((p, i) => {
     const returnColor = p.returnRate > 5 ? '#ef4444' : p.returnRate > 2.5 ? '#f59e0b' : '#10b981';
     const trendColor = p.trend === 'up' ? '#10b981' : p.trend === 'down' ? '#ef4444' : '#9ca3af';
     const trendLabel = p.trend === 'up' ? '▲ Rising' : p.trend === 'down' ? '▼ Falling' : '→ Stable';
@@ -174,13 +166,13 @@ export function exportReportsPdf(): void {
       <td style="text-align:center;color:#9ca3af">#${i + 1}</td>
       <td><strong>${p.productName}</strong><br><span style="color:#9ca3af;font-size:11px">${p.sku} · ${p.category}</span></td>
       <td style="text-align:right">${p.unitsSold}</td>
-      <td style="text-align:right;font-weight:600">RM ${p.revenue.toLocaleString('en-MY', { minimumFractionDigits: 2 })}</td>
+      <td style="text-align:right;font-weight:600">${formatAmount(p.revenue)}</td>
       <td style="text-align:right;color:${returnColor};font-weight:600">${p.returnRate}%</td>
       <td style="text-align:center;color:${trendColor};font-size:11px">${trendLabel}</td>
     </tr>`;
   }).join('');
 
-  const warehouseRows = warehousePerformance.map((w) => {
+  const warehouseRows = summary.warehousePerformance.map((w) => {
     const rateColor = w.fulfillmentRate >= 92 ? '#10b981' : w.fulfillmentRate >= 85 ? '#f59e0b' : '#ef4444';
     return `<tr>
       <td><strong>${w.warehouse}</strong></td>
@@ -192,7 +184,7 @@ export function exportReportsPdf(): void {
     </tr>`;
   }).join('');
 
-  const vendorRows = vendorPerformance.map((v, i) => {
+  const vendorRows = summary.vendorPerformance.map((v, i) => {
     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`;
     const rateColor = v.fulfillmentRate >= 95 ? '#10b981' : v.fulfillmentRate >= 85 ? '#f59e0b' : '#ef4444';
     return `<tr>
@@ -202,14 +194,14 @@ export function exportReportsPdf(): void {
       <td style="text-align:right">${v.totalOrders}</td>
       <td style="text-align:right;color:${v.rejectedOrders > 0 ? '#ef4444' : '#10b981'}">${v.rejectedOrders}</td>
       <td style="text-align:right">${v.avgDeliveryDays} days</td>
-      <td style="text-align:right;font-weight:600">RM ${v.revenue.toLocaleString('en-MY')}</td>
+      <td style="text-align:right;font-weight:600">${formatAmount(v.revenue)}</td>
     </tr>`;
   }).join('');
 
-  const returnRows = returnReasonBreakdown.map((r) => `<tr>
+  const returnRows = summary.returnReasons.map((r) => `<tr>
     <td>${r.reason}</td>
     <td style="text-align:right">${r.count}</td>
-    <td style="text-align:right">RM ${r.value.toFixed(2)}</td>
+    <td style="text-align:right">${formatAmount(r.value)}</td>
     <td style="text-align:right">${r.percentage}%</td>
   </tr>`).join('');
 
@@ -258,7 +250,7 @@ export function exportReportsPdf(): void {
     <div class="meta">
       <div style="font-weight:600;color:#111827;font-size:14px">Full Report</div>
       <div>Generated: ${generatedDate}</div>
-      <div>Period: Jan 2026 – May 2026</div>
+      <div>Period: ${periodLabel}</div>
     </div>
   </div>
 
@@ -266,57 +258,53 @@ export function exportReportsPdf(): void {
   <div class="kpi-grid">
     <div class="kpi-card">
       <div class="kpi-label">This Month Revenue</div>
-      <div class="kpi-value" style="color:#10b981">RM ${(latest.revenue / 1000).toFixed(1)}k</div>
-      <div class="kpi-sub" style="color:${Number(revGrowth) >= 0 ? '#10b981' : '#ef4444'}">${Number(revGrowth) >= 0 ? '+' : ''}${revGrowth}% vs last month</div>
+      <div class="kpi-value" style="color:#10b981">${latest ? formatAmount(latest.revenue) : '—'}</div>
+      <div class="kpi-sub" style="color:${revGrowth === null ? '#6b7280' : Number(revGrowth) >= 0 ? '#10b981' : '#ef4444'}">${revGrowth === null ? 'No prior month data' : `${Number(revGrowth) >= 0 ? '+' : ''}${revGrowth}% vs last month`}</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">YTD Revenue</div>
-      <div class="kpi-value">RM ${(ytdRevenue / 1000).toFixed(1)}k</div>
+      <div class="kpi-value">${formatAmount(ytdRevenue)}</div>
       <div class="kpi-sub" style="color:#6b7280">${ytdOrders} total orders</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Return Rate</div>
-      <div class="kpi-value" style="color:#f59e0b">${returnRate}%</div>
-      <div class="kpi-sub" style="color:#6b7280">${latest.returns} returns this month</div>
+      <div class="kpi-label">Restock Rate</div>
+      <div class="kpi-value" style="color:#f59e0b">${restockRate === null ? '—' : `${restockRate}%`}</div>
+      <div class="kpi-sub" style="color:#6b7280">${ytdReturns} returns YTD</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Top Product</div>
-      <div class="kpi-value" style="font-size:15px">${topProducts[0].productName.substring(0, 18)}…</div>
-      <div class="kpi-sub" style="color:#6b7280">${topProducts[0].unitsSold} units · RM ${(topProducts[0].revenue / 1000).toFixed(1)}k</div>
+      <div class="kpi-value" style="font-size:15px">${topProduct ? topProduct.productName.substring(0, 18) + (topProduct.productName.length > 18 ? '…' : '') : '—'}</div>
+      <div class="kpi-sub" style="color:#6b7280">${topProduct ? `${topProduct.unitsSold} units · ${formatAmount(topProduct.revenue)}` : 'No sales this period'}</div>
     </div>
   </div>
 
-  <!-- Monthly Snapshot -->
+  <!-- Revenue by Month -->
   <div class="section">
-    <div class="section-title">Monthly Snapshot (YTD)</div>
+    <div class="section-title">Revenue by Month (YTD)</div>
     <table>
       <thead><tr>
         <th>Month</th><th style="text-align:right">Revenue</th><th style="text-align:right">Orders</th>
-        <th style="text-align:right">Returns</th><th style="text-align:right">Transfers</th>
-        <th style="text-align:right">Purchases</th><th style="text-align:right">Avg Order</th>
+        <th style="text-align:right">Returns</th>
       </tr></thead>
-      <tbody>${monthlyRows}</tbody>
+      <tbody>${monthlyRows || '<tr><td colspan="4" style="text-align:center;color:#9ca3af">No data</td></tr>'}</tbody>
       <tfoot><tr class="tfoot-row">
         <td>YTD Total</td>
-        <td style="text-align:right;color:#10b981">RM ${ytdRevenue.toLocaleString('en-MY')}</td>
+        <td style="text-align:right;color:#10b981">${formatAmount(ytdRevenue)}</td>
         <td style="text-align:right">${ytdOrders}</td>
-        <td style="text-align:right;color:#f59e0b">${monthlySnapshots.reduce((s, m) => s + m.returns, 0)}</td>
-        <td style="text-align:right">${monthlySnapshots.reduce((s, m) => s + m.transfers, 0)}</td>
-        <td style="text-align:right">${monthlySnapshots.reduce((s, m) => s + m.purchases, 0)}</td>
-        <td style="text-align:right">RM ${(monthlySnapshots.reduce((s, m) => s + m.avgOrderValue, 0) / monthlySnapshots.length).toFixed(2)}</td>
+        <td style="text-align:right;color:#f59e0b">${ytdReturns}</td>
       </tr></tfoot>
     </table>
   </div>
 
   <!-- Top Products -->
   <div class="section">
-    <div class="section-title">Top 10 Products by Revenue</div>
+    <div class="section-title">Top Products by Revenue</div>
     <table>
       <thead><tr>
         <th style="text-align:center">#</th><th>Product</th><th style="text-align:right">Units Sold</th>
         <th style="text-align:right">Revenue</th><th style="text-align:right">Return Rate</th><th style="text-align:center">Trend</th>
       </tr></thead>
-      <tbody>${productRows}</tbody>
+      <tbody>${productRows || '<tr><td colspan="6" style="text-align:center;color:#9ca3af">No product sales this period</td></tr>'}</tbody>
     </table>
   </div>
 
@@ -328,7 +316,7 @@ export function exportReportsPdf(): void {
         <th>Warehouse</th><th style="text-align:right">Inbound</th><th style="text-align:right">Outbound</th>
         <th style="text-align:right">Returns</th><th style="text-align:right">Fulfillment</th><th style="text-align:right">Avg Processing</th>
       </tr></thead>
-      <tbody>${warehouseRows}</tbody>
+      <tbody>${warehouseRows || '<tr><td colspan="6" style="text-align:center;color:#9ca3af">No warehouses in scope</td></tr>'}</tbody>
     </table>
   </div>
 
@@ -341,7 +329,7 @@ export function exportReportsPdf(): void {
         <th style="text-align:right">Total Orders</th><th style="text-align:right">Rejected</th>
         <th style="text-align:right">Avg Delivery</th><th style="text-align:right">Revenue</th>
       </tr></thead>
-      <tbody>${vendorRows}</tbody>
+      <tbody>${vendorRows || '<tr><td colspan="7" style="text-align:center;color:#9ca3af">No purchases this period</td></tr>'}</tbody>
     </table>
   </div>
 
@@ -351,9 +339,9 @@ export function exportReportsPdf(): void {
     <table>
       <thead><tr>
         <th>Reason</th><th style="text-align:right">Count</th>
-        <th style="text-align:right">Value (RM)</th><th style="text-align:right">% of Returns</th>
+        <th style="text-align:right">Value</th><th style="text-align:right">% of Returns</th>
       </tr></thead>
-      <tbody>${returnRows}</tbody>
+      <tbody>${returnRows || '<tr><td colspan="4" style="text-align:center;color:#9ca3af">No returns this period</td></tr>'}</tbody>
     </table>
   </div>
 

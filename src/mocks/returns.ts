@@ -31,6 +31,9 @@ export interface ReturnRequest {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  /** Document attached when confirming restock — required before stock is added back. */
+  restockDocumentUrl?: string | null;
+  restockDocumentName?: string | null;
 }
 
 export const returnRequests: ReturnRequest[] = [
