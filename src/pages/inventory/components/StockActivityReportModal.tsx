@@ -154,10 +154,10 @@ export default function StockActivityReportModal({ products, history, warehouses
     return Array.from(bySku.values()).sort((a, b) => a.productName.localeCompare(b.productName));
   }, [products, historyByProduct, filterWarehouse, consolidateWarehouses, search, periodStart, periodEnd]);
 
-  const activeMovementTypes = useMemo(
-    () => MOVEMENT_TYPE_ORDER.filter((t) => movementRows.some((r) => r.typeTotals[t])),
-    [movementRows]
-  );
+  // Always show every movement-type column, even ones with no activity in the
+  // current scope/period — a stable set of columns is what makes the report
+  // comparable across different date ranges and filters.
+  const activeMovementTypes = MOVEMENT_TYPE_ORDER;
 
   const movementTotals = useMemo(() => {
     const totals: Partial<Record<StockHistoryEntry['type'], number>> & { beginning: number; closing: number } = { beginning: 0, closing: 0 };
@@ -533,6 +533,12 @@ export default function StockActivityReportModal({ products, history, warehouses
                         <span className={`text-xs font-semibold ${cfg.color}`}>{movementLabel(entry.type)}</span>
                         <span className="text-xs text-gray-300">·</span>
                         <span className="text-xs text-gray-400">{entry.warehouse}</span>
+                        {entry.binLocation && (
+                          <>
+                            <span className="text-xs text-gray-300">·</span>
+                            <span className="text-xs text-gray-400 font-mono">Bin: {entry.binLocation}</span>
+                          </>
+                        )}
                         <span className="text-xs text-gray-300">·</span>
                         <span className="text-xs text-gray-400">{formatDateTime(entry.timestamp)}</span>
                       </div>

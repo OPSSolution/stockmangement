@@ -3,6 +3,7 @@ import type { Product } from '@/mocks/inventory';
 import type { OrderCreateDraft } from '../orderCreateUtils';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { availableStock } from '@/lib/stockReservations';
+import { supabase } from '@/lib/supabase';
 
 interface OrderFormModalProps {
   products: Product[];
@@ -33,12 +34,26 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
   const [pickerWarehouse, setPickerWarehouse] = useState('');
   const [pickerProduct, setPickerProduct] = useState('');
   const [pickerQty, setPickerQty] = useState(1);
+  const [pickerBin, setPickerBin] = useState('');
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     if (initialDraft) {
       setDraft(initialDraft);
     }
   }, [initialDraft]);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location');
+      const map: Record<string, string[]> = {};
+      (data || []).forEach((row) => {
+        const pid = row.product_id as string;
+        (map[pid] ??= []).push(row.bin_location as string);
+      });
+      setBinStockByProduct(map);
+    })();
+  }, []);
 
   const selectedTotal = draft.lines.reduce((sum, line) => {
     const product = products.find((p) => p.id === line.productId);
@@ -58,12 +73,14 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
     ? products.filter((p) => p.warehouse === pickerWarehouse && !draft.lines.some((l) => l.productId === p.id))
     : [];
   const pickerProductObj = products.find((p) => p.id === pickerProduct);
+  const pickerBinOptions = binStockByProduct[pickerProduct] || [];
 
   const handleAddItem = () => {
     if (!pickerProduct) return;
-    setDraft((prev) => ({ ...prev, lines: [...prev.lines, { productId: pickerProduct, quantity: pickerQty, warehouse: pickerWarehouse }] }));
+    setDraft((prev) => ({ ...prev, lines: [...prev.lines, { productId: pickerProduct, quantity: pickerQty, warehouse: pickerWarehouse, binLocation: pickerBinOptions.length > 1 ? pickerBin || undefined : pickerBinOptions[0] }] }));
     setPickerProduct('');
     setPickerQty(1);
+    setPickerBin('');
   };
 
   const handleRemoveItem = (index: number) => {
@@ -140,13 +157,23 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
               </select>
               <select
                 value={pickerProduct}
-                onChange={(e) => setPickerProduct(e.target.value)}
+                onChange={(e) => { setPickerProduct(e.target.value); setPickerBin(''); }}
                 disabled={!pickerWarehouse}
                 className="flex-1 min-w-40 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer disabled:bg-gray-50 disabled:text-gray-400"
               >
                 <option value="">{pickerWarehouse ? 'Select product' : 'Select warehouse first'}</option>
                 {pickerProducts.map((p) => <option key={p.id} value={p.id}>{p.name}{p.binLocation ? ` (Bin: ${p.binLocation})` : ''} — {availableStock(p.stock, reserved, p.id)} available</option>)}
               </select>
+              {pickerBinOptions.length > 1 && (
+                <select
+                  value={pickerBin}
+                  onChange={(e) => setPickerBin(e.target.value)}
+                  className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
+                >
+                  <option value="">From bin…</option>
+                  {pickerBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+              )}
               <input
                 type="number"
                 min={1}
@@ -158,7 +185,7 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
               <button
                 type="button"
                 onClick={handleAddItem}
-                disabled={!pickerProduct}
+                disabled={!pickerProduct || (pickerBinOptions.length > 1 && !pickerBin)}
                 className="px-4 py-2.5 bg-emerald-500 text-white text-sm font-medium rounded-lg hover:bg-emerald-600 disabled:opacity-40 transition-colors cursor-pointer whitespace-nowrap"
               >
                 <i className="ri-add-line mr-1"></i>Add
@@ -196,7 +223,7 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
                                 <p className="font-medium text-gray-800">{product?.name ?? '—'}</p>
                                 <p className="text-[11px] text-gray-400">
                                   {product?.sku} · {product?.warehouse ?? line.warehouse}
-                                  {product?.binLocation && <> · <span className="font-mono">Bin: {product.binLocation}</span></>}
+                                  {(line.binLocation || product?.binLocation) && <> · <span className="font-mono">Bin: {line.binLocation || product?.binLocation}</span></>}
                                 </p>
                               </div>
                             </div>

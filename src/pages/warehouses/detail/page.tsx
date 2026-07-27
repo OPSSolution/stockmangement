@@ -73,6 +73,9 @@ export default function WarehouseDetailPage() {
   const [savingBinLocations, setSavingBinLocations] = useState(false);
   const [binLocationsError, setBinLocationsError] = useState<string | null>(null);
 
+  /** productId -> its bin split, when stock is spread across more than one bin. */
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, { binLocation: string; quantity: number }[]>>({});
+
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -100,6 +103,23 @@ export default function WarehouseDetailPage() {
       if (extra) {
         setProducts(extra.products);
         setActivity(extra.activity);
+
+        const productIds = extra.products.map((p) => p.id);
+        if (productIds.length > 0) {
+          const { data: binRows } = await supabase
+            .from('product_bin_stock')
+            .select('product_id, bin_location, quantity')
+            .in('product_id', productIds);
+          const map: Record<string, { binLocation: string; quantity: number }[]> = {};
+          (binRows || []).forEach((row) => {
+            const entry = { binLocation: row.bin_location as string, quantity: row.quantity as number };
+            const list = map[row.product_id as string];
+            if (list) list.push(entry); else map[row.product_id as string] = [entry];
+          });
+          setBinStockByProduct(map);
+        } else {
+          setBinStockByProduct({});
+        }
       }
       setLoading(false);
     })();
@@ -554,10 +574,27 @@ export default function WarehouseDetailPage() {
                       </td>
                       <td className="px-4 py-3 text-gray-600">{p.category}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 text-xs ${p.bin_location ? 'font-mono font-medium text-gray-700' : 'text-gray-300 italic'}`}>
-                          <i className="ri-map-pin-2-line"></i>
-                          {p.bin_location || 'Not set'}
-                        </span>
+                        {(() => {
+                          const bins = binStockByProduct[p.id] ?? [];
+                          if (bins.length > 1) {
+                            return (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs font-mono font-medium text-gray-700"
+                                title={bins.map((b) => `${b.binLocation}: ${b.quantity}`).join(', ')}
+                              >
+                                <i className="ri-map-pin-2-line"></i>
+                                {bins.length} bins
+                              </span>
+                            );
+                          }
+                          const single = bins[0]?.binLocation ?? p.bin_location;
+                          return (
+                            <span className={`inline-flex items-center gap-1 text-xs ${single ? 'font-mono font-medium text-gray-700' : 'text-gray-300 italic'}`}>
+                              <i className="ri-map-pin-2-line"></i>
+                              {single || 'Not set'}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2 min-w-[90px]">

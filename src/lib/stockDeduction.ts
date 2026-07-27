@@ -9,9 +9,41 @@ function deriveStatus(stock: number, threshold: number): 'in_stock' | 'low_stock
   return 'in_stock';
 }
 
+/**
+ * Applies `delta` to one bin's share of a product's stock — positive to add
+ * (received, restocked, transferred in), negative to remove (sold, dispatched,
+ * transferred out). Every stock-moving function below routes through this so a
+ * product's product_bin_stock rows stay in sync with the bin actually picked in
+ * the UI, not just the product's aggregate `stock` column. No-ops when no bin
+ * was picked (e.g. the product isn't split across bins, or the transaction
+ * doesn't yet know where the stock is landing).
+ */
+export async function adjustBinQuantity(productId: string, binLocation: string | undefined | null, delta: number) {
+  if (!binLocation || delta === 0) return;
+  const { data: row } = await supabase
+    .from('product_bin_stock')
+    .select('id, quantity')
+    .eq('product_id', productId)
+    .eq('bin_location', binLocation)
+    .maybeSingle();
+  if (row) {
+    const newQty = Math.max(0, (row.quantity as number) + delta);
+    await supabase.from('product_bin_stock').update({ quantity: newQty }).eq('id', row.id as string);
+  } else if (delta > 0) {
+    await supabase.from('product_bin_stock').insert({
+      id: `PBS-${productId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      product_id: productId,
+      bin_location: binLocation,
+      quantity: delta,
+    });
+  }
+}
+
 interface DeductLine {
   productId: string;
   quantity: number;
+  /** Which bin the units are coming out of — omit if the product isn't bin-split or the bin isn't known. */
+  binLocation?: string;
 }
 
 /**
@@ -55,7 +87,9 @@ export async function deductStockForItems(
       warehouse: product.warehouse,
       user_name: opts.userName,
       created_at: now,
+      bin_location: item.binLocation || null,
     });
+    await adjustBinQuantity(product.id, item.binLocation, -item.quantity);
   }
 
   return { error: null };
@@ -68,6 +102,8 @@ interface RestockLine {
   condition?: ReturnCondition;
   /** Inspection note from the return — carried into the on-hold stock_history entry so Inventory can show *why* it's held. */
   note?: string;
+  /** Which bin the returned units are being put away into — omit if not yet decided. */
+  binLocation?: string;
 }
 
 /**
@@ -125,8 +161,10 @@ export async function restockReturnedItems(
           warehouse: product.warehouse,
           user_name: opts.userName,
           created_at: now,
+          bin_location: item.binLocation || null,
         });
         if (insertErr) return insertErr.message;
+        await adjustBinQuantity(productId, item.binLocation, item.quantity);
       }
 
       const { error: updateErr } = await supabase.from('products').update({
@@ -147,6 +185,8 @@ export async function restockReturnedItems(
 interface ReceiveLine {
   productId: string;
   quantity: number;
+  /** Which bin the received units are being put away into — omit if not yet decided. */
+  binLocation?: string;
 }
 
 /**
@@ -186,7 +226,9 @@ export async function receivePurchaseOrderItems(
       warehouse: product.warehouse,
       user_name: opts.userName,
       created_at: now,
+      bin_location: item.binLocation || null,
     });
+    await adjustBinQuantity(product.id, item.binLocation, item.quantity);
   }
 
   return { error: null };
@@ -255,6 +297,10 @@ export async function resolveOnHoldStock(opts: ResolveOnHoldOptions): Promise<{ 
 interface MoveLine {
   productId: string;
   quantity: number;
+  /** Which bin at the source warehouse the units are leaving from — omit if not known. */
+  fromBinLocation?: string;
+  /** Which bin at the destination warehouse the units are landing in — omit if not yet decided. */
+  toBinLocation?: string;
 }
 
 /**
@@ -304,7 +350,9 @@ export async function moveStockBetweenWarehouses(
       warehouse: sourceProduct.warehouse,
       user_name: opts.userName,
       created_at: now,
+      bin_location: item.fromBinLocation || null,
     });
+    await adjustBinQuantity(sourceProduct.id, item.fromBinLocation, -item.quantity);
     sourceProduct.stock = newSourceStock;
 
     const destProduct = allProducts.find((p) => p.warehouse === opts.toWarehouse && p.sku === sourceProduct.sku);
@@ -330,7 +378,9 @@ export async function moveStockBetweenWarehouses(
         warehouse: destProduct.warehouse,
         user_name: opts.userName,
         created_at: now,
+        bin_location: item.toBinLocation || null,
       });
+      await adjustBinQuantity(destProduct.id, item.toBinLocation, item.quantity);
       destProduct.stock = newDestStock;
     } else {
       maxNum += 1;
@@ -364,7 +414,9 @@ export async function moveStockBetweenWarehouses(
         warehouse: opts.toWarehouse,
         user_name: opts.userName,
         created_at: now,
+        bin_location: item.toBinLocation || null,
       });
+      await adjustBinQuantity(newId, item.toBinLocation, item.quantity);
 
       allProducts.push({ ...sourceProduct, id: newId, warehouse: opts.toWarehouse, stock: item.quantity });
     }

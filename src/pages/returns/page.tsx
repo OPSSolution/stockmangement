@@ -242,7 +242,7 @@ export default function ReturnsPage() {
     const previousStatus = ret.id ? returns.find((r) => r.id === ret.id)?.status : undefined;
     if (ret.status === 'restocked' && previousStatus !== 'restocked') {
       const { error: restockError } = await restockReturnedItems(
-        ret.items.map((i) => ({ productId: i.productId, quantity: i.quantity, condition: i.condition, note: ret.inspectionNotes })),
+        ret.items.map((i) => ({ productId: i.productId, quantity: i.quantity, condition: i.condition, note: ret.inspectionNotes, binLocation: i.binLocation })),
         { reference: nextId, userName: profile?.full_name || profile?.email || 'Admin' }
       );
       if (restockError) {

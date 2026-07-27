@@ -8,6 +8,8 @@ export interface OrderLineDraft {
   /** UI-only aid — narrows this line's product picker to one warehouse. Not sent
    * to the backend; the actual warehouse always comes from the chosen product. */
   warehouse?: string;
+  /** Which bin this line ships from, when the product has more than one. */
+  binLocation?: string;
 }
 
 export interface OrderCreateDraft {
@@ -72,6 +74,7 @@ export function buildOrderInsert(draft: OrderCreateDraft, products: Product[]) {
       vendor,
       warehouse: line.product.warehouse,
       status: 'pending',
+      binLocation: line.binLocation,
     })),
   }));
 
@@ -95,7 +98,7 @@ export function buildOrderInsert(draft: OrderCreateDraft, products: Product[]) {
 
 export function mapOrderToDraft(order: Order): OrderCreateDraft {
   const lines = order.vendorSplits.flatMap((split) =>
-    split.items.map((item) => ({ productId: item.productId, quantity: item.quantity, warehouse: item.warehouse }))
+    split.items.map((item) => ({ productId: item.productId, quantity: item.quantity, warehouse: item.warehouse, binLocation: item.binLocation }))
   );
 
   return {
@@ -142,6 +145,7 @@ export function buildOrderUpdate(draft: OrderCreateDraft, products: Product[]) {
       vendor,
       warehouse: line.product.warehouse,
       status: 'pending',
+      binLocation: line.binLocation,
     })),
   }));
 

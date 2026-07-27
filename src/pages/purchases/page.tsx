@@ -175,7 +175,7 @@ export default function PurchasesPage() {
   const handleStatusChange = async (
     id: string,
     status: PurchaseStatus,
-    extra?: { receivedQty?: Record<string, number>; documentFile?: File; reviewNote?: string }
+    extra?: { receivedQty?: Record<string, number>; receivedBin?: Record<string, string>; documentFile?: File; reviewNote?: string }
   ) => {
     const target = purchases.find((p) => p.id === id);
     const isOwner = !!target && target.submittedBy === requesterIdentity;
@@ -213,6 +213,7 @@ export default function PurchasesPage() {
         updateData.items = current.items.map((item) => ({
           ...item,
           receivedQty: extra.receivedQty![item.productId] ?? item.receivedQty,
+          binLocation: extra.receivedBin?.[item.productId] ?? item.binLocation,
         }));
       }
     }
@@ -228,7 +229,11 @@ export default function PurchasesPage() {
     if (status === 'received' && extra?.receivedQty) {
       const current = purchases.find((p) => p.id === id);
       const lines = (current?.items || [])
-        .map((item) => ({ productId: item.productId, quantity: extra.receivedQty![item.productId] ?? 0 }))
+        .map((item) => ({
+          productId: item.productId,
+          quantity: extra.receivedQty![item.productId] ?? 0,
+          binLocation: extra.receivedBin?.[item.productId] || undefined,
+        }))
         .filter((line) => line.quantity > 0);
       const { error: stockError } = await receivePurchaseOrderItems(lines, { reference: id, userName: requesterIdentity });
       setUploadingReceipt(false);

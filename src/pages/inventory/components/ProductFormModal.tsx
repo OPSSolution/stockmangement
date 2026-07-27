@@ -1,14 +1,21 @@
 import { useState, useEffect } from 'react';
-import type { Product, ProductType } from '@/mocks/inventory';
+import type { Product, ProductType, ProductBinStock } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { asArray } from '@/pages/warehouses/warehouseShared';
 
+interface BinRow {
+  binLocation: string;
+  quantity: number;
+}
+
 interface ProductFormModalProps {
   product: Product | null;
   nextNum: number;
+  /** This product's current bin split, if editing an existing product. */
+  existingBinRows?: ProductBinStock[];
   onClose: () => void;
-  onSave: (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string }) => void;
+  onSave: (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string; binRows?: BinRow[] }) => void;
 }
 
 const CATEGORY_STORAGE_KEY = 'inventory_categories';
@@ -29,13 +36,14 @@ function autoSku(name: string, nextNum: number) {
 
 type ProductFormState = Omit<Product, 'id' | 'status' | 'lastUpdated'>;
 
-export default function ProductFormModal({ product, nextNum, onClose, onSave }: ProductFormModalProps) {
+export default function ProductFormModal({ product, nextNum, existingBinRows, onClose, onSave }: ProductFormModalProps) {
   const { warehouseScope } = useAuth();
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [warehouseVendors, setWarehouseVendors] = useState<Record<string, string[]>>({});
   const [warehouseBinLocations, setWarehouseBinLocations] = useState<Record<string, string[]>>({});
   const [skuManuallyEdited, setSkuManuallyEdited] = useState(Boolean(product));
+  const [binRows, setBinRows] = useState<BinRow[]>([]);
   const [form, setForm] = useState<ProductFormState>({
     name: '',
     sku: '',
@@ -47,7 +55,6 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
     price: 0,
     productType: 'pack' as ProductType,
     expiryDate: '',
-    binLocation: '',
   });
 
   useEffect(() => {
@@ -93,15 +100,25 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
         productType: product.productType,
         imageUrl: product.imageUrl,
         expiryDate: product.expiryDate || '',
-        binLocation: product.binLocation ?? '',
       });
       setSkuManuallyEdited(true);
+      setBinRows(
+        existingBinRows && existingBinRows.length > 0
+          ? existingBinRows.map((r) => ({ binLocation: r.binLocation, quantity: r.quantity }))
+          : product.binLocation
+          ? [{ binLocation: product.binLocation, quantity: product.stock }]
+          : []
+      );
     } else {
       setForm((prev) => ({
         ...prev,
         sku: skuManuallyEdited ? prev.sku : autoSku(prev.name, nextNum),
       }));
     }
+    // existingBinRows intentionally excluded — it's only meaningful at the moment
+    // `product` changes (i.e. this modal opens for a specific product); refetches
+    // of the parent's bin-stock state shouldn't reset rows the user is mid-editing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product, nextNum, skuManuallyEdited]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -141,10 +158,22 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
 
   const handleSubmit = (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
-    onSave({ ...form, id: product?.id });
+    onSave({ ...form, id: product?.id, binRows });
   };
 
-  const totalValue = form.price * form.stock;
+  const allocatedQty = binRows.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+
+  const addBinRow = () => {
+    const used = new Set(binRows.map((r) => r.binLocation));
+    const nextOption = binLocationOptions.find((b) => !used.has(b)) || '';
+    setBinRows((prev) => [...prev, { binLocation: nextOption, quantity: 0 }]);
+  };
+  const updateBinRow = (index: number, patch: Partial<BinRow>) => {
+    setBinRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  };
+  const removeBinRow = (index: number) => {
+    setBinRows((prev) => prev.filter((_, i) => i !== index));
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
@@ -233,31 +262,72 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
               )}
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1.5">Bin Location (optional)</label>
-              <select
-                name="binLocation"
-                value={form.binLocation ?? ''}
-                onChange={handleChange}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
-              >
-                <option value="">Not set</option>
-                {binLocationOptions.map((b) => <option key={b} value={b}>{b}</option>)}
-                {form.binLocation && !binLocationOptions.includes(form.binLocation) && <option value={form.binLocation}>{form.binLocation}</option>}
-              </select>
-              {binLocationOptions.length === 0 && (
-                <p className="text-[11px] text-gray-400 mt-1">No bin locations defined for this warehouse yet — add some from the warehouse's detail page.</p>
-              )}
-            </div>
-            <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Initial Stock</label>
               <input
                 type="number"
                 name="stock"
-                value={form.stock}
+                value={form.stock === 0 ? '' : form.stock}
                 onChange={handleChange}
                 min={0}
+                placeholder="0"
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
               />
+            </div>
+            <div className="col-span-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-medium text-gray-500">Bin Locations (optional)</label>
+                {binRows.length > 0 && (
+                  <span className={`text-[11px] font-medium ${
+                    allocatedQty === form.stock ? 'text-emerald-600' : allocatedQty > form.stock ? 'text-red-600' : 'text-amber-600'
+                  }`}>
+                    Allocated {allocatedQty} / {form.stock}
+                  </span>
+                )}
+              </div>
+
+              {binRows.length > 0 && (
+                <div className="space-y-2 mb-2">
+                  {binRows.map((row, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <select
+                        value={row.binLocation}
+                        onChange={(e) => updateBinRow(i, { binLocation: e.target.value })}
+                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
+                      >
+                        <option value="">Select bin…</option>
+                        {binLocationOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                        {row.binLocation && !binLocationOptions.includes(row.binLocation) && <option value={row.binLocation}>{row.binLocation}</option>}
+                      </select>
+                      <input
+                        type="number"
+                        value={row.quantity === 0 ? '' : row.quantity}
+                        onChange={(e) => updateBinRow(i, { quantity: Math.max(0, Number(e.target.value) || 0) })}
+                        min={0}
+                        placeholder="Qty"
+                        className="w-24 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeBinRow(i)}
+                        className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 cursor-pointer shrink-0"
+                      >
+                        <i className="ri-delete-bin-line text-sm"></i>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={addBinRow}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 hover:text-emerald-700 cursor-pointer"
+              >
+                <i className="ri-add-line"></i> Add bin
+              </button>
+              {binLocationOptions.length === 0 && (
+                <p className="text-[11px] text-gray-400 mt-1">No bin locations defined for this warehouse yet — add some from the warehouse's detail page.</p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Expiry Date (optional)</label>
@@ -274,9 +344,10 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
               <input
                 type="number"
                 name="lowStockThreshold"
-                value={form.lowStockThreshold}
+                value={form.lowStockThreshold === 0 ? '' : form.lowStockThreshold}
                 onChange={handleChange}
                 min={1}
+                placeholder="0"
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
               />
             </div>
@@ -285,10 +356,11 @@ export default function ProductFormModal({ product, nextNum, onClose, onSave }: 
               <input
                 type="number"
                 name="price"
-                value={form.price}
+                value={form.price === 0 ? '' : form.price}
                 onChange={handleChange}
                 min={0}
                 step={0.01}
+                placeholder="0"
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
               />
             </div>

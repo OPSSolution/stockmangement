@@ -7,6 +7,10 @@ export interface TransferItem {
   imageUrl?: string | null;
   quantity: number;
   unitPrice: number;
+  /** Which bin at the source warehouse this is leaving from — set at request time. */
+  fromBinLocation?: string;
+  /** Which bin at the destination warehouse this lands in — set when confirming receipt. */
+  toBinLocation?: string;
 }
 
 export interface StockTransfer {

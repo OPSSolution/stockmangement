@@ -8,6 +8,7 @@ import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { restockReturnedItems } from '@/lib/stockDeduction';
 import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 import { downloadPdf } from '@/lib/exportPdf';
+import { asArray } from '@/pages/warehouses/warehouseShared';
 
 interface Props {
   ret: ReturnRequest;
@@ -50,6 +51,7 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
   const { formatAmount } = useCurrency();
   const { isAdmin } = useAuth();
   const [items, setItems] = useState(ret.items);
+  const [binOptions, setBinOptions] = useState<string[]>([]);
   const [inspectionNotes, setInspectionNotes] = useState(ret.inspectionNotes ?? '');
   const [assignedTo] = useState(ret.assignedTo ?? 'Admin');
   const [progress, setProgress] = useState<RequestProgressItem[] | null>(null);
@@ -89,8 +91,29 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
     return () => { cancelled = true; };
   }, [ret.requestId]);
 
+  // Bin options come from the warehouse's registry PLUS any bin these products
+  // already use — the registry alone can be empty even when real bins are
+  // already in use. Picked during inspection so restocking lands the units in
+  // a known spot instead of just bumping the total.
+  useEffect(() => {
+    (async () => {
+      const [{ data: wh }, { data: bins }] = await Promise.all([
+        supabase.from('warehouses').select('bin_locations').eq('name', ret.warehouse).maybeSingle(),
+        supabase.from('product_bin_stock').select('bin_location').in('product_id', ret.items.map((i) => i.productId)),
+      ]);
+      const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
+      const productBins = (bins || []).map((row) => row.bin_location as string);
+      setBinOptions([...new Set([...registryBins, ...productBins])]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ret.warehouse]);
+
   const setCondition = (idx: number, condition: ReturnCondition) => {
     setItems((prev) => prev.map((item, i) => i === idx ? { ...item, condition } : item));
+  };
+
+  const setBinLocation = (idx: number, binLocation: string) => {
+    setItems((prev) => prev.map((item, i) => i === idx ? { ...item, binLocation } : item));
   };
 
   const isEditable = ret.status === 'pending' || ret.status === 'inspecting' || ret.status === 'approved';
@@ -168,7 +191,7 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
         const targetItems = target.id === ret.id ? items : target.items;
         const targetNote = target.id === ret.id ? inspectionNotes : target.inspectionNotes;
         const { error } = await restockReturnedItems(
-          targetItems.map((i) => ({ productId: i.productId, quantity: i.quantity, condition: i.condition, note: targetNote })),
+          targetItems.map((i) => ({ productId: i.productId, quantity: i.quantity, condition: i.condition, note: targetNote, binLocation: i.binLocation })),
           { reference: target.id, userName: assignedTo }
         );
         if (error) {
@@ -234,7 +257,7 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
             rows: items.map((item) => [
               item.productName,
               item.sku,
-              binById.get(item.productId) || '—',
+              item.binLocation || binById.get(item.productId) || '—',
               item.quantity,
               conditionOptions.find((c) => c.value === item.condition)?.label || '—',
               formatAmount(item.unitPrice),
@@ -385,7 +408,10 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
                       </div>
                       <div>
                         <p className="font-semibold text-gray-800 text-sm">{item.productName}</p>
-                        <p className="text-xs text-gray-400 font-mono mt-0.5">{item.sku} · Qty: {item.quantity} · {formatAmount(item.unitPrice)} each</p>
+                        <p className="text-xs text-gray-400 font-mono mt-0.5">
+                          {item.sku} · Qty: {item.quantity} · {formatAmount(item.unitPrice)} each
+                          {item.binLocation ? ` · Bin: ${item.binLocation}` : ''}
+                        </p>
                       </div>
                     </div>
                     <p className="text-sm font-bold text-gray-900 tracking-tight">{formatAmount(item.quantity * item.unitPrice)}</p>
@@ -410,6 +436,19 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
                           <i className="ri-forbid-2-line mr-1"></i>
                           Counted in stock but placed on hold — not usable until resolved.
                         </p>
+                      )}
+                      {binOptions.length > 0 && (
+                        <div className="mt-2.5">
+                          <p className="text-xs font-medium text-gray-600 mb-1.5">Restock into bin</p>
+                          <select
+                            value={item.binLocation ?? ''}
+                            onChange={(e) => setBinLocation(idx, e.target.value)}
+                            className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
+                          >
+                            <option value="">Unassigned</option>
+                            {binOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                          </select>
+                        </div>
                       )}
                     </div>
                   ) : (

@@ -12,6 +12,7 @@ import { downloadPdf, type PdfNote } from '@/lib/exportPdf';
 import { logAudit } from '@/lib/auditLog';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { notifyAdmins } from '@/lib/notifyAdmins';
+import { asArray } from '@/pages/warehouses/warehouseShared';
 
 interface CustomFieldAnswer {
   key: string;
@@ -38,6 +39,8 @@ interface RequestItem {
   unit?: string | null;
   /** packageWeight * quantity, mirrors the paper form's "Total-Kg" column. */
   totalKg?: number | null;
+  /** Which bin the units are being dispatched from — picked when confirming receipt. */
+  binLocation?: string;
 }
 
 interface StockRequest {
@@ -194,6 +197,7 @@ export default function RequestsPage() {
 
   const [requests, setRequests] = useState<StockRequest[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [templates, setTemplates] = useState<RequestFormTemplate[]>([]);
   const [reserved, setReserved] = useState<Record<string, number>>({});
@@ -206,6 +210,7 @@ export default function RequestsPage() {
   const [viewingReq, setViewingReq] = useState<StockRequest | null>(null);
   const [form, setForm] = useState(emptyForm(warehouseScope?.[0] || ''));
   const [selectedProduct, setSelectedProduct] = useState('');
+  const [selectedBin, setSelectedBin] = useState('');
   const [selectedQty, setSelectedQty] = useState(1);
   const [selectedPackageWeight, setSelectedPackageWeight] = useState('');
   const [selectedUnit, setSelectedUnit] = useState('pcs');
@@ -224,6 +229,8 @@ export default function RequestsPage() {
   const [returnProgress, setReturnProgress] = useState<Record<string, number>>({});
   const [receiptName, setReceiptName] = useState('');
   const [receiptChecked, setReceiptChecked] = useState(false);
+  const [dispatchBinByProduct, setDispatchBinByProduct] = useState<Record<string, string>>({});
+  const [dispatchBinOptions, setDispatchBinOptions] = useState<string[]>([]);
 
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -263,9 +270,15 @@ export default function RequestsPage() {
         productsQuery = productsQuery.in('warehouse', warehouseScope);
         warehousesQuery = warehousesQuery.in('name', warehouseScope);
       }
-      const [{ data: p }, { data: w }] = await Promise.all([productsQuery, warehousesQuery]);
+      const [{ data: p }, { data: w }, { data: bins }] = await Promise.all([productsQuery, warehousesQuery, supabase.from('product_bin_stock').select('product_id, bin_location')]);
       if (p) setProducts(p as ProductOption[]);
       if (w) setWarehouses(w.map((row) => row.name as string));
+      const map: Record<string, string[]> = {};
+      (bins || []).forEach((row) => {
+        const pid = row.product_id as string;
+        (map[pid] ??= []).push(row.bin_location as string);
+      });
+      setBinStockByProduct(map);
     }
     loadOptions();
   }, [warehouseScope]);
@@ -282,7 +295,28 @@ export default function RequestsPage() {
     setPendingDocFile(null);
     setReceiptName('');
     setReceiptChecked(false);
+    setDispatchBinByProduct(
+      viewingReq ? Object.fromEntries(viewingReq.items.filter((i) => i.binLocation).map((i) => [i.productId, i.binLocation as string])) : {}
+    );
+    setDispatchBinOptions([]);
   }, [viewingReq?.id]);
+
+  // Bin options come from the warehouse's registry PLUS any bin these products
+  // already use — the registry alone can be empty even when real bins are
+  // already in use. Picked when confirming receipt, since that's the one
+  // action that actually deducts stock.
+  useEffect(() => {
+    if (!viewingReq || viewingReq.dispatched_at) return;
+    (async () => {
+      const [{ data: wh }, { data: bins }] = await Promise.all([
+        supabase.from('warehouses').select('bin_locations').eq('name', viewingReq.warehouse).maybeSingle(),
+        supabase.from('product_bin_stock').select('bin_location').in('product_id', viewingReq.items.map((i) => i.productId)),
+      ]);
+      const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
+      const productBins = (bins || []).map((row) => row.bin_location as string);
+      setDispatchBinOptions([...new Set([...registryBins, ...productBins])]);
+    })();
+  }, [viewingReq?.id, viewingReq?.warehouse, viewingReq?.dispatched_at]);
 
   // Swap the staged-document preview URL whenever a new file is picked, and always
   // revoke the previous one — object URLs otherwise leak for the life of the tab.
@@ -322,6 +356,7 @@ export default function RequestsPage() {
     setSelectedQty(1);
     setSelectedPackageWeight('');
     setSelectedUnit('pcs');
+    setSelectedBin('');
     setFormError(null);
     getReservedQuantities().then(setReserved);
     if (activeTemplates.length > 0) {
@@ -366,10 +401,13 @@ export default function RequestsPage() {
     setSelectedQty(1);
     setSelectedPackageWeight('');
     setSelectedUnit('pcs');
+    setSelectedBin('');
     setFormError(null);
     getReservedQuantities({ excludeRequestId: req.id }).then(setReserved);
     setShowForm(true);
   };
+
+  const selectedBinOptions = binStockByProduct[selectedProduct] || [];
 
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProduct);
@@ -395,6 +433,7 @@ export default function RequestsPage() {
           packageWeight,
           unit: selectedUnit.trim() || null,
           totalKg,
+          binLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0],
         },
       ],
     }));
@@ -402,6 +441,7 @@ export default function RequestsPage() {
     setSelectedQty(1);
     setSelectedPackageWeight('');
     setSelectedUnit('pcs');
+    setSelectedBin('');
   };
 
   const toggleReasonTag = (tag: string) => {
@@ -605,7 +645,8 @@ export default function RequestsPage() {
         return;
       }
 
-      const { error: deductError } = await deductStockForItems(req.items, {
+      const itemsWithBin = req.items.map((i) => ({ ...i, binLocation: dispatchBinByProduct[i.productId] || i.binLocation }));
+      const { error: deductError } = await deductStockForItems(itemsWithBin, {
         reference: req.id,
         note: `Dispatched request ${req.id}`,
         userName: requesterIdentity || 'Admin',
@@ -617,6 +658,10 @@ export default function RequestsPage() {
         return;
       }
 
+      // Persist whichever bin was actually picked — otherwise it's used for the
+      // deduction above but forgotten, and the request would show no bin at all
+      // once dispatched.
+      update.items = itemsWithBin;
       update.dispatched_at = now;
       update.dispatched_by = requesterIdentity || 'Admin';
       update.dispatch_document_url = url;
@@ -756,7 +801,7 @@ export default function RequestsPage() {
             rows: req.items.map((item) => [
               item.productName,
               item.sku,
-              products.find((p) => p.id === item.productId)?.bin_location || '—',
+              item.binLocation || products.find((p) => p.id === item.productId)?.bin_location || '—',
               item.packageWeight ? `${item.packageWeight}${item.unit || 'kg'}` : (item.unit || '—'),
               item.quantity,
             ]),
@@ -1029,7 +1074,7 @@ export default function RequestsPage() {
                 <div className="flex flex-wrap gap-2 mb-3">
                   <select
                     value={selectedProduct}
-                    onChange={(e) => setSelectedProduct(e.target.value)}
+                    onChange={(e) => { setSelectedProduct(e.target.value); setSelectedBin(''); }}
                     disabled={!form.warehouse}
                     className="flex-1 min-w-[180px] border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer disabled:opacity-50"
                   >
@@ -1038,6 +1083,16 @@ export default function RequestsPage() {
                       <option key={p.id} value={p.id}>{p.name} ({p.sku}){p.bin_location ? ` — Bin: ${p.bin_location}` : ''} — {availableStock(p.stock, reserved, p.id)} available</option>
                     ))}
                   </select>
+                  {selectedBinOptions.length > 1 && (
+                    <select
+                      value={selectedBin}
+                      onChange={(e) => setSelectedBin(e.target.value)}
+                      className="w-32 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
+                    >
+                      <option value="">From bin…</option>
+                      {selectedBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                  )}
                   <input
                     type="number"
                     min={0}
@@ -1073,7 +1128,7 @@ export default function RequestsPage() {
                   />
                   <button
                     onClick={addItem}
-                    disabled={!selectedProduct}
+                    disabled={!selectedProduct || (selectedBinOptions.length > 1 && !selectedBin)}
                     className="px-4 py-2.5 bg-emerald-500 text-white text-sm font-medium rounded-lg hover:bg-emerald-600 disabled:opacity-40 transition-colors cursor-pointer whitespace-nowrap"
                   >
                     <i className="ri-add-line mr-1"></i>Add
@@ -1637,6 +1692,7 @@ export default function RequestsPage() {
                           <p className="text-xs text-gray-400 font-mono">
                             {item.sku}
                             {item.packageWeight ? ` · ${item.packageWeight}kg/${item.unit || 'unit'}` : ''}
+                            {item.binLocation ? ` · Bin: ${item.binLocation}` : ''}
                           </p>
                         </div>
                       </div>
@@ -1714,6 +1770,24 @@ export default function RequestsPage() {
                       )
                     ) : canApproveRequests ? (
                       <div className="space-y-2">
+                        {dispatchBinOptions.length > 0 && viewingReq && (
+                          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
+                            <p className="text-xs font-semibold text-gray-600">Dispatch from bin — {viewingReq.warehouse}</p>
+                            {viewingReq.items.map((item) => (
+                              <div key={item.productId} className="flex items-center justify-between gap-3">
+                                <span className="text-xs text-gray-600 truncate">{item.productName} <span className="text-gray-400">×{item.quantity}</span></span>
+                                <select
+                                  value={dispatchBinByProduct[item.productId] ?? ''}
+                                  onChange={(e) => setDispatchBinByProduct((prev) => ({ ...prev, [item.productId]: e.target.value }))}
+                                  className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer shrink-0"
+                                >
+                                  <option value="">Unassigned</option>
+                                  {dispatchBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                                </select>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div
                           onDragOver={(e) => { e.preventDefault(); setIsDraggingDoc(true); }}
                           onDragLeave={() => setIsDraggingDoc(false)}

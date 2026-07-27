@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { PurchaseOrder, PurchaseStatus } from '@/mocks/purchases';
 import PurchaseStatusBadge from './PurchaseStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { supabase } from '@/lib/supabase';
+import { asArray } from '@/pages/warehouses/warehouseShared';
 
 interface StatusChangeExtra {
   receivedQty?: Record<string, number>;
+  receivedBin?: Record<string, string>;
   documentFile?: File;
   reviewNote?: string;
 }
@@ -31,11 +34,45 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
   const [receivedQty, setReceivedQty] = useState<Record<string, number>>(
     Object.fromEntries(po.items.map((i) => [i.productId, i.orderedQty]))
   );
+  const [receivedBin, setReceivedBin] = useState<Record<string, string>>(
+    Object.fromEntries(po.items.filter((i) => i.binLocation).map((i) => [i.productId, i.binLocation as string]))
+  );
+  const [binOptions, setBinOptions] = useState<string[]>([]);
   const [documentFile, setDocumentFile] = useState<File | null>(null);
 
   const action = workflow.find((w) => w.from === po.status);
   const isReceiving = po.status === 'ordered';
   const isPending = po.status === 'pending';
+
+  // Bin options come from the warehouse's registry PLUS any bin a product on
+  // this order already sits in — the registry alone can be empty even when
+  // products already have real bins assigned, and we don't want that to mean
+  // there's nothing to pick from. Pre-selected with whichever single bin a
+  // product is already sitting in (if any) so receiving into the same spot
+  // doesn't require re-picking it every time.
+  useEffect(() => {
+    if (!isReceiving) return;
+    (async () => {
+      const [{ data: wh }, { data: bins }] = await Promise.all([
+        supabase.from('warehouses').select('bin_locations').eq('name', po.warehouse).maybeSingle(),
+        supabase.from('product_bin_stock').select('product_id, bin_location').in('product_id', po.items.map((i) => i.productId)),
+      ]);
+      const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
+      const productBins = (bins || []).map((row) => row.bin_location as string);
+      setBinOptions([...new Set([...registryBins, ...productBins])]);
+      const singleBinByProduct: Record<string, string> = {};
+      const seen: Record<string, string[]> = {};
+      (bins || []).forEach((row) => {
+        const pid = row.product_id as string;
+        (seen[pid] ??= []).push(row.bin_location as string);
+      });
+      Object.entries(seen).forEach(([pid, list]) => {
+        if (list.length === 1) singleBinByProduct[pid] = list[0];
+      });
+      setReceivedBin((prev) => ({ ...singleBinByProduct, ...prev }));
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReceiving, po.warehouse]);
 
   // Close immediately instead of waiting on the network round-trip — feedback
   // comes via the toast once the status change actually resolves.
@@ -43,7 +80,7 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
     if (!canDecide || !action) return;
     if (isReceiving) {
       if (!documentFile) return;
-      onStatusChange(po.id, action.to, { receivedQty, documentFile });
+      onStatusChange(po.id, action.to, { receivedQty, receivedBin, documentFile });
       onClose();
       return;
     }
@@ -67,6 +104,7 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
   };
 
   const subtotal = po.items.reduce((sum, i) => sum + i.orderedQty * i.unitCost, 0);
+  const itemColSpan = 3 + (isReceiving || po.status === 'received' ? 1 : 0) + (isReceiving && binOptions.length > 0 ? 1 : 0);
 
   const stepOrder: PurchaseStatus[] = ['pending', 'approved', 'ordered', 'received'];
   const steps = [
@@ -157,6 +195,7 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Product</th>
                     <th className="text-center px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Ordered</th>
                     {isReceiving && <th className="text-center px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Received</th>}
+                    {isReceiving && binOptions.length > 0 && <th className="text-center px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Bin</th>}
                     {po.status === 'received' && <th className="text-center px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Received</th>}
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Unit Cost</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</th>
@@ -176,7 +215,10 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
                           </div>
                           <div>
                             <p className="font-medium text-gray-800">{item.productName}</p>
-                            <p className="text-xs text-gray-400 font-mono">{item.sku}</p>
+                            <p className="text-xs text-gray-400 font-mono">
+                              {item.sku}
+                              {item.binLocation ? ` · Bin: ${item.binLocation}` : ''}
+                            </p>
                           </div>
                         </div>
                       </td>
@@ -193,6 +235,18 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
                           />
                         </td>
                       )}
+                      {isReceiving && binOptions.length > 0 && (
+                        <td className="px-3 py-3 text-center">
+                          <select
+                            value={receivedBin[item.productId] ?? ''}
+                            onChange={(e) => setReceivedBin((prev) => ({ ...prev, [item.productId]: e.target.value }))}
+                            className="border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
+                          >
+                            <option value="">Unassigned</option>
+                            {binOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                          </select>
+                        </td>
+                      )}
                       {po.status === 'received' && (
                         <td className="px-3 py-3 text-center">
                           <span className={`font-semibold ${item.receivedQty === item.orderedQty ? 'text-emerald-600' : 'text-amber-600'}`}>
@@ -207,15 +261,15 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
                 </tbody>
                 <tfoot className="bg-gray-50 border-t border-gray-200 divide-y divide-gray-100">
                   <tr>
-                    <td colSpan={isReceiving || po.status === 'received' ? 4 : 3} className="px-4 py-2 text-sm text-right text-gray-500">Subtotal</td>
+                    <td colSpan={itemColSpan} className="px-4 py-2 text-sm text-right text-gray-500">Subtotal</td>
                     <td className="px-4 py-2 text-right text-sm font-semibold text-gray-800">{formatAmount(subtotal)}</td>
                   </tr>
                   <tr>
-                    <td colSpan={isReceiving || po.status === 'received' ? 4 : 3} className="px-4 py-2 text-sm text-right text-gray-500">Tax (6%)</td>
+                    <td colSpan={itemColSpan} className="px-4 py-2 text-sm text-right text-gray-500">Tax (6%)</td>
                     <td className="px-4 py-2 text-right text-sm text-gray-700">{formatAmount(po.tax)}</td>
                   </tr>
                   <tr>
-                    <td colSpan={isReceiving || po.status === 'received' ? 4 : 3} className="px-4 py-2.5 text-sm font-bold text-right text-gray-800">Total</td>
+                    <td colSpan={itemColSpan} className="px-4 py-2.5 text-sm font-bold text-right text-gray-800">Total</td>
                     <td className="px-4 py-2.5 text-right font-bold text-emerald-700">{formatAmount(po.total)}</td>
                   </tr>
                 </tfoot>

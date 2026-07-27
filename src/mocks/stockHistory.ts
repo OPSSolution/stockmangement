@@ -14,6 +14,8 @@ export interface StockHistoryEntry {
   timestamp: string;
   /** Expiry date of the batch received in this entry, when the stock is incoming. */
   expiryDate?: string;
+  /** Which bin this movement happened at, when known. */
+  binLocation?: string;
 }
 
 export const stockHistory: StockHistoryEntry[] = [

@@ -6,6 +6,8 @@ export interface DeliveryItem {
   sku: string;
   imageUrl?: string | null;
   quantity: number;
+  /** Which bin at the source warehouse this is leaving from — set at creation. */
+  fromBinLocation?: string;
 }
 
 export interface DeliveryTimelineEvent {

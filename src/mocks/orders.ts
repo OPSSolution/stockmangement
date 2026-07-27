@@ -13,6 +13,8 @@ export interface OrderItem {
   vendor: string;
   warehouse: string;
   status: 'pending' | 'accepted' | 'rejected';
+  /** Which bin the units are being shipped from — picked when confirming shipment. */
+  binLocation?: string;
 }
 
 export interface VendorSplit {

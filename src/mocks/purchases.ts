@@ -11,6 +11,8 @@ export interface PurchaseItem {
   orderedQty: number;
   receivedQty: number;
   unitCost: number;
+  /** Preferred bin to receive this into, picked at creation — the receiving step can still change it. */
+  binLocation?: string;
 }
 
 export interface PurchaseOrder {

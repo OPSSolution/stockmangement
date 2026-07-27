@@ -1,16 +1,17 @@
 import { useState } from 'react';
-import type { Product } from '@/mocks/inventory';
+import type { Product, ProductBinStock } from '@/mocks/inventory';
 import type { StockHistoryEntry } from '@/mocks/stockHistory';
 
 interface StockAdjustModalProps {
   product: Product;
   history?: StockHistoryEntry[];
+  /** This product's current bin split, if it's stored across more than one. */
+  binRows?: ProductBinStock[];
   onClose: () => void;
-  onAdjust: (productId: string, delta: number, type: string, note: string, expiryDate?: string) => void;
+  onAdjust: (productId: string, delta: number, type: string, note: string, expiryDate?: string, binLocation?: string) => void;
 }
 
 const adjustTypes = [
-  { value: 'adjustment', label: 'Manual Adjustment', icon: 'ri-equalizer-line' },
   { value: 'purchase', label: 'Stock Received', icon: 'ri-add-circle-line' },
   { value: 'return', label: 'Customer Return', icon: 'ri-arrow-go-back-line' },
   { value: 'transfer_in', label: 'Transfer In', icon: 'ri-arrow-right-down-line' },
@@ -18,9 +19,8 @@ const adjustTypes = [
   { value: 'sale', label: 'Manual Sale', icon: 'ri-shopping-bag-3-line' },
 ];
 
-// Every type except "Manual Adjustment" has an obvious direction — no need to make
-// the user pick it separately. Only 'adjustment' leaves the toggle up to them.
-const fixedDirection: Record<string, 'add' | 'remove' | undefined> = {
+// Every type here has an obvious direction, so it's never left up to the user to pick.
+const fixedDirection: Record<string, 'add' | 'remove'> = {
   purchase: 'add',
   return: 'add',
   transfer_in: 'add',
@@ -37,15 +37,16 @@ const typeConfig: Record<string, { label: string; icon: string; color: string; b
   adjustment: { label: 'Adjustment', icon: 'ri-equalizer-line', color: 'text-gray-600', bg: 'bg-gray-100' },
 };
 
-export default function StockAdjustModal({ product, history, onClose, onAdjust }: StockAdjustModalProps) {
+export default function StockAdjustModal({ product, history, binRows, onClose, onAdjust }: StockAdjustModalProps) {
   const [activeTab, setActiveTab] = useState<'adjust' | 'history'>('adjust');
-  const [adjustType, setAdjustType] = useState('adjustment');
-  const [mode, setMode] = useState<'add' | 'remove'>('add');
+  const [adjustType, setAdjustType] = useState('purchase');
   const [quantity, setQuantity] = useState(0);
+  const [selectedBin, setSelectedBin] = useState(() => (binRows && binRows.length === 1 ? binRows[0].binLocation : ''));
   const [note, setNote] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [error, setError] = useState('');
 
+  const mode = fixedDirection[adjustType];
   const delta = mode === 'remove' ? -Math.abs(quantity) : Math.abs(quantity);
   const newStock = product.stock + delta;
   const safeHistory = Array.isArray(history) ? history : [];
@@ -53,18 +54,15 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
   const totalIn = productHistory.filter((h) => h.quantity > 0).reduce((sum, h) => sum + h.quantity, 0);
   const totalOut = productHistory.filter((h) => h.quantity < 0).reduce((sum, h) => sum + h.quantity, 0);
 
-  const selectType = (value: string) => {
-    setAdjustType(value);
-    const forced = fixedDirection[value];
-    if (forced) setMode(forced);
-  };
+  const hasMultipleBins = (binRows?.length ?? 0) > 1;
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (quantity <= 0) { setError('Quantity must be greater than 0.'); return; }
     if (newStock < 0) { setError('Cannot reduce stock below 0.'); return; }
+    if (hasMultipleBins && !selectedBin) { setError('Select which bin this adjustment applies to.'); return; }
     setError('');
-    onAdjust(product.id, delta, adjustType, note, mode === 'add' ? expiryDate || undefined : undefined);
+    onAdjust(product.id, delta, adjustType, note, mode === 'add' ? expiryDate || undefined : undefined, selectedBin || undefined);
   };
 
   return (
@@ -104,7 +102,7 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
                   <button
                     key={t.value}
                     type="button"
-                    onClick={() => selectType(t.value)}
+                    onClick={() => setAdjustType(t.value)}
                     className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-xs font-medium transition-all cursor-pointer ${
                       adjustType === t.value
                         ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
@@ -118,32 +116,50 @@ export default function StockAdjustModal({ product, history, onClose, onAdjust }
               </div>
             </div>
 
-            {/* Direction: locked for every type except Manual Adjustment */}
+            {/* Direction is implied entirely by the selected type */}
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-2">Direction</label>
-              {fixedDirection[adjustType] ? (
-                <div className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${mode === 'add' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
-                  <i className={mode === 'add' ? 'ri-add-line' : 'ri-subtract-line'}></i>
-                  {mode === 'add' ? 'Adding Stock' : 'Removing Stock'}
-                </div>
-              ) : (
-                <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setMode('add')}
-                    className={`flex-1 py-2 text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${mode === 'add' ? 'bg-emerald-500 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+              <div className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${mode === 'add' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+                <i className={mode === 'add' ? 'ri-add-line' : 'ri-subtract-line'}></i>
+                {mode === 'add' ? 'Adding Stock' : 'Removing Stock'}
+              </div>
+            </div>
+
+            {/* Warehouse & bin location — informational only, not editable here */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Warehouse</label>
+                <input
+                  value={product.warehouse}
+                  readOnly
+                  disabled
+                  tabIndex={-1}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Bin Location</label>
+                {hasMultipleBins ? (
+                  <select
+                    value={selectedBin}
+                    onChange={(e) => setSelectedBin(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
                   >
-                    <i className="ri-add-line mr-1"></i>Add Stock
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMode('remove')}
-                    className={`flex-1 py-2 text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${mode === 'remove' ? 'bg-red-500 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
-                  >
-                    <i className="ri-subtract-line mr-1"></i>Remove Stock
-                  </button>
-                </div>
-              )}
+                    <option value="">Select bin…</option>
+                    {binRows!.map((b) => (
+                      <option key={b.id} value={b.binLocation}>{b.binLocation} ({b.quantity} on hand)</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    value={binRows?.[0]?.binLocation || product.binLocation || '—'}
+                    readOnly
+                    disabled
+                    tabIndex={-1}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
+                  />
+                )}
+              </div>
             </div>
 
             {/* Quantity */}

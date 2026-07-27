@@ -10,6 +10,7 @@ interface NewPOItem {
   orderedQty: number;
   receivedQty: number;
   unitCost: number;
+  binLocation?: string;
 }
 
 interface FormData {
@@ -58,8 +59,10 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [selectedQty, setSelectedQty] = useState(1);
   const [selectedCost, setSelectedCost] = useState(0);
+  const [selectedBin, setSelectedBin] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [products, setProducts] = useState<ProductOption[]>([]);
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
   const [vendors, setVendors] = useState<VendorOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [nextId, setNextId] = useState<string | null>(null);
@@ -71,14 +74,21 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
 
   const fetchData = async () => {
     setLoading(true);
-    const [prodRes, vendRes] = await Promise.all([
+    const [prodRes, vendRes, binRes] = await Promise.all([
       supabase.from('products').select('id, name, sku, image_url, price, bin_location'),
       supabase.from('vendors').select('name, contacts, payment_terms'),
+      supabase.from('product_bin_stock').select('product_id, bin_location'),
     ]);
     if (prodRes.error) console.error(prodRes.error);
     else setProducts((prodRes.data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, bin_location: p.bin_location })));
     if (vendRes.error) console.error(vendRes.error);
     else setVendors((vendRes.data || []).map((v) => ({ name: v.name, contacts: v.contacts || [], payment_terms: v.payment_terms })));
+    const map: Record<string, string[]> = {};
+    (binRes.data || []).forEach((row) => {
+      const pid = row.product_id as string;
+      (map[pid] ??= []).push(row.bin_location as string);
+    });
+    setBinStockByProduct(map);
     setLoading(false);
   };
 
@@ -109,9 +119,12 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
 
   const handleProductSelect = (id: string) => {
     setSelectedProduct(id);
+    setSelectedBin('');
     const p = products.find((prod) => prod.id === id);
     if (p) setSelectedCost(p.price * 0.6);
   };
+
+  const selectedBinOptions = binStockByProduct[selectedProduct] || [];
 
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProduct);
@@ -120,12 +133,22 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
       ...f,
       items: [
         ...f.items,
-        { productId: product.id, productName: product.name, sku: product.sku, imageUrl: product.image_url || null, orderedQty: selectedQty, receivedQty: 0, unitCost: selectedCost },
+        {
+          productId: product.id,
+          productName: product.name,
+          sku: product.sku,
+          imageUrl: product.image_url || null,
+          orderedQty: selectedQty,
+          receivedQty: 0,
+          unitCost: selectedCost,
+          binLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0],
+        },
       ],
     }));
     setSelectedProduct('');
     setSelectedQty(1);
     setSelectedCost(0);
+    setSelectedBin('');
   };
 
   const removeItem = (productId: string) => {
@@ -262,6 +285,16 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                       <option key={p.id} value={p.id}>{p.name} ({p.sku}){p.bin_location ? ` — Bin: ${p.bin_location}` : ''}</option>
                     ))}
                   </select>
+                  {selectedBinOptions.length > 1 && (
+                    <select
+                      value={selectedBin}
+                      onChange={(e) => setSelectedBin(e.target.value)}
+                      className="w-32 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
+                    >
+                      <option value="">Bin…</option>
+                      {selectedBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                  )}
                   <input
                     type="number"
                     min={1}
@@ -281,7 +314,7 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                   />
                   <button
                     onClick={addItem}
-                    disabled={!selectedProduct}
+                    disabled={!selectedProduct || (selectedBinOptions.length > 1 && !selectedBin)}
                     className="px-4 py-2.5 bg-emerald-500 text-white text-sm font-medium rounded-lg hover:bg-emerald-600 disabled:opacity-40 transition-colors cursor-pointer whitespace-nowrap"
                   >
                     <i className="ri-add-line mr-1"></i>Add
@@ -304,7 +337,7 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {form.items.map((item) => {
-                      const bin = products.find((p) => p.id === item.productId)?.bin_location;
+                      const bin = item.binLocation || products.find((p) => p.id === item.productId)?.bin_location;
                       return (
                       <tr key={item.productId}>
                         <td className="px-4 py-2.5">

@@ -3,12 +3,13 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import ProductTable from './components/ProductTable';
 import ProductFormModal from './components/ProductFormModal';
+import ProductDetailModal from './components/ProductDetailModal';
 import StockAdjustModal from './components/StockAdjustModal';
 import StockHistoryModal from './components/StockHistoryModal';
 import StockActivityReportModal from './components/StockActivityReportModal';
 import DeleteConfirmModal from './components/DeleteConfirmModal';
 import ResolveOnHoldModal from './components/ResolveOnHoldModal';
-import { Product } from '@/mocks/inventory';
+import { Product, ProductBinStock } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
 import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
@@ -17,7 +18,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit, diffFields } from '@/lib/auditLog';
-import { resolveOnHoldStock, type OnHoldResolution } from '@/lib/stockDeduction';
+import { resolveOnHoldStock, adjustBinQuantity, type OnHoldResolution } from '@/lib/stockDeduction';
 import { formatDateTime } from '@/lib/formatDateTime';
 import { nowStamp } from '@/lib/timestamp';
 
@@ -66,6 +67,7 @@ function mapHistory(row: Record<string, unknown>): StockHistoryEntry {
     user: row.user_name as string,
     timestamp: row.created_at as string,
     expiryDate: (row.expiry_date as string) || undefined,
+    binLocation: (row.bin_location as string) || undefined,
   };
 }
 
@@ -76,6 +78,7 @@ export default function InventoryPage() {
   const canAdjustStock = canAccess('inventory_stock_adjust');
   const [searchParams, setSearchParams] = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
+  const [binStock, setBinStock] = useState<ProductBinStock[]>([]);
   const [reserved, setReserved] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<StockHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +97,7 @@ export default function InventoryPage() {
   const [editProduct, setEditProduct] = useState<Product | null>(null);
   const [adjustProduct, setAdjustProduct] = useState<Product | null>(null);
   const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
+  const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   const [resolveOnHoldProduct, setResolveOnHoldProduct] = useState<Product | null>(null);
   const [resolvingOnHold, setResolvingOnHold] = useState(false);
   const [resolveOnHoldError, setResolveOnHoldError] = useState('');
@@ -153,6 +157,7 @@ export default function InventoryPage() {
     loadAllVendors();
     fetchProducts();
     fetchHistory();
+    fetchBinStock();
     getReservedQuantities().then(setReserved);
   }, [warehouseScope]);
 
@@ -214,6 +219,48 @@ export default function InventoryPage() {
     else setHistory((data || []).map(mapHistory));
   };
 
+  const fetchBinStock = async () => {
+    const { data, error } = await supabase.from('product_bin_stock').select('*');
+    if (error) console.error(error);
+    else setBinStock((data || []).map((row) => ({
+      id: row.id as string,
+      productId: row.product_id as string,
+      binLocation: row.bin_location as string,
+      quantity: row.quantity as number,
+    })));
+  };
+
+  const binStockByProduct = useMemo(() => {
+    const map: Record<string, ProductBinStock[]> = {};
+    binStock.forEach((row) => {
+      const list = map[row.productId];
+      if (list) list.push(row); else map[row.productId] = [row];
+    });
+    return map;
+  }, [binStock]);
+
+  // Replaces every bin row for one product in a single pass — simpler and safer
+  // than diffing add/remove/edit, and the row count per product is always small.
+  const syncBinStock = async (productId: string, rows: { binLocation: string; quantity: number }[]) => {
+    const clean = rows.filter((r) => r.binLocation.trim() && r.quantity > 0);
+    await supabase.from('product_bin_stock').delete().eq('product_id', productId);
+    if (clean.length > 0) {
+      const { error } = await supabase.from('product_bin_stock').insert(
+        clean.map((r, i) => ({
+          id: `PBS-${productId}-${Date.now()}-${i}`,
+          product_id: productId,
+          bin_location: r.binLocation,
+          quantity: r.quantity,
+        }))
+      );
+      if (error) console.error(error);
+    }
+    setBinStock((prev) => [
+      ...prev.filter((r) => r.productId !== productId),
+      ...clean.map((r, i) => ({ id: `PBS-${productId}-${Date.now()}-${i}`, productId, binLocation: r.binLocation, quantity: r.quantity })),
+    ]);
+  };
+
   const filtered = useMemo(() => {
     return products.filter((p) => {
       const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase());
@@ -255,10 +302,16 @@ export default function InventoryPage() {
     return allVendorNames;
   }, [warehouseScope, scopedVendorNames, allVendorNames]);
 
-  const handleSaveProduct = async (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string }) => {
+  const handleSaveProduct = async (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string; binRows?: { binLocation: string; quantity: number }[] }) => {
     const now = nowStamp();
     const status = deriveStatus(data.stock, data.lowStockThreshold);
     const before = data.id ? products.find((p) => p.id === data.id) : undefined;
+    const cleanBinRows = (data.binRows ?? []).filter((r) => r.binLocation.trim() && r.quantity > 0);
+    // products.bin_location is a single legacy field kept for quick display — it
+    // can only represent the case where all stock sits in exactly one bin.
+    // product_bin_stock (synced below) is the real source of truth once a
+    // product is split across more than one, or has none assigned yet.
+    const derivedBinLocation = cleanBinRows.length === 1 ? cleanBinRows[0].binLocation : null;
 
     if (data.id) {
       const { error } = await supabase.from('products').update({
@@ -273,7 +326,7 @@ export default function InventoryPage() {
         price: data.price,
         product_type: data.productType,
         expiry_date: data.expiryDate || null,
-        bin_location: data.binLocation || null,
+        bin_location: derivedBinLocation,
         status,
         last_updated: now,
       }).eq('id', data.id);
@@ -282,8 +335,9 @@ export default function InventoryPage() {
         console.error(error);
         showToast('Failed to update product.', 'error');
       } else {
+        await syncBinStock(data.id, cleanBinRows);
         showToast('Product updated successfully.');
-        setProducts((prev) => prev.map((p) => (p.id === data.id ? { ...p, ...data, id: data.id as string, status, lastUpdated: now } : p)));
+        setProducts((prev) => prev.map((p) => (p.id === data.id ? { ...p, ...data, id: data.id as string, binLocation: derivedBinLocation, status, lastUpdated: now } : p)));
         const fieldChanges = before ? diffFields(before, { ...data, status, lastUpdated: now }, [
           { key: 'name', label: 'Name' },
           { key: 'sku', label: 'SKU' },
@@ -326,7 +380,7 @@ export default function InventoryPage() {
         price: data.price,
         product_type: data.productType,
         expiry_date: data.expiryDate || null,
-        bin_location: data.binLocation || null,
+        bin_location: derivedBinLocation,
         status,
         last_updated: now,
       });
@@ -335,8 +389,9 @@ export default function InventoryPage() {
         console.error(error);
         showToast('Failed to add product.', 'error');
       } else {
+        await syncBinStock(newId, cleanBinRows);
         showToast('Product added successfully.');
-        setProducts((prev) => [{ ...data, id: newId, status, lastUpdated: now }, ...prev]);
+        setProducts((prev) => [{ ...data, id: newId, binLocation: derivedBinLocation, status, lastUpdated: now }, ...prev]);
         logAudit({ action: 'create', module: 'inventory', description: `Created product "${data.name}" (${data.sku})`, referenceId: newId });
       }
     }
@@ -344,12 +399,17 @@ export default function InventoryPage() {
     setShowAddModal(false);
   };
 
-  const handleAdjust = async (productId: string, delta: number, type: string, note: string, expiryDate?: string) => {
+  const handleAdjust = async (productId: string, delta: number, type: string, note: string, expiryDate?: string, binLocation?: string) => {
     const target = products.find((p) => p.id === productId);
     if (!target) return;
 
     const newStock = Math.max(0, target.stock + delta);
     const now = nowStamp();
+    // stock_history.created_at is timestamptz — it needs a real UTC instant, not
+    // nowStamp()'s naive local-clock string (Postgres would otherwise reinterpret
+    // that string in the DB's own timezone, silently shifting it onto the wrong
+    // calendar day for anyone not in UTC+0 and breaking the movement report's date filter).
+    const nowIso = new Date().toISOString();
 
     // Expiry only ever tracks the most recently received batch — only overwrite
     // it when this adjustment actually brings a new date in with incoming stock.
@@ -382,16 +442,30 @@ export default function InventoryPage() {
       note: note || 'Manual stock adjustment',
       warehouse: target.warehouse,
       user_name: 'Admin',
-      created_at: now,
+      created_at: nowIso,
       expiry_date: delta > 0 ? expiryDate || null : null,
+      bin_location: binLocation || null,
     });
 
     if (historyError) console.error(historyError);
 
+    await adjustBinQuantity(productId, binLocation, delta);
+    if (binLocation) {
+      setBinStock((prev) => {
+        const existing = prev.find((r) => r.productId === productId && r.binLocation === binLocation);
+        if (existing) {
+          return prev.map((r) => (r === existing ? { ...r, quantity: Math.max(0, r.quantity + delta) } : r));
+        }
+        return delta > 0
+          ? [...prev, { id: `PBS-${productId}-${Date.now()}`, productId, binLocation, quantity: delta }]
+          : prev;
+      });
+    }
+
     const newExpiryDate = delta > 0 && expiryDate ? expiryDate : target.expiryDate;
     setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, stock: newStock, status: newStatus, lastUpdated: now, expiryDate: newExpiryDate } : p)));
     setHistory((prev) => [
-      { id: historyId, productId, type: type as StockHistoryEntry['type'], quantity: delta, stockBefore: target.stock, stockAfter: newStock, reference: 'ADJ-MANUAL', note: note || 'Manual stock adjustment', warehouse: target.warehouse, user: 'Admin', timestamp: now, expiryDate: delta > 0 ? expiryDate : undefined },
+      { id: historyId, productId, type: type as StockHistoryEntry['type'], quantity: delta, stockBefore: target.stock, stockAfter: newStock, reference: 'ADJ-MANUAL', note: note || 'Manual stock adjustment', warehouse: target.warehouse, user: 'Admin', timestamp: nowIso, expiryDate: delta > 0 ? expiryDate : undefined, binLocation },
       ...prev,
     ]);
     setAdjustProduct(null);
@@ -680,10 +754,12 @@ export default function InventoryPage() {
             <ProductTable
               products={filtered}
               reserved={reserved}
+              binStockByProduct={binStockByProduct}
               onEdit={(p) => setEditProduct(p)}
               onDelete={(p) => setDeleteProduct(p)}
               onAdjust={(p) => setAdjustProduct(p)}
               onViewHistory={(p) => setHistoryProduct(p)}
+              onViewDetails={(p) => setDetailProduct(p)}
             />
 
             {loading ? (
@@ -712,10 +788,22 @@ export default function InventoryPage() {
         </>
 
       {/* Modals */}
+      {detailProduct && (
+        <ProductDetailModal
+          product={products.find((p) => p.id === detailProduct.id) || detailProduct}
+          reserved={reserved}
+          binRows={binStockByProduct[detailProduct.id] ?? []}
+          onClose={() => setDetailProduct(null)}
+          onEdit={(p) => { setDetailProduct(null); setEditProduct(p); }}
+          onAdjust={(p) => { setDetailProduct(null); setAdjustProduct(p); }}
+          onViewHistory={(p) => { setDetailProduct(null); setHistoryProduct(p); }}
+        />
+      )}
       {(showAddModal || editProduct) && (
         <ProductFormModal
           product={editProduct}
           nextNum={products.length > 0 ? Math.max(...products.map(p => parseInt(p.id.replace(/\D/g, '')) || 0)) + 1 : 1}
+          existingBinRows={editProduct ? (binStockByProduct[editProduct.id] ?? []) : []}
           onClose={() => { setShowAddModal(false); setEditProduct(null); }}
           onSave={handleSaveProduct}
         />
@@ -724,6 +812,7 @@ export default function InventoryPage() {
         <StockAdjustModal
           product={adjustProduct}
           history={history}
+          binRows={binStockByProduct[adjustProduct.id] ?? []}
           onClose={() => setAdjustProduct(null)}
           onAdjust={handleAdjust}
         />

@@ -22,6 +22,14 @@ export interface Product {
   binLocation?: string | null;
 }
 
+/** One bin's share of a product's total stock — a product can be split across several of these. */
+export interface ProductBinStock {
+  id: string;
+  productId: string;
+  binLocation: string;
+  quantity: number;
+}
+
 export interface StockAlert {
   id: string;
   productId: string;

@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { type DeliveryRecord, type DeliveryStep } from '@/mocks/deliveries';
 import DeliveryStepTracker from './DeliveryStepTracker';
 import { useAuth } from '@/contexts/AuthContext';
 import { downloadPdf } from '@/lib/exportPdf';
+import { supabase } from '@/lib/supabase';
+import { asArray } from '@/pages/warehouses/warehouseShared';
 
 interface DeliveryDetailModalProps {
   delivery: DeliveryRecord;
   onClose: () => void;
-  onAdvance: (id: string, nextStep: DeliveryStep, note: string, photoUrl?: string) => void;
+  onAdvance: (id: string, nextStep: DeliveryStep, note: string, photoUrl?: string, toBinByProduct?: Record<string, string>) => void;
 }
 
 const steps: DeliveryStep[] = ['prepare', 'ready', 'in_transit', 'delivered'];
@@ -32,6 +34,8 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
   const [note, setNote] = useState('');
   const [photo, setPhoto] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [toBinByProduct, setToBinByProduct] = useState<Record<string, string>>({});
+  const [destBinOptions, setDestBinOptions] = useState<string[]>([]);
 
   const currentIdx = stepIndex[delivery.status];
   const nextStep = steps[currentIdx + 1];
@@ -43,6 +47,28 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
   const requiredWarehouse = nextStep === 'delivered' ? delivery.toWarehouse : delivery.fromWarehouse;
   const isReceivingStep = nextStep === 'delivered';
   const canAdvance = isAdmin || !!profile?.warehouses.includes(requiredWarehouse);
+
+  // Bin options come from the destination warehouse's registry PLUS any bin
+  // already used by a matching product (by SKU) sitting in that warehouse —
+  // the registry alone can be empty even when real bins are already in use.
+  useEffect(() => {
+    if (!isReceivingStep) return;
+    (async () => {
+      const [{ data: wh }, { data: destProducts }] = await Promise.all([
+        supabase.from('warehouses').select('bin_locations').eq('name', delivery.toWarehouse).maybeSingle(),
+        supabase.from('products').select('id').eq('warehouse', delivery.toWarehouse).in('sku', delivery.items.map((i) => i.sku)),
+      ]);
+      const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
+      let productBins: string[] = [];
+      const destIds = (destProducts || []).map((p) => p.id as string);
+      if (destIds.length > 0) {
+        const { data: bins } = await supabase.from('product_bin_stock').select('bin_location').in('product_id', destIds);
+        productBins = (bins || []).map((row) => row.bin_location as string);
+      }
+      setDestBinOptions([...new Set([...registryBins, ...productBins])]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReceivingStep, delivery.toWarehouse]);
 
   const handlePhotoPick = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -75,10 +101,10 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
         tables: [
           {
             title: `Shipment Contents (${totalItems} items)`,
-            head: ['Product', 'SKU', 'Qty'],
-            rows: delivery.items.map((item) => [item.productName, item.sku, item.quantity]),
-            colStyles: { 2: { halign: 'center' } },
-            footRow: [{ content: 'Total Items', colSpan: 2, styles: { halign: 'right' } }, totalItems],
+            head: ['Product', 'SKU', 'Bin', 'Qty'],
+            rows: delivery.items.map((item) => [item.productName, item.sku, item.fromBinLocation || '—', item.quantity]),
+            colStyles: { 3: { halign: 'center' } },
+            footRow: [{ content: 'Total Items', colSpan: 3, styles: { halign: 'right' } }, totalItems],
           },
         ],
         timeline: delivery.timeline.map((event) => ({
@@ -94,7 +120,7 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
 
   const handleAdvance = () => {
     if (!nextStep) return;
-    onAdvance(delivery.id, nextStep, note || `Moved to ${nextStep}`, photo || undefined);
+    onAdvance(delivery.id, nextStep, note || `Moved to ${nextStep}`, photo || undefined, isReceivingStep ? toBinByProduct : undefined);
     setNote('');
     setPhoto('');
     setConfirming(false);
@@ -177,7 +203,10 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
                   </div>
                   <div className="flex-1">
                     <p className="text-sm font-medium text-gray-800">{item.productName}</p>
-                    <p className="text-xs text-gray-400">{item.sku}</p>
+                    <p className="text-xs text-gray-400">
+                      {item.sku}
+                      {item.fromBinLocation ? ` · Bin: ${item.fromBinLocation}` : ''}
+                    </p>
                   </div>
                   <span className="text-sm font-semibold text-gray-600">x{item.quantity}</span>
                 </div>
@@ -233,6 +262,24 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
                 </button>
               ) : (
                 <div className="space-y-3">
+                  {isReceivingStep && destBinOptions.length > 0 && (
+                    <div className="bg-white border border-emerald-200 rounded-lg p-3 space-y-2">
+                      <p className="text-xs font-semibold text-gray-600">Destination bin — where each item lands in {delivery.toWarehouse}</p>
+                      {delivery.items.map((item, i) => (
+                        <div key={`${item.productId}-${i}`} className="flex items-center justify-between gap-3">
+                          <span className="text-xs text-gray-600 truncate">{item.productName} <span className="text-gray-400">×{item.quantity}</span></span>
+                          <select
+                            value={toBinByProduct[item.productId || ''] ?? ''}
+                            onChange={(e) => setToBinByProduct((prev) => ({ ...prev, [item.productId || '']: e.target.value }))}
+                            className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer shrink-0"
+                          >
+                            <option value="">Unassigned</option>
+                            {destBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <input
                     value={note}
                     onChange={(e) => setNote(e.target.value)}

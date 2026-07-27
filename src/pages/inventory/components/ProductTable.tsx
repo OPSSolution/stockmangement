@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Product } from '@/mocks/inventory';
+import { Product, ProductBinStock } from '@/mocks/inventory';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { availableStock } from '@/lib/stockReservations';
@@ -9,10 +9,13 @@ interface ProductTableProps {
   products: Product[];
   /** productId -> quantity tied up in pending requests/orders/transfers, not yet physically deducted. */
   reserved: Record<string, number>;
+  /** productId -> its bin split, when stock is spread across more than one bin. */
+  binStockByProduct: Record<string, ProductBinStock[]>;
   onEdit: (product: Product) => void;
   onDelete: (product: Product) => void;
   onAdjust: (product: Product) => void;
   onViewHistory: (product: Product) => void;
+  onViewDetails: (product: Product) => void;
 }
 
 const categoryColors: Record<string, string> = {
@@ -37,7 +40,7 @@ function expiryTone(expiryDate: string): string {
   return 'text-gray-400';
 }
 
-export default function ProductTable({ products, reserved, onEdit, onDelete, onAdjust, onViewHistory }: ProductTableProps) {
+export default function ProductTable({ products, reserved, binStockByProduct, onEdit, onDelete, onAdjust, onViewHistory, onViewDetails }: ProductTableProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const { formatAmount } = useCurrency();
   const { canEdit, canDelete, canAccess } = useAuth();
@@ -71,7 +74,12 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
             return (
               <tr key={p.id} className="hover:bg-gray-50/50 transition-colors">
                 <td className="py-3 px-4">
-                  <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onViewDetails(p)}
+                    className="flex items-center gap-3 text-left cursor-pointer group"
+                    title="View product details"
+                  >
                     <div className="w-16 h-16 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 overflow-hidden">
                       {p.imageUrl ? (
                         <img src={p.imageUrl} alt={p.name} className="w-full h-full object-cover" />
@@ -80,7 +88,7 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
                       )}
                     </div>
                     <div>
-                      <p className="font-medium text-gray-800 leading-tight">{p.name}</p>
+                      <p className="font-medium text-gray-800 leading-tight group-hover:text-emerald-600 group-hover:underline transition-colors">{p.name}</p>
                       <p className="text-xs text-gray-400">{p.id}</p>
                       {p.expiryDate && (
                         <p className={`text-xs mt-0.5 ${expiryTone(p.expiryDate)}`}>
@@ -88,7 +96,7 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
                         </p>
                       )}
                     </div>
-                  </div>
+                  </button>
                 </td>
                 <td className="py-3 px-4 text-gray-500 font-mono text-xs">{p.sku}</td>
                 <td className="py-3 px-4">
@@ -100,11 +108,25 @@ export default function ProductTable({ products, reserved, onEdit, onDelete, onA
                   <div className="flex flex-col">
                     <span className="text-gray-700 text-xs font-medium">{p.warehouse}</span>
                     {p.vendor && <span className="text-gray-400 text-xs">{p.vendor}</span>}
-                    {p.binLocation && (
-                      <span className="text-gray-400 text-xs mt-0.5" title="Bin location">
-                        <i className="ri-map-pin-2-line mr-0.5"></i>{p.binLocation}
-                      </span>
-                    )}
+                    {(() => {
+                      const bins = binStockByProduct[p.id] ?? [];
+                      if (bins.length > 1) {
+                        return (
+                          <span
+                            className="text-gray-400 text-xs mt-0.5"
+                            title={bins.map((b) => `${b.binLocation}: ${b.quantity}`).join(', ')}
+                          >
+                            <i className="ri-map-pin-2-line mr-0.5"></i>{bins.length} bins
+                          </span>
+                        );
+                      }
+                      const single = bins[0]?.binLocation ?? p.binLocation;
+                      return single ? (
+                        <span className="text-gray-400 text-xs mt-0.5" title="Bin location">
+                          <i className="ri-map-pin-2-line mr-0.5"></i>{single}
+                        </span>
+                      ) : null;
+                    })()}
                   </div>
                 </td>
                 <td className="py-3 px-4 text-right">

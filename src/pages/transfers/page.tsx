@@ -108,7 +108,7 @@ export default function TransfersPage() {
     totalUnits: transfers.filter((t) => t.status !== 'cancelled').reduce((s, t) => s + t.totalItems, 0),
   }), [transfers]);
 
-  const handleStatusChange = async (id: string, status: TransferStatus, documentFile?: File) => {
+  const handleStatusChange = async (id: string, status: TransferStatus, documentFile?: File, toBinByProduct?: Record<string, string>) => {
     if (statusChanging) return;
     const transfer = transfers.find((t) => t.id === id);
     if (status === 'received' && !documentFile) return;
@@ -132,7 +132,11 @@ export default function TransfersPage() {
       }
 
       if (status === 'received' && transfer) {
-        const { error: fulfillError } = await moveStockBetweenWarehouses(transfer.items, {
+        const itemsWithToBin = transfer.items.map((item) => ({
+          ...item,
+          toBinLocation: toBinByProduct?.[item.productId] || item.toBinLocation,
+        }));
+        const { error: fulfillError } = await moveStockBetweenWarehouses(itemsWithToBin, {
           fromWarehouse: transfer.fromWarehouse,
           toWarehouse: transfer.toWarehouse,
           reference: transfer.id,

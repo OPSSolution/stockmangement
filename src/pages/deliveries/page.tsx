@@ -152,7 +152,7 @@ export default function DeliveriesPage() {
     delivered: deliveries.filter((d) => d.status === 'delivered').length,
   }), [deliveries]);
 
-  const handleAdvance = async (id: string, nextStep: DeliveryStep, note: string, photoUrl?: string) => {
+  const handleAdvance = async (id: string, nextStep: DeliveryStep, note: string, photoUrl?: string, toBinByProduct?: Record<string, string>) => {
     const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
     const target = deliveries.find((d) => d.id === id);
     if (!target) return;
@@ -161,7 +161,12 @@ export default function DeliveriesPage() {
     // 'prepare'/'ready'/'in_transit' just reserve it, never touch real stock.
     if (nextStep === 'delivered') {
       const { error: moveError } = await moveStockBetweenWarehouses(
-        target.items.map((item) => ({ productId: item.productId || '', quantity: item.quantity })),
+        target.items.map((item) => ({
+          productId: item.productId || '',
+          quantity: item.quantity,
+          fromBinLocation: item.fromBinLocation,
+          toBinLocation: toBinByProduct?.[item.productId || ''],
+        })),
         { fromWarehouse: target.fromWarehouse, toWarehouse: target.toWarehouse, reference: target.id, userName: profile?.full_name || 'Admin' }
       );
       if (moveError) {

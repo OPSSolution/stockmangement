@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Order, VendorSplit, OrderItem } from '@/mocks/orders';
 import OrderStatusBadge from './OrderStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
@@ -7,6 +7,7 @@ import { deductStockForItems } from '@/lib/stockDeduction';
 import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 import { downloadPdf, type PdfTableSpec } from '@/lib/exportPdf';
 import { supabase } from '@/lib/supabase';
+import { asArray } from '@/pages/warehouses/warehouseShared';
 
 interface OrderDetailModalProps {
   order: Order;
@@ -34,8 +35,47 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
   const [shipmentDocFile, setShipmentDocFile] = useState<File | null>(null);
   const [shipmentNote, setShipmentNote] = useState('');
   const [shipping, setShipping] = useState(false);
+  const [binByItem, setBinByItem] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      order.vendorSplits.flatMap((s) => s.items).filter((i) => i.binLocation).map((i) => [i.id, i.binLocation as string])
+    )
+  );
+  const [binOptionsByWarehouse, setBinOptionsByWarehouse] = useState<Record<string, string[]>>({});
   const isPending = order.status === 'pending';
   const canShip = order.status === 'accepted' || order.status === 'partial';
+
+  // Bin options come from each split's own warehouse registry PLUS any bin
+  // its products already use — the registry alone can be empty even when
+  // real bins are already in use. Picked when confirming shipment, since
+  // that's the one action that actually deducts stock.
+  useEffect(() => {
+    if (!canShip || order.shippedAt) return;
+    (async () => {
+      const warehouseNames = [...new Set(splits.map((s) => s.warehouse))];
+      if (warehouseNames.length === 0) return;
+      const allProductIds = splits.flatMap((s) => s.items.map((i) => i.productId));
+      const [{ data: whData }, { data: binRows }] = await Promise.all([
+        supabase.from('warehouses').select('name, bin_locations').in('name', warehouseNames),
+        allProductIds.length > 0
+          ? supabase.from('product_bin_stock').select('product_id, bin_location').in('product_id', allProductIds)
+          : Promise.resolve({ data: [] as { product_id: string; bin_location: string }[] }),
+      ]);
+      const productBinsByProduct: Record<string, string[]> = {};
+      (binRows || []).forEach((row) => {
+        const pid = row.product_id as string;
+        (productBinsByProduct[pid] ??= []).push(row.bin_location as string);
+      });
+      const map: Record<string, string[]> = {};
+      (whData || []).forEach((w) => { map[w.name as string] = asArray<string>(w.bin_locations); });
+      splits.forEach((s) => {
+        const registryBins = map[s.warehouse] || [];
+        const productBins = s.items.flatMap((i) => productBinsByProduct[i.productId] || []);
+        map[s.warehouse] = [...new Set([...registryBins, ...productBins])];
+      });
+      setBinOptionsByWarehouse(map);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canShip, order.shippedAt]);
 
   const updateItemStatus = (splitIdx: number, itemId: string, status: OrderItem['status']) => {
     setSplits((prev) =>
@@ -107,7 +147,7 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
       rows: split.items.map((item) => [
         item.productName,
         item.sku,
-        binById.get(item.productId) || '—',
+        item.binLocation || binById.get(item.productId) || '—',
         item.quantity,
         formatAmount(item.unitPrice),
         formatAmount(item.unitPrice * item.quantity),
@@ -186,10 +226,10 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
         return;
       }
 
-      const acceptedItems: { productId: string; quantity: number }[] = [];
+      const acceptedItems: { productId: string; quantity: number; binLocation?: string }[] = [];
       splits.forEach((split) => {
         split.items.forEach((item) => {
-          if (item.status === 'accepted') acceptedItems.push({ productId: item.productId, quantity: item.quantity });
+          if (item.status === 'accepted') acceptedItems.push({ productId: item.productId, quantity: item.quantity, binLocation: binByItem[item.id] });
         });
       });
 
@@ -206,6 +246,16 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
           return;
         }
       }
+
+      // Persist whichever bin was actually picked for each accepted item — otherwise
+      // it's used for the stock deduction above but then forgotten, and the order
+      // would show no bin at all once it's fulfilled.
+      updated.vendorSplits = splits.map((split) => ({
+        ...split,
+        items: split.items.map((item) => (
+          item.status === 'accepted' && binByItem[item.id] ? { ...item, binLocation: binByItem[item.id] } : item
+        )),
+      }));
 
       updated.shippedAt = now;
       updated.shippedBy = profile?.full_name || profile?.email || 'Admin';
@@ -299,7 +349,10 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 leading-tight truncate">{item.productName}</p>
-                      <p className="text-xs text-gray-400">{item.sku} · Available: {item.availableQty}</p>
+                      <p className="text-xs text-gray-400">
+                        {item.sku} · Available: {item.availableQty}
+                        {item.binLocation ? ` · Bin: ${item.binLocation}` : ''}
+                      </p>
                     </div>
 
                     {/* Partial qty input */}
@@ -396,6 +449,33 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
                 )
               ) : canDecide ? (
                 <div className="space-y-2">
+                  {splits.some((s) => (binOptionsByWarehouse[s.warehouse] || []).length > 0) && (
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
+                      {splits.map((split, si) => {
+                        const binOptions = binOptionsByWarehouse[split.warehouse] || [];
+                        const acceptedInSplit = split.items.filter((i) => i.status === 'accepted');
+                        if (binOptions.length === 0 || acceptedInSplit.length === 0) return null;
+                        return (
+                          <div key={si} className="space-y-1.5">
+                            <p className="text-xs font-semibold text-gray-600">Ship from bin — {split.warehouse}</p>
+                            {acceptedInSplit.map((item) => (
+                              <div key={item.id} className="flex items-center justify-between gap-3">
+                                <span className="text-xs text-gray-600 truncate">{item.productName} <span className="text-gray-400">×{item.quantity}</span></span>
+                                <select
+                                  value={binByItem[item.id] ?? ''}
+                                  onChange={(e) => setBinByItem((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                  className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer shrink-0"
+                                >
+                                  <option value="">Unassigned</option>
+                                  {binOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                                </select>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   {shipmentDocFile ? (
                     <div className="flex items-center gap-2.5 border border-gray-200 rounded-lg p-2.5">
                       <div className="w-8 h-8 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">

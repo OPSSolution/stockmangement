@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { StockTransfer, TransferStatus } from '@/mocks/transfers';
 import TransferStatusBadge from './TransferStatusBadge';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { downloadPdf } from '@/lib/exportPdf';
 import { supabase } from '@/lib/supabase';
+import { asArray } from '@/pages/warehouses/warehouseShared';
 
 interface TransferDetailModalProps {
   transfer: StockTransfer;
   onClose: () => void;
-  onStatusChange: (id: string, status: TransferStatus, documentFile?: File) => void;
+  onStatusChange: (id: string, status: TransferStatus, documentFile?: File, toBinByProduct?: Record<string, string>) => void;
   /** Only the sending warehouse (or an admin) may approve a transfer or mark it in transit. */
   isSendingWarehouse: boolean;
   /** Only the receiving warehouse (or an admin) may confirm a transfer as received. */
@@ -34,10 +35,34 @@ function getNextStatus(current: TransferStatus): TransferStatus | null {
 export default function TransferDetailModal({ transfer, onClose, onStatusChange, isSendingWarehouse, isReceivingWarehouse, statusChanging }: TransferDetailModalProps) {
   const { formatAmount } = useCurrency();
   const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [toBinByProduct, setToBinByProduct] = useState<Record<string, string>>({});
+  const [destBinOptions, setDestBinOptions] = useState<string[]>([]);
   const currentIdx = stepOrder.indexOf(transfer.status);
   const nextStatus = getNextStatus(transfer.status);
   const isCancelled = transfer.status === 'cancelled';
   const needsDocument = nextStatus === 'received';
+
+  // Bin options come from the destination warehouse's registry PLUS any bin
+  // already used by a matching product (by SKU) sitting in that warehouse —
+  // the registry alone can be empty even when real bins are already in use.
+  useEffect(() => {
+    if (!needsDocument) return;
+    (async () => {
+      const [{ data: wh }, { data: destProducts }] = await Promise.all([
+        supabase.from('warehouses').select('bin_locations').eq('name', transfer.toWarehouse).maybeSingle(),
+        supabase.from('products').select('id').eq('warehouse', transfer.toWarehouse).in('sku', transfer.items.map((i) => i.sku)),
+      ]);
+      const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
+      let productBins: string[] = [];
+      const destIds = (destProducts || []).map((p) => p.id as string);
+      if (destIds.length > 0) {
+        const { data: bins } = await supabase.from('product_bin_stock').select('bin_location').in('product_id', destIds);
+        productBins = (bins || []).map((row) => row.bin_location as string);
+      }
+      setDestBinOptions([...new Set([...registryBins, ...productBins])]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsDocument, transfer.toWarehouse]);
 
   const nextLabel: Record<string, string> = {
     requested: 'Approve Transfer',
@@ -89,7 +114,7 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
             rows: transfer.items.map((item) => [
               item.productName,
               item.sku,
-              binById.get(item.productId) || '—',
+              item.fromBinLocation || binById.get(item.productId) || '—',
               item.quantity,
               formatAmount(item.unitPrice),
               formatAmount(item.quantity * item.unitPrice),
@@ -206,7 +231,17 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
                               <i className="ri-box-3-line text-emerald-500 text-xs"></i>
                             )}
                           </div>
-                          <span className="font-medium text-gray-800">{item.productName}</span>
+                          <div>
+                            <span className="font-medium text-gray-800">{item.productName}</span>
+                            {(item.fromBinLocation || item.toBinLocation) && (
+                              <p className="text-[11px] text-gray-400 font-mono">
+                                {item.fromBinLocation && `Bin: ${item.fromBinLocation}`}
+                                {item.fromBinLocation && item.toBinLocation && ' → '}
+                                {!item.fromBinLocation && item.toBinLocation && 'Bin → '}
+                                {item.toBinLocation}
+                              </p>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-gray-500 font-mono text-xs">{item.sku}</td>
@@ -266,6 +301,24 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
               </div>
               {canAct && needsDocument && (
                 <>
+                  {destBinOptions.length > 0 && (
+                    <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
+                      <p className="text-xs font-semibold text-gray-600">Destination bin — where each item lands in {transfer.toWarehouse}</p>
+                      {transfer.items.map((item) => (
+                        <div key={item.productId} className="flex items-center justify-between gap-3">
+                          <span className="text-xs text-gray-600 truncate">{item.productName} <span className="text-gray-400">×{item.quantity}</span></span>
+                          <select
+                            value={toBinByProduct[item.productId] ?? ''}
+                            onChange={(e) => setToBinByProduct((prev) => ({ ...prev, [item.productId]: e.target.value }))}
+                            className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer shrink-0"
+                          >
+                            <option value="">Unassigned</option>
+                            {destBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {documentFile ? (
                     <div className="flex items-center gap-2.5 bg-white border border-gray-200 rounded-lg p-2.5">
                       <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
@@ -293,7 +346,7 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
                     </label>
                   )}
                   <button
-                    onClick={() => documentFile && onStatusChange(transfer.id, nextStatus, documentFile)}
+                    onClick={() => documentFile && onStatusChange(transfer.id, nextStatus, documentFile, toBinByProduct)}
                     disabled={statusChanging || !documentFile}
                     title={documentFile ? undefined : 'Attach the delivery document above to enable'}
                     className="w-full px-5 py-2.5 bg-emerald-500 text-white text-sm font-semibold rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"

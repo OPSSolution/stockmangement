@@ -10,6 +10,8 @@ export interface ReturnItem {
   quantity: number;
   unitPrice: number;
   condition?: ReturnCondition;
+  /** Which bin the returned units are being put away into — set during inspection. */
+  binLocation?: string;
 }
 
 export interface ReturnRequest {

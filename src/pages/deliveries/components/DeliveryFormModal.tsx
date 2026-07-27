@@ -23,7 +23,7 @@ const stepOptions: DeliveryStep[] = ['prepare', 'ready', 'in_transit', 'delivere
 const emptyForm = {
   fromWarehouse: '',
   toWarehouse: '',
-  items: [] as { productId?: string; productName: string; sku: string; imageUrl?: string | null; quantity: number }[],
+  items: [] as { productId?: string; productName: string; sku: string; imageUrl?: string | null; quantity: number; fromBinLocation?: string }[],
   status: 'prepare' as DeliveryStep,
   estimatedDelivery: '',
   timeline: [] as { step: DeliveryStep; timestamp: string; note: string; completedBy?: string }[],
@@ -47,9 +47,11 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [selectedQty, setSelectedQty] = useState(1);
+  const [selectedBin, setSelectedBin] = useState('');
   const [imageMode, setImageMode] = useState<'file' | 'url'>('file');
   const [error, setError] = useState('');
   const [reserved, setReserved] = useState<Record<string, number>>({});
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
 
   const autoTransferId = useMemo(
     () => `TRF-${String(Math.floor(Date.now() / 1000) % 100000).padStart(5, '0')}`,
@@ -65,9 +67,19 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
       const { data, error } = await supabase.from('warehouses').select('name').order('name', { ascending: true });
       if (!error && data) setWarehouses(data.map((w) => w.name as string));
     };
+    const fetchBinStock = async () => {
+      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location');
+      const map: Record<string, string[]> = {};
+      (data || []).forEach((row) => {
+        const pid = row.product_id as string;
+        (map[pid] ??= []).push(row.bin_location as string);
+      });
+      setBinStockByProduct(map);
+    };
 
     fetchProducts();
     fetchWarehouses();
+    fetchBinStock();
     getReservedQuantities(delivery ? { excludeDeliveryId: delivery.id } : {}).then(setReserved);
   }, [delivery]);
 
@@ -110,6 +122,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
   );
 
   const destinationWarehouses = warehouses.filter((w) => w !== form.fromWarehouse);
+  const selectedBinOptions = binStockByProduct[selectedProductId] || [];
 
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProductId);
@@ -125,11 +138,19 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
       ...prev,
       items: [
         ...prev.items,
-        { productId: product.id, productName: product.name, sku: product.sku, imageUrl: product.image_url || null, quantity: selectedQty },
+        {
+          productId: product.id,
+          productName: product.name,
+          sku: product.sku,
+          imageUrl: product.image_url || null,
+          quantity: selectedQty,
+          fromBinLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0],
+        },
       ],
     }));
     setSelectedProductId('');
     setSelectedQty(1);
+    setSelectedBin('');
   };
 
   const handleFilePick = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -175,10 +196,12 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
 
     const now = new Date().toLocaleString('sv').replace('T', ' ').slice(0, 16);
     const items = form.items.map((item) => ({
+      productId: item.productId,
       productName: item.productName,
       sku: item.sku,
       imageUrl: item.imageUrl || null,
       quantity: item.quantity,
+      fromBinLocation: item.fromBinLocation,
     }));
 
     const timeline = delivery?.timeline?.length
@@ -344,7 +367,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
             <div className="flex flex-col sm:flex-row gap-2">
               <select
                 value={selectedProductId}
-                onChange={(e) => setSelectedProductId(e.target.value)}
+                onChange={(e) => { setSelectedProductId(e.target.value); setSelectedBin(''); }}
                 disabled={!form.fromWarehouse}
                 className={`${inputClass} sm:flex-1`}
               >
@@ -355,6 +378,16 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                   </option>
                 ))}
               </select>
+              {selectedBinOptions.length > 1 && (
+                <select
+                  value={selectedBin}
+                  onChange={(e) => setSelectedBin(e.target.value)}
+                  className={`${inputClass} sm:w-36`}
+                >
+                  <option value="">From bin…</option>
+                  {selectedBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+              )}
               <input
                 type="number"
                 min={1}
@@ -372,7 +405,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
               <button
                 type="button"
                 onClick={addItem}
-                disabled={!selectedProductId}
+                disabled={!selectedProductId || (selectedBinOptions.length > 1 && !selectedBin)}
                 className="px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 disabled:opacity-50 cursor-pointer whitespace-nowrap"
               >
                 Add item
@@ -402,7 +435,10 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                                 <i className="ri-box-3-line text-emerald-500 text-xs"></i>
                               )}
                             </div>
-                            <span className="text-gray-700">{item.productName}</span>
+                            <div>
+                              <span className="text-gray-700">{item.productName}</span>
+                              {item.fromBinLocation && <p className="text-[11px] text-gray-400 font-mono">Bin: {item.fromBinLocation}</p>}
+                            </div>
                           </div>
                         </td>
                         <td className="px-3 py-2 text-gray-500 font-mono text-xs">{item.sku}</td>
