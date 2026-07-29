@@ -13,6 +13,8 @@ import { logAudit } from '@/lib/auditLog';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { notifyAdmins } from '@/lib/notifyAdmins';
 import { asArray } from '@/pages/warehouses/warehouseShared';
+import { expirySuffix, expiryTone, formatExpiry } from '@/lib/expiry';
+import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
 
 interface CustomFieldAnswer {
   key: string;
@@ -106,6 +108,7 @@ interface ProductOption {
   low_stock_threshold: number;
   warehouse: string;
   bin_location?: string | null;
+  expiry_date?: string | null;
 }
 
 const PRIORITIES = [
@@ -197,7 +200,7 @@ export default function RequestsPage() {
 
   const [requests, setRequests] = useState<StockRequest[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
-  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, BinStockRow[]>>({});
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [templates, setTemplates] = useState<RequestFormTemplate[]>([]);
   const [reserved, setReserved] = useState<Record<string, number>>({});
@@ -231,6 +234,7 @@ export default function RequestsPage() {
   const [receiptChecked, setReceiptChecked] = useState(false);
   const [dispatchBinByProduct, setDispatchBinByProduct] = useState<Record<string, string>>({});
   const [dispatchBinOptions, setDispatchBinOptions] = useState<string[]>([]);
+  const [dispatchBinQtyByProduct, setDispatchBinQtyByProduct] = useState<Record<string, BinStockRow[]>>({});
 
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -264,21 +268,16 @@ export default function RequestsPage() {
 
   useEffect(() => {
     async function loadOptions() {
-      let productsQuery = supabase.from('products').select('id, name, sku, image_url, stock, low_stock_threshold, warehouse, bin_location');
+      let productsQuery = supabase.from('products').select('id, name, sku, image_url, stock, low_stock_threshold, warehouse, bin_location, expiry_date');
       let warehousesQuery = supabase.from('warehouses').select('name').order('name', { ascending: true });
       if (warehouseScope) {
         productsQuery = productsQuery.in('warehouse', warehouseScope);
         warehousesQuery = warehousesQuery.in('name', warehouseScope);
       }
-      const [{ data: p }, { data: w }, { data: bins }] = await Promise.all([productsQuery, warehousesQuery, supabase.from('product_bin_stock').select('product_id, bin_location')]);
+      const [{ data: p }, { data: w }, { data: bins }] = await Promise.all([productsQuery, warehousesQuery, supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date')]);
       if (p) setProducts(p as ProductOption[]);
       if (w) setWarehouses(w.map((row) => row.name as string));
-      const map: Record<string, string[]> = {};
-      (bins || []).forEach((row) => {
-        const pid = row.product_id as string;
-        (map[pid] ??= []).push(row.bin_location as string);
-      });
-      setBinStockByProduct(map);
+      setBinStockByProduct(groupBinStock((bins || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
     }
     loadOptions();
   }, [warehouseScope]);
@@ -310,11 +309,25 @@ export default function RequestsPage() {
     (async () => {
       const [{ data: wh }, { data: bins }] = await Promise.all([
         supabase.from('warehouses').select('bin_locations').eq('name', viewingReq.warehouse).maybeSingle(),
-        supabase.from('product_bin_stock').select('bin_location').in('product_id', viewingReq.items.map((i) => i.productId)),
+        supabase.from('product_bin_stock').select('product_id, bin_location, quantity').in('product_id', viewingReq.items.map((i) => i.productId)),
       ]);
       const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
-      const productBins = (bins || []).map((row) => row.bin_location as string);
-      setDispatchBinOptions([...new Set([...registryBins, ...productBins])]);
+      const productBinRows = (bins || []) as { product_id: string; bin_location: string; quantity: number }[];
+      setDispatchBinOptions([...new Set([...registryBins, ...productBinRows.map((row) => row.bin_location)])]);
+      const qtyByProduct = groupBinStock(productBinRows);
+      setDispatchBinQtyByProduct(qtyByProduct);
+      // Default whichever items don't already have a bin assigned to the one with
+      // the least stock on hand — still freely changeable in the dropdown below.
+      setDispatchBinByProduct((prev) => {
+        const next = { ...prev };
+        viewingReq.items.forEach((item) => {
+          if (!next[item.productId]) {
+            const preferred = lowestQuantityBin(qtyByProduct[item.productId]);
+            if (preferred) next[item.productId] = preferred;
+          }
+        });
+        return next;
+      });
     })();
   }, [viewingReq?.id, viewingReq?.warehouse, viewingReq?.dispatched_at]);
 
@@ -433,7 +446,7 @@ export default function RequestsPage() {
           packageWeight,
           unit: selectedUnit.trim() || null,
           totalKg,
-          binLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0],
+          binLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0]?.bin_location,
         },
       ],
     }));
@@ -1074,7 +1087,7 @@ export default function RequestsPage() {
                 <div className="flex flex-wrap gap-2 mb-3">
                   <select
                     value={selectedProduct}
-                    onChange={(e) => { setSelectedProduct(e.target.value); setSelectedBin(''); }}
+                    onChange={(e) => { setSelectedProduct(e.target.value); setSelectedBin(lowestQuantityBin(binStockByProduct[e.target.value])); }}
                     disabled={!form.warehouse}
                     className="flex-1 min-w-[180px] border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer disabled:opacity-50"
                   >
@@ -1087,10 +1100,14 @@ export default function RequestsPage() {
                     <select
                       value={selectedBin}
                       onChange={(e) => setSelectedBin(e.target.value)}
-                      className="w-32 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
+                      className="w-44 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
                     >
                       <option value="">From bin…</option>
-                      {selectedBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                      {selectedBinOptions.map((b) => (
+                        <option key={b.bin_location} value={b.bin_location}>
+                          {b.bin_location} ({b.quantity} on hand){b.expiry_date ? ` — Exp ${formatExpiry(b.expiry_date)}` : ''}
+                        </option>
+                      ))}
                     </select>
                   )}
                   <input
@@ -1164,8 +1181,17 @@ export default function RequestsPage() {
                                 <div>
                                   <span className="font-medium text-gray-800">{item.productName}</span>
                                   {(() => {
-                                    const bin = products.find((p) => p.id === item.productId)?.bin_location;
-                                    return bin ? <p className="text-[11px] text-gray-400 font-mono">Bin: {bin}</p> : null;
+                                    const matchedProduct = products.find((p) => p.id === item.productId);
+                                    const bin = item.binLocation || matchedProduct?.bin_location;
+                                    const itemExpiry = binExpiry(binStockByProduct[item.productId], bin) ?? matchedProduct?.expiry_date;
+                                    return (
+                                      <>
+                                        {bin && <p className="text-[11px] text-gray-400 font-mono">Bin: {bin}</p>}
+                                        {itemExpiry && (
+                                          <p className={`text-[11px] ${expiryTone(itemExpiry)}`}>Exp {formatExpiry(itemExpiry)}</p>
+                                        )}
+                                      </>
+                                    );
                                   })()}
                                 </div>
                               </div>
@@ -1308,7 +1334,7 @@ export default function RequestsPage() {
                             >
                               <option value="">{form.warehouse ? 'Select product…' : 'Select a warehouse first'}</option>
                               {products.filter((p) => p.warehouse === form.warehouse).map((p) => (
-                                <option key={p.id} value={`${p.name} (${p.sku})`}>{p.name} ({p.sku}) — {p.stock} in stock</option>
+                                <option key={p.id} value={`${p.name} (${p.sku})`}>{p.name} ({p.sku}) — {p.stock} in stock{expirySuffix(p.expiry_date)}</option>
                               ))}
                             </select>
                           ) : (
@@ -1782,7 +1808,12 @@ export default function RequestsPage() {
                                   className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer shrink-0"
                                 >
                                   <option value="">Unassigned</option>
-                                  {dispatchBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                                  {dispatchBinOptions
+                                    .map((b) => ({ bin: b, qty: dispatchBinQtyByProduct[item.productId]?.find((row) => row.bin_location === b)?.quantity }))
+                                    .sort((a, b) => (a.qty ?? Infinity) - (b.qty ?? Infinity))
+                                    .map(({ bin, qty }) => (
+                                      <option key={bin} value={bin}>{bin}{qty !== undefined ? ` (${qty} on hand)` : ''}</option>
+                                    ))}
                                 </select>
                               </div>
                             ))}

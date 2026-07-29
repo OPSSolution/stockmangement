@@ -28,6 +28,8 @@ export interface ProductBinStock {
   productId: string;
   binLocation: string;
   quantity: number;
+  /** Expiry of the batch currently sitting in this bin — bins can carry different batches/dates. */
+  expiryDate?: string | null;
 }
 
 export interface StockAlert {

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { DeliveryRecord, DeliveryStep } from '@/mocks/deliveries';
 import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
+import { expiryTone, formatExpiry } from '@/lib/expiry';
+import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
 
 interface DeliveryFormModalProps {
   delivery?: DeliveryRecord;
@@ -16,6 +18,7 @@ interface ProductOption {
   image_url?: string | null;
   stock: number;
   warehouse: string;
+  expiry_date?: string | null;
 }
 
 const stepOptions: DeliveryStep[] = ['prepare', 'ready', 'in_transit', 'delivered'];
@@ -51,7 +54,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
   const [imageMode, setImageMode] = useState<'file' | 'url'>('file');
   const [error, setError] = useState('');
   const [reserved, setReserved] = useState<Record<string, number>>({});
-  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, BinStockRow[]>>({});
 
   const autoTransferId = useMemo(
     () => `TRF-${String(Math.floor(Date.now() / 1000) % 100000).padStart(5, '0')}`,
@@ -60,7 +63,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
 
   useEffect(() => {
     const fetchProducts = async () => {
-      const { data, error } = await supabase.from('products').select('id, name, sku, image_url, stock, warehouse');
+      const { data, error } = await supabase.from('products').select('id, name, sku, image_url, stock, warehouse, expiry_date');
       if (!error) setProducts((data || []) as ProductOption[]);
     };
     const fetchWarehouses = async () => {
@@ -68,13 +71,8 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
       if (!error && data) setWarehouses(data.map((w) => w.name as string));
     };
     const fetchBinStock = async () => {
-      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location');
-      const map: Record<string, string[]> = {};
-      (data || []).forEach((row) => {
-        const pid = row.product_id as string;
-        (map[pid] ??= []).push(row.bin_location as string);
-      });
-      setBinStockByProduct(map);
+      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date');
+      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
     };
 
     fetchProducts();
@@ -144,7 +142,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
           sku: product.sku,
           imageUrl: product.image_url || null,
           quantity: selectedQty,
-          fromBinLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0],
+          fromBinLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0]?.bin_location,
         },
       ],
     }));
@@ -367,7 +365,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
             <div className="flex flex-col sm:flex-row gap-2">
               <select
                 value={selectedProductId}
-                onChange={(e) => { setSelectedProductId(e.target.value); setSelectedBin(''); }}
+                onChange={(e) => { setSelectedProductId(e.target.value); setSelectedBin(lowestQuantityBin(binStockByProduct[e.target.value])); }}
                 disabled={!form.fromWarehouse}
                 className={`${inputClass} sm:flex-1`}
               >
@@ -382,10 +380,14 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                 <select
                   value={selectedBin}
                   onChange={(e) => setSelectedBin(e.target.value)}
-                  className={`${inputClass} sm:w-36`}
+                  className={`${inputClass} sm:w-48`}
                 >
                   <option value="">From bin…</option>
-                  {selectedBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                  {selectedBinOptions.map((b) => (
+                    <option key={b.bin_location} value={b.bin_location}>
+                      {b.bin_location} ({b.quantity} on hand){b.expiry_date ? ` — Exp ${formatExpiry(b.expiry_date)}` : ''}
+                    </option>
+                  ))}
                 </select>
               )}
               <input
@@ -424,7 +426,10 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {form.items.map((item) => (
+                    {form.items.map((item) => {
+                      const matchedProduct = products.find((p) => p.id === item.productId);
+                      const itemExpiry = binExpiry(binStockByProduct[item.productId || ''], item.fromBinLocation) ?? matchedProduct?.expiry_date;
+                      return (
                       <tr key={`${item.sku}-${item.productName}`}>
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-2.5">
@@ -438,6 +443,9 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                             <div>
                               <span className="text-gray-700">{item.productName}</span>
                               {item.fromBinLocation && <p className="text-[11px] text-gray-400 font-mono">Bin: {item.fromBinLocation}</p>}
+                              {itemExpiry && (
+                                <p className={`text-[11px] ${expiryTone(itemExpiry)}`}>Exp {formatExpiry(itemExpiry)}</p>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -449,7 +457,8 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -4,6 +4,8 @@ import type { OrderCreateDraft } from '../orderCreateUtils';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { availableStock } from '@/lib/stockReservations';
 import { supabase } from '@/lib/supabase';
+import { expiryTone, formatExpiry } from '@/lib/expiry';
+import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
 
 interface OrderFormModalProps {
   products: Product[];
@@ -35,7 +37,7 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
   const [pickerProduct, setPickerProduct] = useState('');
   const [pickerQty, setPickerQty] = useState(1);
   const [pickerBin, setPickerBin] = useState('');
-  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, BinStockRow[]>>({});
 
   useEffect(() => {
     if (initialDraft) {
@@ -45,13 +47,8 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location');
-      const map: Record<string, string[]> = {};
-      (data || []).forEach((row) => {
-        const pid = row.product_id as string;
-        (map[pid] ??= []).push(row.bin_location as string);
-      });
-      setBinStockByProduct(map);
+      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date');
+      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
     })();
   }, []);
 
@@ -77,7 +74,7 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
 
   const handleAddItem = () => {
     if (!pickerProduct) return;
-    setDraft((prev) => ({ ...prev, lines: [...prev.lines, { productId: pickerProduct, quantity: pickerQty, warehouse: pickerWarehouse, binLocation: pickerBinOptions.length > 1 ? pickerBin || undefined : pickerBinOptions[0] }] }));
+    setDraft((prev) => ({ ...prev, lines: [...prev.lines, { productId: pickerProduct, quantity: pickerQty, warehouse: pickerWarehouse, binLocation: pickerBinOptions.length > 1 ? pickerBin || undefined : pickerBinOptions[0]?.bin_location }] }));
     setPickerProduct('');
     setPickerQty(1);
     setPickerBin('');
@@ -157,7 +154,7 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
               </select>
               <select
                 value={pickerProduct}
-                onChange={(e) => { setPickerProduct(e.target.value); setPickerBin(''); }}
+                onChange={(e) => { setPickerProduct(e.target.value); setPickerBin(lowestQuantityBin(binStockByProduct[e.target.value])); }}
                 disabled={!pickerWarehouse}
                 className="flex-1 min-w-40 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer disabled:bg-gray-50 disabled:text-gray-400"
               >
@@ -171,7 +168,11 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
                   className="border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
                 >
                   <option value="">From bin…</option>
-                  {pickerBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                  {pickerBinOptions.map((b) => (
+                    <option key={b.bin_location} value={b.bin_location}>
+                      {b.bin_location} ({b.quantity} on hand){b.expiry_date ? ` — Exp ${formatExpiry(b.expiry_date)}` : ''}
+                    </option>
+                  ))}
                 </select>
               )}
               <input
@@ -191,6 +192,14 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
                 <i className="ri-add-line mr-1"></i>Add
               </button>
             </div>
+            {(() => {
+              const pickedBinExpiry = binExpiry(pickerBinOptions, pickerBinOptions.length > 1 ? pickerBin : pickerBinOptions[0]?.bin_location) ?? pickerProductObj?.expiryDate;
+              return pickedBinExpiry ? (
+                <p className={`text-[11px] ${expiryTone(pickedBinExpiry)}`}>
+                  <i className="ri-calendar-close-line mr-1"></i>Expires {formatExpiry(pickedBinExpiry)}
+                </p>
+              ) : null;
+            })()}
 
             {/* Added items */}
             {draft.lines.length > 0 ? (
@@ -208,6 +217,8 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
                   <tbody className="divide-y divide-gray-100">
                     {draft.lines.map((line, index) => {
                       const product = products.find((p) => p.id === line.productId);
+                      const lineBin = line.binLocation || product?.binLocation;
+                      const lineExpiry = binExpiry(binStockByProduct[line.productId], lineBin) ?? product?.expiryDate;
                       return (
                         <tr key={index}>
                           <td className="px-3 py-2.5">
@@ -225,6 +236,9 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
                                   {product?.sku} · {product?.warehouse ?? line.warehouse}
                                   {(line.binLocation || product?.binLocation) && <> · <span className="font-mono">Bin: {line.binLocation || product?.binLocation}</span></>}
                                 </p>
+                                {lineExpiry && (
+                                  <p className={`text-[11px] ${expiryTone(lineExpiry)}`}>Exp {formatExpiry(lineExpiry)}</p>
+                                )}
                               </div>
                             </div>
                           </td>

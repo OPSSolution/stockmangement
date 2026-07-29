@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { expiryTone, formatExpiry } from '@/lib/expiry';
+import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
 
 interface NewPOItem {
   productId: string;
@@ -35,7 +37,9 @@ interface ProductOption {
   sku: string;
   image_url?: string | null;
   price: number;
+  warehouse: string;
   bin_location?: string | null;
+  expiry_date?: string | null;
 }
 
 interface VendorOption {
@@ -62,7 +66,7 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
   const [selectedBin, setSelectedBin] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [products, setProducts] = useState<ProductOption[]>([]);
-  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, BinStockRow[]>>({});
   const [vendors, setVendors] = useState<VendorOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [nextId, setNextId] = useState<string | null>(null);
@@ -75,20 +79,15 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
   const fetchData = async () => {
     setLoading(true);
     const [prodRes, vendRes, binRes] = await Promise.all([
-      supabase.from('products').select('id, name, sku, image_url, price, bin_location'),
+      supabase.from('products').select('id, name, sku, image_url, price, warehouse, bin_location, expiry_date'),
       supabase.from('vendors').select('name, contacts, payment_terms'),
-      supabase.from('product_bin_stock').select('product_id, bin_location'),
+      supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date'),
     ]);
     if (prodRes.error) console.error(prodRes.error);
-    else setProducts((prodRes.data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, bin_location: p.bin_location })));
+    else setProducts((prodRes.data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, warehouse: p.warehouse, bin_location: p.bin_location, expiry_date: p.expiry_date })));
     if (vendRes.error) console.error(vendRes.error);
     else setVendors((vendRes.data || []).map((v) => ({ name: v.name, contacts: v.contacts || [], payment_terms: v.payment_terms })));
-    const map: Record<string, string[]> = {};
-    (binRes.data || []).forEach((row) => {
-      const pid = row.product_id as string;
-      (map[pid] ??= []).push(row.bin_location as string);
-    });
-    setBinStockByProduct(map);
+    setBinStockByProduct(groupBinStock((binRes.data || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
     setLoading(false);
   };
 
@@ -115,11 +114,11 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
     setSelectedProduct('');
   };
 
-  const productOptions = products.filter((p) => !form.items.find((i) => i.productId === p.id));
+  const productOptions = products.filter((p) => p.warehouse === form.warehouse && !form.items.find((i) => i.productId === p.id));
 
   const handleProductSelect = (id: string) => {
     setSelectedProduct(id);
-    setSelectedBin('');
+    setSelectedBin(lowestQuantityBin(binStockByProduct[id]));
     const p = products.find((prod) => prod.id === id);
     if (p) setSelectedCost(p.price * 0.6);
   };
@@ -141,7 +140,7 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
           orderedQty: selectedQty,
           receivedQty: 0,
           unitCost: selectedCost,
-          binLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0],
+          binLocation: selectedBinOptions.length > 1 ? selectedBin || undefined : selectedBinOptions[0]?.bin_location,
         },
       ],
     }));
@@ -213,7 +212,10 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
               <label className="text-sm font-medium text-gray-700 block mb-1.5">Deliver to Warehouse</label>
               <select
                 value={form.warehouse}
-                onChange={(e) => setForm((f) => ({ ...f, warehouse: e.target.value as typeof f.warehouse }))}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, warehouse: e.target.value as typeof f.warehouse, items: [] }));
+                  setSelectedProduct('');
+                }}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer"
               >
                 <option value="BM Warehouse">BM Warehouse</option>
@@ -289,10 +291,14 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                     <select
                       value={selectedBin}
                       onChange={(e) => setSelectedBin(e.target.value)}
-                      className="w-32 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
+                      className="w-44 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
                     >
                       <option value="">Bin…</option>
-                      {selectedBinOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                      {selectedBinOptions.map((b) => (
+                        <option key={b.bin_location} value={b.bin_location}>
+                          {b.bin_location} ({b.quantity} on hand){b.expiry_date ? ` — Exp ${formatExpiry(b.expiry_date)}` : ''}
+                        </option>
+                      ))}
                     </select>
                   )}
                   <input
@@ -337,7 +343,9 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {form.items.map((item) => {
-                      const bin = item.binLocation || products.find((p) => p.id === item.productId)?.bin_location;
+                      const matchedProduct = products.find((p) => p.id === item.productId);
+                      const bin = item.binLocation || matchedProduct?.bin_location;
+                      const itemExpiry = binExpiry(binStockByProduct[item.productId], bin) ?? matchedProduct?.expiry_date;
                       return (
                       <tr key={item.productId}>
                         <td className="px-4 py-2.5">
@@ -352,6 +360,9 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                             <div>
                               <p className="font-medium text-gray-800 text-sm">{item.productName}</p>
                               <p className="text-xs text-gray-400 font-mono">{item.sku}{bin ? ` · Bin: ${bin}` : ''}</p>
+                              {itemExpiry && (
+                                <p className={`text-[11px] ${expiryTone(itemExpiry)}`}>Exp {formatExpiry(itemExpiry)}</p>
+                              )}
                             </div>
                           </div>
                         </td>

@@ -1,32 +1,20 @@
 import { useState } from 'react';
 import type { Product, ProductBinStock } from '@/mocks/inventory';
 import type { StockHistoryEntry } from '@/mocks/stockHistory';
+import BinCombobox, { type BinOption } from '@/components/feature/BinCombobox';
+import { buildReceiveBinOptions } from '@/lib/binStock';
 
 interface StockAdjustModalProps {
   product: Product;
   history?: StockHistoryEntry[];
   /** This product's current bin split, if it's stored across more than one. */
   binRows?: ProductBinStock[];
+  /** Every bin/rack code registered for this product's warehouse — lets stock-in adjustments
+   * put stock away in a bin the product doesn't already occupy, not just its existing bins. */
+  warehouseBinLocations?: string[];
   onClose: () => void;
   onAdjust: (productId: string, delta: number, type: string, note: string, expiryDate?: string, binLocation?: string) => void;
 }
-
-const adjustTypes = [
-  { value: 'purchase', label: 'Stock Received', icon: 'ri-add-circle-line' },
-  { value: 'return', label: 'Customer Return', icon: 'ri-arrow-go-back-line' },
-  { value: 'transfer_in', label: 'Transfer In', icon: 'ri-arrow-right-down-line' },
-  { value: 'transfer_out', label: 'Transfer Out', icon: 'ri-arrow-right-up-line' },
-  { value: 'sale', label: 'Manual Sale', icon: 'ri-shopping-bag-3-line' },
-];
-
-// Every type here has an obvious direction, so it's never left up to the user to pick.
-const fixedDirection: Record<string, 'add' | 'remove'> = {
-  purchase: 'add',
-  return: 'add',
-  transfer_in: 'add',
-  transfer_out: 'remove',
-  sale: 'remove',
-};
 
 const typeConfig: Record<string, { label: string; icon: string; color: string; bg: string }> = {
   sale: { label: 'Sale', icon: 'ri-shopping-bag-3-line', color: 'text-rose-600', bg: 'bg-rose-50' },
@@ -37,16 +25,31 @@ const typeConfig: Record<string, { label: string; icon: string; color: string; b
   adjustment: { label: 'Adjustment', icon: 'ri-equalizer-line', color: 'text-gray-600', bg: 'bg-gray-100' },
 };
 
-export default function StockAdjustModal({ product, history, binRows, onClose, onAdjust }: StockAdjustModalProps) {
+export default function StockAdjustModal({ product, history, binRows, warehouseBinLocations, onClose, onAdjust }: StockAdjustModalProps) {
   const [activeTab, setActiveTab] = useState<'adjust' | 'history'>('adjust');
-  const [adjustType, setAdjustType] = useState('purchase');
+  const [mode, setMode] = useState<'add' | 'remove'>('add');
   const [quantity, setQuantity] = useState(0);
-  const [selectedBin, setSelectedBin] = useState(() => (binRows && binRows.length === 1 ? binRows[0].binLocation : ''));
+  const [selectedBin, setSelectedBin] = useState(() => {
+    if (!binRows || binRows.length === 0) return '';
+    // Default to the bin with the least on hand — still overridable below.
+    return [...binRows].sort((a, b) => a.quantity - b.quantity)[0].binLocation;
+  });
   const [note, setNote] = useState('');
-  const [expiryDate, setExpiryDate] = useState('');
+  const [expiryDate, setExpiryDate] = useState(() => {
+    if (!binRows || binRows.length === 0) return '';
+    return [...binRows].sort((a, b) => a.quantity - b.quantity)[0].expiryDate || '';
+  });
   const [error, setError] = useState('');
 
-  const mode = fixedDirection[adjustType];
+  // Every bin's currently-tracked expiry, keyed by location — used to prefill the
+  // expiry field when the user switches bins, since each bin can carry a different batch.
+  const binExpiryByLocation: Record<string, string> = {};
+  (binRows ?? []).forEach((b) => { if (b.expiryDate) binExpiryByLocation[b.binLocation] = b.expiryDate; });
+  const handleBinChange = (bin: string) => {
+    setSelectedBin(bin);
+    setExpiryDate(binExpiryByLocation[bin] || '');
+  };
+
   const delta = mode === 'remove' ? -Math.abs(quantity) : Math.abs(quantity);
   const newStock = product.stock + delta;
   const safeHistory = Array.isArray(history) ? history : [];
@@ -56,18 +59,27 @@ export default function StockAdjustModal({ product, history, binRows, onClose, o
 
   const hasMultipleBins = (binRows?.length ?? 0) > 1;
 
+  // Stock coming in can be put away anywhere in the warehouse, not just where this
+  // product already sits — so offer every registered bin, with the product's own
+  // bins (lowest on hand first, since those get topped up first) pinned above the rest.
+  const binOptions: BinOption[] = buildReceiveBinOptions(
+    (binRows ?? []).map((b) => ({ bin_location: b.binLocation, quantity: b.quantity, expiry_date: b.expiryDate })),
+    warehouseBinLocations
+  );
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (quantity <= 0) { setError('Quantity must be greater than 0.'); return; }
     if (newStock < 0) { setError('Cannot reduce stock below 0.'); return; }
-    if (hasMultipleBins && !selectedBin) { setError('Select which bin this adjustment applies to.'); return; }
+    if (mode === 'add' && binOptions.length > 0 && !selectedBin.trim()) { setError('Select or enter which bin this adjustment applies to.'); return; }
+    if (mode === 'remove' && hasMultipleBins && !selectedBin) { setError('Select which bin this adjustment applies to.'); return; }
     setError('');
-    onAdjust(product.id, delta, adjustType, note, mode === 'add' ? expiryDate || undefined : undefined, selectedBin || undefined);
+    onAdjust(product.id, delta, 'adjustment', note, mode === 'add' ? expiryDate || undefined : undefined, selectedBin || undefined);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl flex flex-col max-h-[90dvh]">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl flex flex-col h-[90dvh]">
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0">
           <div>
             <h2 className="text-base font-bold text-gray-900">Adjust Stock</h2>
@@ -94,38 +106,37 @@ export default function StockAdjustModal({ product, history, binRows, onClose, o
             </div>
           </div>
 
-            {/* Adjustment type */}
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-2">Adjustment Type</label>
-              <div className="grid grid-cols-3 gap-2">
-                {adjustTypes.map((t) => (
-                  <button
-                    key={t.value}
-                    type="button"
-                    onClick={() => setAdjustType(t.value)}
-                    className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-xs font-medium transition-all cursor-pointer ${
-                      adjustType === t.value
-                        ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                    }`}
-                  >
-                    <i className={`${t.icon} text-base`}></i>
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Direction is implied entirely by the selected type */}
+            {/* Direction — the whole adjustment is just "add" or "remove"; the note field
+                below carries the reason (return, transfer, manual sale, correction, etc). */}
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-2">Direction</label>
-              <div className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${mode === 'add' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
-                <i className={mode === 'add' ? 'ri-add-line' : 'ri-subtract-line'}></i>
-                {mode === 'add' ? 'Adding Stock' : 'Removing Stock'}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMode('add')}
+                  className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium border transition-all cursor-pointer ${
+                    mode === 'add'
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <i className="ri-add-line"></i> Add Stock
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('remove')}
+                  className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium border transition-all cursor-pointer ${
+                    mode === 'remove'
+                      ? 'border-red-300 bg-red-50 text-red-600'
+                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <i className="ri-subtract-line"></i> Remove Stock
+                </button>
               </div>
             </div>
 
-            {/* Warehouse & bin location — informational only, not editable here */}
+            {/* Warehouse & bin location */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Warehouse</label>
@@ -139,14 +150,18 @@ export default function StockAdjustModal({ product, history, binRows, onClose, o
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Bin Location</label>
-                {hasMultipleBins ? (
+                {mode === 'add' && binOptions.length > 0 ? (
+                  // Stock coming in (received, transferred in, returned) can be put away in
+                  // any bin the warehouse has, not just where this product already sits.
+                  <BinCombobox options={binOptions} value={selectedBin} onChange={handleBinChange} placeholder="Search or type a bin…" />
+                ) : hasMultipleBins ? (
                   <select
                     value={selectedBin}
-                    onChange={(e) => setSelectedBin(e.target.value)}
+                    onChange={(e) => handleBinChange(e.target.value)}
                     className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
                   >
                     <option value="">Select bin…</option>
-                    {binRows!.map((b) => (
+                    {[...binRows!].sort((a, b) => a.quantity - b.quantity).map((b) => (
                       <option key={b.id} value={b.binLocation}>{b.binLocation} ({b.quantity} on hand)</option>
                     ))}
                   </select>
@@ -161,6 +176,19 @@ export default function StockAdjustModal({ product, history, binRows, onClose, o
                 )}
               </div>
             </div>
+
+            {/* Expiry date for the bin selected above — only meaningful when stock is coming in */}
+            {mode === 'add' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Expiry Date for this bin (optional)</label>
+                <input
+                  type="date"
+                  value={expiryDate}
+                  onChange={(e) => setExpiryDate(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
+                />
+              </div>
+            )}
 
             {/* Quantity */}
             <div>
@@ -180,19 +208,6 @@ export default function StockAdjustModal({ product, history, binRows, onClose, o
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
               />
             </div>
-
-            {/* Expiry date — only meaningful when stock is coming in */}
-            {mode === 'add' && (
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Expiry Date (optional)</label>
-                <input
-                  type="date"
-                  value={expiryDate}
-                  onChange={(e) => setExpiryDate(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
-                />
-              </div>
-            )}
 
           {/* Note */}
           <div>

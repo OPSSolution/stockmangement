@@ -4,6 +4,7 @@ import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { availableStock } from '@/lib/stockReservations';
 import { formatDateTime } from '@/lib/formatDateTime';
+import { expiryTone } from '@/lib/expiry';
 
 interface ProductTableProps {
   products: Product[];
@@ -11,6 +12,11 @@ interface ProductTableProps {
   reserved: Record<string, number>;
   /** productId -> its bin split, when stock is spread across more than one bin. */
   binStockByProduct: Record<string, ProductBinStock[]>;
+  /** sku -> every product row with that SKU (across all warehouses, unfiltered) — used to flag when
+   * the same SKU also exists in other warehouses as a separate row. */
+  siblingsBySku: Record<string, { id: string; warehouse: string; stock: number }[]>;
+  /** Jump the table to a given warehouse, clearing other filters so the row is guaranteed visible. */
+  onJumpToWarehouse: (warehouse: string) => void;
   onEdit: (product: Product) => void;
   onDelete: (product: Product) => void;
   onAdjust: (product: Product) => void;
@@ -32,16 +38,9 @@ const statusConfig = {
   out_of_stock: { label: 'Out of Stock', cls: 'bg-red-50 text-red-600' },
 };
 
-/** Expired → red, within 30 days → amber, otherwise → gray. */
-function expiryTone(expiryDate: string): string {
-  const daysLeft = (new Date(expiryDate).getTime() - Date.now()) / 86400000;
-  if (daysLeft < 0) return 'text-red-600';
-  if (daysLeft <= 30) return 'text-amber-600';
-  return 'text-gray-400';
-}
-
-export default function ProductTable({ products, reserved, binStockByProduct, onEdit, onDelete, onAdjust, onViewHistory, onViewDetails }: ProductTableProps) {
+export default function ProductTable({ products, reserved, binStockByProduct, siblingsBySku, onJumpToWarehouse, onEdit, onDelete, onAdjust, onViewHistory, onViewDetails }: ProductTableProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [openSiblingMenu, setOpenSiblingMenu] = useState<string | null>(null);
   const { formatAmount } = useCurrency();
   const { canEdit, canDelete, canAccess } = useAuth();
   const showEdit = canEdit('inventory');
@@ -57,6 +56,7 @@ export default function ProductTable({ products, reserved, binStockByProduct, on
             <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">SKU</th>
             <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Category</th>
             <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Warehouse</th>
+            <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Bin</th>
             <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Stock</th>
             <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Price</th>
             <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
@@ -71,6 +71,7 @@ export default function ProductTable({ products, reserved, binStockByProduct, on
             const reservedQty = reserved[p.id] || 0;
             const onHoldQty = p.onHoldStock || 0;
             const available = availableStock(p.stock, reserved, p.id, onHoldQty);
+            const siblings = (siblingsBySku[p.sku] || []).filter((s) => s.id !== p.id);
             return (
               <tr key={p.id} className="hover:bg-gray-50/50 transition-colors">
                 <td className="py-3 px-4">
@@ -108,26 +109,64 @@ export default function ProductTable({ products, reserved, binStockByProduct, on
                   <div className="flex flex-col">
                     <span className="text-gray-700 text-xs font-medium">{p.warehouse}</span>
                     {p.vendor && <span className="text-gray-400 text-xs">{p.vendor}</span>}
-                    {(() => {
-                      const bins = binStockByProduct[p.id] ?? [];
-                      if (bins.length > 1) {
-                        return (
-                          <span
-                            className="text-gray-400 text-xs mt-0.5"
-                            title={bins.map((b) => `${b.binLocation}: ${b.quantity}`).join(', ')}
+                    {siblings.length > 0 && (
+                      <div className="relative mt-1">
+                        <button
+                          type="button"
+                          onClick={() => setOpenSiblingMenu(openSiblingMenu === p.id ? null : p.id)}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-600 hover:text-sky-700 cursor-pointer"
+                        >
+                          <i className="ri-building-2-line"></i>
+                          +{siblings.length} other warehouse{siblings.length > 1 ? 's' : ''}
+                        </button>
+                        {openSiblingMenu === p.id && (
+                          <div
+                            className="absolute left-0 top-6 z-20 w-56 bg-white border border-gray-100 rounded-xl shadow-md py-1"
+                            onMouseLeave={() => setOpenSiblingMenu(null)}
                           >
-                            <i className="ri-map-pin-2-line mr-0.5"></i>{bins.length} bins
-                          </span>
-                        );
-                      }
-                      const single = bins[0]?.binLocation ?? p.binLocation;
-                      return single ? (
-                        <span className="text-gray-400 text-xs mt-0.5" title="Bin location">
-                          <i className="ri-map-pin-2-line mr-0.5"></i>{single}
-                        </span>
-                      ) : null;
-                    })()}
+                            <p className="px-3 py-1.5 text-[11px] text-gray-400 uppercase tracking-wide">Same SKU, other warehouses</p>
+                            {siblings.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => { onJumpToWarehouse(s.warehouse); setOpenSiblingMenu(null); }}
+                                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 cursor-pointer text-left"
+                              >
+                                <span className="truncate">{s.warehouse}</span>
+                                <span className="text-gray-400 flex-shrink-0">{s.stock} in stock</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
+                </td>
+                <td className="py-3 px-4">
+                  {(() => {
+                    const bins = binStockByProduct[p.id] ?? [];
+                    if (bins.length > 0) {
+                      return (
+                        <div className="flex flex-col gap-0.5">
+                          {[...bins].sort((a, b) => b.quantity - a.quantity).map((b) => (
+                            <span key={b.id} className="text-xs text-gray-600 whitespace-nowrap">
+                              <i className="ri-map-pin-2-line mr-1 text-gray-400"></i>
+                              {b.binLocation} <span className="text-gray-400">×{b.quantity}</span>
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    }
+                    if (p.binLocation) {
+                      return (
+                        <span className="text-xs text-gray-600 whitespace-nowrap">
+                          <i className="ri-map-pin-2-line mr-1 text-gray-400"></i>
+                          {p.binLocation} <span className="text-gray-400">×{p.stock}</span>
+                        </span>
+                      );
+                    }
+                    return <span className="text-xs text-gray-300">—</span>;
+                  })()}
                 </td>
                 <td className="py-3 px-4 text-right">
                   <div className="flex flex-col items-end gap-1">

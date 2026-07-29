@@ -12,10 +12,10 @@ interface Action {
 const actions: Action[] = [
   { label: 'Add Product',       icon: 'ri-add-box-line',          iconBg: 'from-emerald-50 to-emerald-100/60', iconColor: 'text-emerald-600', desc: 'Add new product to inventory',  path: '/inventory?action=add'    },
   { label: 'Create Transfer',   icon: 'ri-swap-box-line',          iconBg: 'from-sky-50 to-sky-100/60',     iconColor: 'text-sky-600',     desc: 'Vendor → BM transfer request', path: '/transfers?action=new'    },
-  { label: 'New Purchase Order',icon: 'ri-shopping-cart-2-line',   iconBg: 'from-violet-50 to-violet-100/60',  iconColor: 'text-violet-600',  desc: 'BM procurement order',          path: '/purchases?action=new'    },
+  // { label: 'New Purchase Order',icon: 'ri-shopping-cart-2-line',   iconBg: 'from-violet-50 to-violet-100/60',  iconColor: 'text-violet-600',  desc: 'BM procurement order',          path: '/purchases?action=new'    },
+  { label: 'Receive Stock',     icon: 'ri-inbox-archive-line',     iconBg: 'from-teal-50 to-teal-100/60',    iconColor: 'text-teal-600',    desc: 'Log stock that just arrived',   path: '/stock-receives?action=new' },
   { label: 'Process Return',    icon: 'ri-arrow-go-back-line',     iconBg: 'from-amber-50 to-amber-100/60',   iconColor: 'text-amber-600',   desc: 'Handle customer return',        path: '/returns'                 },
   { label: 'Create Promotion',  icon: 'ri-price-tag-3-line',       iconBg: 'from-pink-50 to-pink-100/60',    iconColor: 'text-pink-500',    desc: 'Set discount rules',            path: '/promotions?action=new'   },
-  { label: 'Adjust Stock',      icon: 'ri-equalizer-2-line',       iconBg: 'from-orange-50 to-orange-100/60',  iconColor: 'text-orange-500',  desc: 'Manual stock correction',       path: '/inventory'               },
 ];
 
 export default function QuickActions() {

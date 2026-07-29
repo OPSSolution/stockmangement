@@ -12,6 +12,7 @@ import PublicOrderFormPage from "../pages/order-form/page";
 import DeliveriesPage from "../pages/deliveries/page";
 import TransfersPage from "../pages/transfers/page";
 import PurchasesPage from "../pages/purchases/page";
+import StockReceivesPage from "../pages/stock-receives/page";
 import VendorsPage from "../pages/vendors/page";
 import ReturnsPage from "../pages/returns/page";
 import WarehousesPage from "../pages/warehouses/page";
@@ -69,6 +70,10 @@ const routes: RouteObject[] = [
   {
     path: "/purchases",
     element: <ProtectedRoute permKey="purchases"><PurchasesPage /></ProtectedRoute>,
+  },
+  {
+    path: "/stock-receives",
+    element: <ProtectedRoute permKey="stock_receives"><StockReceivesPage /></ProtectedRoute>,
   },
   {
     path: "/vendors",

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
+import { expiryTone, formatExpiry } from '@/lib/expiry';
+import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
 
 interface NewTransferItem {
   productId: string;
@@ -46,6 +48,7 @@ interface ProductOption {
   stock: number;
   warehouse: string;
   bin_location?: string | null;
+  expiry_date?: string | null;
 }
 
 export default function TransferFormModal({ onClose, onSubmit }: TransferFormModalProps) {
@@ -56,7 +59,7 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
   const [selectedBin, setSelectedBin] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [products, setProducts] = useState<ProductOption[]>([]);
-  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, { bin_location: string; quantity: number }[]>>({});
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, BinStockRow[]>>({});
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [reserved, setReserved] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -70,19 +73,12 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
     const fetchProducts = async () => {
       setLoading(true);
       const [{ data, error }, { data: binRows }] = await Promise.all([
-        supabase.from('products').select('id, name, sku, image_url, stock, warehouse, bin_location'),
-        supabase.from('product_bin_stock').select('product_id, bin_location, quantity'),
+        supabase.from('products').select('id, name, sku, image_url, stock, warehouse, bin_location, expiry_date'),
+        supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date'),
       ]);
       if (error) console.error(error);
-      else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, stock: p.stock, warehouse: p.warehouse, bin_location: p.bin_location })));
-      const binMap: Record<string, { bin_location: string; quantity: number }[]> = {};
-      (binRows || []).forEach((row) => {
-        const pid = row.product_id as string;
-        const entry = { bin_location: row.bin_location as string, quantity: row.quantity as number };
-        const list = binMap[pid];
-        if (list) list.push(entry); else binMap[pid] = [entry];
-      });
-      setBinStockByProduct(binMap);
+      else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, stock: p.stock, warehouse: p.warehouse, bin_location: p.bin_location, expiry_date: p.expiry_date })));
+      setBinStockByProduct(groupBinStock((binRows || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
       setLoading(false);
     };
 
@@ -282,7 +278,7 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                 <div className="flex gap-2 mb-3">
                   <select
                     value={selectedProduct}
-                    onChange={(e) => { setSelectedProduct(e.target.value); setSelectedBin(''); }}
+                    onChange={(e) => { setSelectedProduct(e.target.value); setSelectedBin(lowestQuantityBin(binStockByProduct[e.target.value])); }}
                     className="flex-1 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer"
                   >
                     <option value="">Select product from {form.fromWarehouse}…</option>
@@ -298,7 +294,9 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                     >
                       <option value="">From bin…</option>
                       {selectedProductBins.map((b) => (
-                        <option key={b.bin_location} value={b.bin_location}>{b.bin_location} ({b.quantity})</option>
+                        <option key={b.bin_location} value={b.bin_location}>
+                          {b.bin_location} ({b.quantity} on hand){b.expiry_date ? ` — Exp ${formatExpiry(b.expiry_date)}` : ''}
+                        </option>
                       ))}
                     </select>
                   )}
@@ -340,7 +338,9 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {form.items.map((item) => {
-                      const bin = item.fromBinLocation || products.find((p) => p.id === item.productId)?.bin_location;
+                      const matchedProduct = products.find((p) => p.id === item.productId);
+                      const bin = item.fromBinLocation || matchedProduct?.bin_location;
+                      const itemExpiry = binExpiry(binStockByProduct[item.productId], bin) ?? matchedProduct?.expiry_date;
                       return (
                       <tr key={item.productId}>
                         <td className="px-4 py-2.5">
@@ -355,6 +355,9 @@ export default function TransferFormModal({ onClose, onSubmit }: TransferFormMod
                             <div>
                               <span className="font-medium text-gray-800">{item.productName}</span>
                               {bin && <p className="text-[11px] text-gray-400 font-mono">Bin: {bin}</p>}
+                              {itemExpiry && (
+                                <p className={`text-[11px] ${expiryTone(itemExpiry)}`}>Exp {formatExpiry(itemExpiry)}</p>
+                              )}
                             </div>
                           </div>
                         </td>

@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import type { PromotionType } from '@/mocks/promotions';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { uploadPromotionDocument } from '@/lib/uploadPromotionDocument';
+import { expiryTone, formatExpiry } from '@/lib/expiry';
 
 interface FormData {
   name: string;
@@ -33,6 +34,7 @@ interface ProductOption {
   image_url?: string | null;
   price: number;
   stock: number;
+  expiry_date?: string | null;
 }
 
 const typeOptions: { value: PromotionType; label: string; icon: string; desc: string }[] = [
@@ -83,9 +85,9 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
 
   const fetchProducts = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('products').select('id, name, sku, image_url, price, stock');
+    const { data, error } = await supabase.from('products').select('id, name, sku, image_url, price, stock, expiry_date');
     if (error) console.error(error);
-    else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, stock: p.stock })));
+    else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, stock: p.stock, expiry_date: p.expiry_date })));
     setLoading(false);
   };
 
@@ -380,6 +382,9 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">{p.name}</p>
                       <p className="text-xs text-gray-400 font-mono">{p.sku} · {formatAmount(p.price)} · {p.stock} in stock</p>
+                      {p.expiry_date && (
+                        <p className={`text-[11px] ${expiryTone(p.expiry_date)}`}>Exp {formatExpiry(p.expiry_date)}</p>
+                      )}
                     </div>
                   </button>
                 ))}

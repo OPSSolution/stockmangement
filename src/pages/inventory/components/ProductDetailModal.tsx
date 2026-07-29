@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import type { Product, ProductBinStock } from '@/mocks/inventory';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { availableStock } from '@/lib/stockReservations';
 import { formatDateTime } from '@/lib/formatDateTime';
+import { expiryTone, formatExpiry } from '@/lib/expiry';
 
 interface ProductDetailModalProps {
   product: Product;
@@ -10,10 +12,14 @@ interface ProductDetailModalProps {
   reserved: Record<string, number>;
   /** This product's bin split, if it's stored across more than one. */
   binRows: ProductBinStock[];
+  /** Other product rows sharing this SKU, one per other warehouse they're stocked in. */
+  siblings: { id: string; warehouse: string; stock: number }[];
   onClose: () => void;
   onEdit: (product: Product) => void;
   onAdjust: (product: Product) => void;
   onViewHistory: (product: Product) => void;
+  /** Jump the inventory table to a given warehouse — closes this modal first. */
+  onJumpToWarehouse: (warehouse: string) => void;
 }
 
 const statusConfig = {
@@ -22,14 +28,8 @@ const statusConfig = {
   out_of_stock: { label: 'Out of Stock', cls: 'bg-red-50 text-red-600' },
 };
 
-function expiryTone(expiryDate: string): string {
-  const daysLeft = (new Date(expiryDate).getTime() - Date.now()) / 86400000;
-  if (daysLeft < 0) return 'text-red-600';
-  if (daysLeft <= 30) return 'text-amber-600';
-  return 'text-gray-500';
-}
-
-export default function ProductDetailModal({ product, reserved, binRows, onClose, onEdit, onAdjust, onViewHistory }: ProductDetailModalProps) {
+export default function ProductDetailModal({ product, reserved, binRows, siblings, onClose, onEdit, onAdjust, onViewHistory, onJumpToWarehouse }: ProductDetailModalProps) {
+  const [showSiblings, setShowSiblings] = useState(false);
   const { formatAmount } = useCurrency();
   const { canEdit, canAccess } = useAuth();
   const showEdit = canEdit('inventory');
@@ -94,9 +94,40 @@ export default function ProductDetailModal({ product, reserved, binRows, onClose
               <p className="text-xs text-gray-400">Category</p>
               <p className="text-gray-800 font-medium mt-0.5">{product.category}</p>
             </div>
-            <div>
+            <div className="relative">
               <p className="text-xs text-gray-400">Warehouse</p>
               <p className="text-gray-800 font-medium mt-0.5">{product.warehouse}</p>
+              {siblings.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowSiblings((v) => !v)}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-600 hover:text-sky-700 cursor-pointer mt-0.5"
+                  >
+                    <i className="ri-building-2-line"></i>
+                    +{siblings.length} other warehouse{siblings.length > 1 ? 's' : ''}
+                  </button>
+                  {showSiblings && (
+                    <div
+                      className="absolute left-0 top-full mt-1 z-20 w-56 bg-white border border-gray-100 rounded-xl shadow-md py-1"
+                      onMouseLeave={() => setShowSiblings(false)}
+                    >
+                      <p className="px-3 py-1.5 text-[11px] text-gray-400 uppercase tracking-wide">Same SKU, other warehouses</p>
+                      {siblings.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => onJumpToWarehouse(s.warehouse)}
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 cursor-pointer text-left"
+                        >
+                          <span className="truncate">{s.warehouse}</span>
+                          <span className="text-gray-400 flex-shrink-0">{s.stock} on hand</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-400">Vendor</p>
@@ -111,7 +142,7 @@ export default function ProductDetailModal({ product, reserved, binRows, onClose
               <p className="text-gray-800 font-medium mt-0.5">{formatAmount(product.price)}</p>
             </div>
             <div>
-              <p className="text-xs text-gray-400">Expiry Date</p>
+              <p className="text-xs text-gray-400">{binRows.length > 1 ? 'Nearest Expiry' : 'Expiry Date'}</p>
               <p className={`font-medium mt-0.5 ${product.expiryDate ? expiryTone(product.expiryDate) : 'text-gray-800'}`}>
                 {product.expiryDate ? new Date(product.expiryDate).toLocaleDateString() : '—'}
               </p>
@@ -136,7 +167,12 @@ export default function ProductDetailModal({ product, reserved, binRows, onClose
               <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
                 {binRows.map((b) => (
                   <div key={b.id} className="flex items-center justify-between px-3 py-2">
-                    <span className="text-sm font-mono text-gray-700"><i className="ri-map-pin-2-line mr-1.5 text-gray-400"></i>{b.binLocation}</span>
+                    <div>
+                      <span className="text-sm font-mono text-gray-700"><i className="ri-map-pin-2-line mr-1.5 text-gray-400"></i>{b.binLocation}</span>
+                      {b.expiryDate && (
+                        <p className={`text-[11px] mt-0.5 pl-5 ${expiryTone(b.expiryDate)}`}>Exp {formatExpiry(b.expiryDate)}</p>
+                      )}
+                    </div>
                     <span className="text-sm font-semibold text-gray-800">{b.quantity}</span>
                   </div>
                 ))}

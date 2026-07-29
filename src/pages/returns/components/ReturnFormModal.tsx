@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
+import { groupBinStock, lowestQuantityBin, type BinStockRow } from '@/lib/binStock';
 
 interface RequestOptionItem {
   productId: string;
@@ -66,7 +67,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
   const [requests, setRequests] = useState<RequestOption[]>([]);
   const [itemLimits, setItemLimits] = useState<Record<string, number>>({});
   const [productPrices, setProductPrices] = useState<Record<string, number>>({});
-  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, string[]>>({});
+  const [binStockByProduct, setBinStockByProduct] = useState<Record<string, BinStockRow[]>>({});
 
   useEffect(() => {
     const fetchProductPrices = async () => {
@@ -74,13 +75,8 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
       if (!fetchError && data) setProductPrices(Object.fromEntries(data.map((p) => [p.id, p.price as number])));
     };
     const fetchBinStock = async () => {
-      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location');
-      const map: Record<string, string[]> = {};
-      (data || []).forEach((row) => {
-        const pid = row.product_id as string;
-        (map[pid] ??= []).push(row.bin_location as string);
-      });
-      setBinStockByProduct(map);
+      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location, quantity');
+      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; bin_location: string; quantity: number }[]));
     };
     fetchBinStock();
     const fetchRequests = async () => {
@@ -145,8 +141,9 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
         quantity: i.remaining,
         unitPrice: productPrices[i.productId] || 0,
         // Default to wherever it was requested from — the common case is that
-        // returned stock goes right back to the same spot; still overridable below.
-        binLocation: i.requestedBinLocation || (productBins.length === 1 ? productBins[0] : undefined),
+        // returned stock goes right back to the same spot. Otherwise default to
+        // the bin with the least on hand; still overridable below.
+        binLocation: i.requestedBinLocation || (productBins.length > 0 ? lowestQuantityBin(productBins) : undefined),
       };
     });
     setItemLimits(Object.fromEntries(request.items.map((i) => [i.productId, i.remaining])));
@@ -192,8 +189,9 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
         unitPrice: productPrices[reqItem.productId] || 0,
         condition: 'good',
         // Default to wherever it was requested from — the common case is that
-        // returned stock goes right back to the same spot; still overridable below.
-        binLocation: reqItem.requestedBinLocation || (productBins.length === 1 ? productBins[0] : undefined),
+        // returned stock goes right back to the same spot. Otherwise default to
+        // the bin with the least on hand; still overridable below.
+        binLocation: reqItem.requestedBinLocation || (productBins.length > 0 ? lowestQuantityBin(productBins) : undefined),
       };
       return { ...prev, items: [...prev.items, newItem] };
     });
@@ -451,7 +449,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
                             />
                           </div>
                           {(binStockByProduct[reqItem.productId] || []).length > 1 ? (
-                            <div className="w-32">
+                            <div className="w-44">
                               <label className="block text-[10px] font-medium text-gray-500 mb-1">Bin</label>
                               <select
                                 value={formItem.binLocation ?? ''}
@@ -460,7 +458,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
                                 className={`${inputClass} cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed`}
                               >
                                 <option value="">Select bin…</option>
-                                {(binStockByProduct[reqItem.productId] || []).map((b) => <option key={b} value={b}>{b}</option>)}
+                                {(binStockByProduct[reqItem.productId] || []).map((b) => <option key={b.bin_location} value={b.bin_location}>{b.bin_location} ({b.quantity} on hand)</option>)}
                               </select>
                             </div>
                           ) : formItem.binLocation ? (

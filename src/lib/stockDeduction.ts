@@ -17,8 +17,12 @@ function deriveStatus(stock: number, threshold: number): 'in_stock' | 'low_stock
  * the UI, not just the product's aggregate `stock` column. No-ops when no bin
  * was picked (e.g. the product isn't split across bins, or the transaction
  * doesn't yet know where the stock is landing).
+ *
+ * `expiryDate` only applies on incoming stock (delta > 0) — the bin's tracked
+ * expiry is overwritten with the newly-arrived batch's date, since a single bin
+ * doesn't track more than one batch's expiry at a time.
  */
-export async function adjustBinQuantity(productId: string, binLocation: string | undefined | null, delta: number) {
+export async function adjustBinQuantity(productId: string, binLocation: string | undefined | null, delta: number, expiryDate?: string | null) {
   if (!binLocation || delta === 0) return;
   const { data: row } = await supabase
     .from('product_bin_stock')
@@ -28,13 +32,16 @@ export async function adjustBinQuantity(productId: string, binLocation: string |
     .maybeSingle();
   if (row) {
     const newQty = Math.max(0, (row.quantity as number) + delta);
-    await supabase.from('product_bin_stock').update({ quantity: newQty }).eq('id', row.id as string);
+    const update: Record<string, unknown> = { quantity: newQty };
+    if (delta > 0 && expiryDate) update.expiry_date = expiryDate;
+    await supabase.from('product_bin_stock').update(update).eq('id', row.id as string);
   } else if (delta > 0) {
     await supabase.from('product_bin_stock').insert({
       id: `PBS-${productId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       product_id: productId,
       bin_location: binLocation,
       quantity: delta,
+      expiry_date: expiryDate || null,
     });
   }
 }
@@ -229,6 +236,77 @@ export async function receivePurchaseOrderItems(
       bin_location: item.binLocation || null,
     });
     await adjustBinQuantity(product.id, item.binLocation, item.quantity);
+  }
+
+  return { error: null };
+}
+
+interface StockReceiveLine {
+  productId: string;
+  quantity: number;
+  /** Any bin in the warehouse — not necessarily one the product already sits in. */
+  binLocation?: string;
+  /** Expiry of the batch received into that bin, if tracked. */
+  expiryDate?: string;
+}
+
+/**
+ * Physically adds stock from a standalone Stock Receive (no purchase order behind
+ * it) onto each product, updates the destination bin's quantity and expiry, and
+ * logs a stock_history entry per item. Unlike receivePurchaseOrderItems, this also
+ * recomputes each product's nearest-expiry summary from its bins afterward, since
+ * a receive is often the thing that introduces or changes a bin's expiry date.
+ */
+export async function receiveStockItems(
+  items: StockReceiveLine[],
+  opts: { reference: string; userName: string; note?: string }
+): Promise<{ error: string | null }> {
+  const now = new Date().toISOString();
+
+  for (const item of items) {
+    if (!item.productId || !item.quantity) continue;
+
+    const { data: product, error: fetchErr } = await supabase.from('products').select('*').eq('id', item.productId).single();
+    if (fetchErr || !product) return { error: fetchErr?.message || `Product ${item.productId} not found` };
+
+    const newStock = product.stock + item.quantity;
+    await adjustBinQuantity(product.id, item.binLocation, item.quantity, item.expiryDate);
+
+    // Nearest-expiry-across-bins is the product-level summary shown elsewhere
+    // (table badges, low-stock lists) — recompute it from the bins as they now
+    // stand rather than just trusting whatever this one line brought in.
+    let newExpiryDate: string | null = product.expiry_date || null;
+    if (item.binLocation) {
+      const { data: bins } = await supabase.from('product_bin_stock').select('expiry_date').eq('product_id', product.id);
+      const valid = (bins || []).map((b) => b.expiry_date as string | null).filter((d): d is string => Boolean(d));
+      newExpiryDate = valid.length > 0 ? valid.reduce((min, d) => (d < min ? d : min)) : newExpiryDate;
+    } else if (item.expiryDate) {
+      newExpiryDate = item.expiryDate;
+    }
+
+    const { error: updateErr } = await supabase.from('products').update({
+      stock: newStock,
+      status: deriveStatus(newStock, product.low_stock_threshold),
+      expiry_date: newExpiryDate,
+      last_updated: now,
+    }).eq('id', product.id);
+    if (updateErr) return { error: updateErr.message };
+
+    await supabase.from('stock_history').insert({
+      id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      product_id: product.id,
+      type: 'purchase',
+      quantity: item.quantity,
+      stock_before: product.stock,
+      stock_after: newStock,
+      reference: opts.reference,
+      note: opts.note || `Stock receive ${opts.reference}`,
+      warehouse: product.warehouse,
+      user_name: opts.userName,
+      created_at: now,
+      expiry_date: item.expiryDate || null,
+      bin_location: item.binLocation || null,
+    });
   }
 
   return { error: null };

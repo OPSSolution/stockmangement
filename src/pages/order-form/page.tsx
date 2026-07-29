@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { buildOrderInsert, mapProductRow, type OrderCreateDraft } from '../orders/orderCreateUtils';
 import { logAudit } from '@/lib/auditLog';
 import { notifyAdmins } from '@/lib/notifyAdmins';
+import { expirySuffix } from '@/lib/expiry';
 
 const emptyDraft: OrderCreateDraft = {
   requestedBy: '',
@@ -103,7 +104,7 @@ export default function PublicOrderFormPage() {
               <div key={index} className="grid grid-cols-[1fr_80px_32px] gap-2">
                 <select value={line.productId} onChange={(e) => updateLine(index, 'productId', e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200">
                   <option value="">Select product</option>
-                  {products.map((p) => <option key={p.id} value={p.id}>{p.name} - ${p.price.toFixed(2)}</option>)}
+                  {products.map((p) => <option key={p.id} value={p.id}>{p.name} - ${p.price.toFixed(2)}{expirySuffix(p.expiryDate)}</option>)}
                 </select>
                 <input
                   type="number"

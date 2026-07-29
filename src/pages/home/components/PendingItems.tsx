@@ -11,6 +11,7 @@ interface PendingItem {
   type: PendingType;
   title: string;
   subtitle: string;
+  status: string;
   statusLabel: string;
   createdAt: string;
 }
@@ -33,6 +34,41 @@ const TYPE_META: Record<PendingType, {
 };
 
 const TYPE_ORDER: PendingType[] = ['order', 'delivery', 'transfer', 'return', 'purchase', 'request'];
+
+// Statuses that mean the item is fully done — only these drop it off the dashboard.
+// Everything else (pending, approved, in transit, etc.) keeps showing until it reaches one of these.
+const TERMINAL_STATUSES: Record<PendingType, string[]> = {
+  order: ['fulfilled', 'rejected'],
+  delivery: ['delivered'],
+  transfer: ['received', 'cancelled'],
+  return: ['restocked', 'discarded'],
+  purchase: ['received', 'rejected', 'cancelled'],
+  request: ['fulfilled', 'rejected', 'cancelled', 'returned'],
+};
+
+const STATUS_LABELS: Record<PendingType, Record<string, string>> = {
+  order: { pending: 'Pending', accepted: 'Accepted', partial: 'Partially Accepted', processing: 'Processing' },
+  delivery: { prepare: 'Awaiting Prep', ready: 'Ready', in_transit: 'In Transit' },
+  transfer: { requested: 'Requested', approved: 'Approved', in_transit: 'In Transit' },
+  return: { pending: 'Pending', inspecting: 'Inspecting', approved: 'Approved' },
+  purchase: { pending: 'Pending Approval', approved: 'Approved', ordered: 'Ordered' },
+  request: { pending: 'Pending', approved: 'Approved' },
+};
+
+// The very first status in each workflow — used to color the badge amber (needs action)
+// vs blue (already actioned, just waiting on the next step) once it's been approved/started.
+const INITIAL_STATUS: Record<PendingType, string> = {
+  order: 'pending',
+  delivery: 'prepare',
+  transfer: 'requested',
+  return: 'pending',
+  purchase: 'pending',
+  request: 'pending',
+};
+
+function getStatusLabel(type: PendingType, status: string) {
+  return STATUS_LABELS[type][status] || TYPE_META[type].statusLabel;
+}
 
 function formatTimeAgo(isoDate: string) {
   const diffMs = Date.now() - new Date(isoDate).getTime();
@@ -71,18 +107,20 @@ export default function PendingItems() {
         tasks.push((async () => {
           const { data } = await supabase
             .from('orders')
-            .select('id, customer, city, total, item_count, created_at')
-            .eq('status', 'pending')
+            .select('id, customer, city, total, item_count, status, created_at')
+            .not('status', 'in', `(${TERMINAL_STATUSES.order.join(',')})`)
             .order('created_at', { ascending: false })
             .limit(25);
           (data || []).forEach((row: Record<string, unknown>) => {
             const itemCount = Number(row.item_count || 0);
+            const status = (row.status as string) || 'pending';
             results.push({
               id: `order-${row.id}`,
               type: 'order',
               title: (row.customer as string) || `Order ${row.id}`,
               subtitle: `${row.city ? row.city + ' · ' : ''}${itemCount} item${itemCount !== 1 ? 's' : ''} · ${formatAmount(Number(row.total || 0))}`,
-              statusLabel: TYPE_META.order.statusLabel,
+              status,
+              statusLabel: getStatusLabel('order', status),
               createdAt: (row.created_at as string) || '',
             });
           });
@@ -93,20 +131,22 @@ export default function PendingItems() {
         tasks.push((async () => {
           let q = supabase
             .from('deliveries')
-            .select('id, order_id, customer, city, total_items, created_at')
-            .eq('status', 'prepare')
+            .select('id, order_id, customer, city, total_items, status, created_at')
+            .not('status', 'in', `(${TERMINAL_STATUSES.delivery.join(',')})`)
             .order('created_at', { ascending: false })
             .limit(25);
           if (scopeList) q = q.or(`warehouse.in.(${scopeList}),destination.in.(${scopeList})`);
           const { data } = await q;
           (data || []).forEach((row: Record<string, unknown>) => {
             const totalItems = Number(row.total_items || 0);
+            const status = (row.status as string) || 'prepare';
             results.push({
               id: `delivery-${row.id}`,
               type: 'delivery',
               title: (row.customer as string) || (row.order_id as string) || `Delivery ${row.id}`,
               subtitle: `${row.city ? row.city + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''}`,
-              statusLabel: TYPE_META.delivery.statusLabel,
+              status,
+              statusLabel: getStatusLabel('delivery', status),
               createdAt: (row.created_at as string) || '',
             });
           });
@@ -117,20 +157,22 @@ export default function PendingItems() {
         tasks.push((async () => {
           let q = supabase
             .from('transfers')
-            .select('id, from_warehouse, to_warehouse, total_items, reason, created_at')
-            .eq('status', 'requested')
+            .select('id, from_warehouse, to_warehouse, total_items, reason, status, created_at')
+            .not('status', 'in', `(${TERMINAL_STATUSES.transfer.join(',')})`)
             .order('created_at', { ascending: false })
             .limit(25);
           if (scopeList) q = q.or(`from_warehouse.in.(${scopeList}),to_warehouse.in.(${scopeList})`);
           const { data } = await q;
           (data || []).forEach((row: Record<string, unknown>) => {
             const totalItems = Number(row.total_items || 0);
+            const status = (row.status as string) || 'requested';
             results.push({
               id: `transfer-${row.id}`,
               type: 'transfer',
               title: `${row.from_warehouse} → ${row.to_warehouse}`,
               subtitle: `${row.reason ? row.reason + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''}`,
-              statusLabel: TYPE_META.transfer.statusLabel,
+              status,
+              statusLabel: getStatusLabel('transfer', status),
               createdAt: (row.created_at as string) || '',
             });
           });
@@ -141,20 +183,22 @@ export default function PendingItems() {
         tasks.push((async () => {
           let q = supabase
             .from('returns')
-            .select('id, customer, total_items, total_value, reason, warehouse, created_at')
-            .eq('status', 'pending')
+            .select('id, customer, total_items, total_value, reason, warehouse, status, created_at')
+            .not('status', 'in', `(${TERMINAL_STATUSES.return.join(',')})`)
             .order('created_at', { ascending: false })
             .limit(25);
           if (warehouseScope) q = q.in('warehouse', warehouseScope);
           const { data } = await q;
           (data || []).forEach((row: Record<string, unknown>) => {
             const totalItems = Number(row.total_items || 0);
+            const status = (row.status as string) || 'pending';
             results.push({
               id: `return-${row.id}`,
               type: 'return',
               title: (row.customer as string) || `Return ${row.id}`,
               subtitle: `${row.reason ? row.reason + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''} · ${formatAmount(Number(row.total_value || 0))}`,
-              statusLabel: TYPE_META.return.statusLabel,
+              status,
+              statusLabel: getStatusLabel('return', status),
               createdAt: (row.created_at as string) || '',
             });
           });
@@ -165,20 +209,22 @@ export default function PendingItems() {
         tasks.push((async () => {
           let q = supabase
             .from('purchases')
-            .select('id, vendor, warehouse, total, total_items, created_at')
-            .eq('status', 'pending')
+            .select('id, vendor, warehouse, total, total_items, status, created_at')
+            .not('status', 'in', `(${TERMINAL_STATUSES.purchase.join(',')})`)
             .order('created_at', { ascending: false })
             .limit(25);
           if (warehouseScope) q = q.in('warehouse', warehouseScope);
           const { data } = await q;
           (data || []).forEach((row: Record<string, unknown>) => {
             const totalItems = Number(row.total_items || 0);
+            const status = (row.status as string) || 'pending';
             results.push({
               id: `purchase-${row.id}`,
               type: 'purchase',
               title: (row.vendor as string) || `Purchase ${row.id}`,
               subtitle: `${row.warehouse ? row.warehouse + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''} · ${formatAmount(Number(row.total || 0))}`,
-              statusLabel: TYPE_META.purchase.statusLabel,
+              status,
+              statusLabel: getStatusLabel('purchase', status),
               createdAt: (row.created_at as string) || '',
             });
           });
@@ -189,20 +235,22 @@ export default function PendingItems() {
         tasks.push((async () => {
           let q = supabase
             .from('stock_requests')
-            .select('id, reference, requested_by, warehouse, total_items, created_at')
-            .eq('status', 'pending')
+            .select('id, reference, requested_by, warehouse, total_items, status, created_at')
+            .not('status', 'in', `(${TERMINAL_STATUSES.request.join(',')})`)
             .order('created_at', { ascending: false })
             .limit(25);
           if (warehouseScope) q = q.in('warehouse', warehouseScope);
           const { data } = await q;
           (data || []).forEach((row: Record<string, unknown>) => {
             const totalItems = Number(row.total_items || 0);
+            const status = (row.status as string) || 'pending';
             results.push({
               id: `request-${row.id}`,
               type: 'request',
               title: (row.reference as string) || (row.requested_by as string) || `Request ${row.id}`,
               subtitle: `${row.warehouse ? row.warehouse + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''}${row.requested_by ? ' · ' + row.requested_by : ''}`,
-              statusLabel: TYPE_META.request.statusLabel,
+              status,
+              statusLabel: getStatusLabel('request', status),
               createdAt: (row.created_at as string) || '',
             });
           });
@@ -309,7 +357,13 @@ export default function PendingItems() {
                   <p className="text-xs text-gray-400 mt-0.5 truncate">{item.subtitle}</p>
                 </div>
                 <div className="text-right flex-shrink-0">
-                  <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+                  <span
+                    className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full border whitespace-nowrap ${
+                      item.status === INITIAL_STATUS[item.type]
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : 'bg-blue-50 text-blue-700 border-blue-200'
+                    }`}
+                  >
                     {item.statusLabel}
                   </span>
                   <p className="text-xs text-gray-400 mt-1">{item.createdAt ? formatTimeAgo(item.createdAt) : ''}</p>

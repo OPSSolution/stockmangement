@@ -38,6 +38,7 @@ export function mapProductRow(row: Record<string, unknown>): Product {
     productType: (row.product_type as Product['productType']) || 'piece',
     status: row.status as Product['status'],
     lastUpdated: row.last_updated as string,
+    expiryDate: (row.expiry_date as string) || undefined,
     binLocation: (row.bin_location as string) || undefined,
   };
 }

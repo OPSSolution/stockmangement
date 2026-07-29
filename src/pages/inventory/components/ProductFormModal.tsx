@@ -3,10 +3,13 @@ import type { Product, ProductType, ProductBinStock } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { asArray } from '@/pages/warehouses/warehouseShared';
+import { nearestExpiry } from '@/lib/expiry';
 
 interface BinRow {
   binLocation: string;
   quantity: number;
+  /** Expiry of the batch going into this bin — bins can carry different batches/dates. */
+  expiryDate?: string;
 }
 
 interface ProductFormModalProps {
@@ -104,9 +107,9 @@ export default function ProductFormModal({ product, nextNum, existingBinRows, on
       setSkuManuallyEdited(true);
       setBinRows(
         existingBinRows && existingBinRows.length > 0
-          ? existingBinRows.map((r) => ({ binLocation: r.binLocation, quantity: r.quantity }))
+          ? existingBinRows.map((r) => ({ binLocation: r.binLocation, quantity: r.quantity, expiryDate: r.expiryDate || '' }))
           : product.binLocation
-          ? [{ binLocation: product.binLocation, quantity: product.stock }]
+          ? [{ binLocation: product.binLocation, quantity: product.stock, expiryDate: product.expiryDate || '' }]
           : []
       );
     } else {
@@ -158,7 +161,11 @@ export default function ProductFormModal({ product, nextNum, existingBinRows, on
 
   const handleSubmit = (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
-    onSave({ ...form, id: product?.id, binRows });
+    // Expiry lives per bin once the product is bin-tracked — the product-level date
+    // shown elsewhere (badges, low-stock lists) becomes the nearest of the bin rows.
+    // Products with no bins yet fall back to the single date entered below.
+    const expiryDate = binRows.length > 0 ? (nearestExpiry(binRows.map((r) => r.expiryDate)) || '') : (form.expiryDate || '');
+    onSave({ ...form, expiryDate, id: product?.id, binRows });
   };
 
   const allocatedQty = binRows.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
@@ -166,7 +173,7 @@ export default function ProductFormModal({ product, nextNum, existingBinRows, on
   const addBinRow = () => {
     const used = new Set(binRows.map((r) => r.binLocation));
     const nextOption = binLocationOptions.find((b) => !used.has(b)) || '';
-    setBinRows((prev) => [...prev, { binLocation: nextOption, quantity: 0 }]);
+    setBinRows((prev) => [...prev, { binLocation: nextOption, quantity: 0, expiryDate: '' }]);
   };
   const updateBinRow = (index: number, patch: Partial<BinRow>) => {
     setBinRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
@@ -288,31 +295,42 @@ export default function ProductFormModal({ product, nextNum, existingBinRows, on
               {binRows.length > 0 && (
                 <div className="space-y-2 mb-2">
                   {binRows.map((row, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <select
-                        value={row.binLocation}
-                        onChange={(e) => updateBinRow(i, { binLocation: e.target.value })}
-                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
-                      >
-                        <option value="">Select bin…</option>
-                        {binLocationOptions.map((b) => <option key={b} value={b}>{b}</option>)}
-                        {row.binLocation && !binLocationOptions.includes(row.binLocation) && <option value={row.binLocation}>{row.binLocation}</option>}
-                      </select>
-                      <input
-                        type="number"
-                        value={row.quantity === 0 ? '' : row.quantity}
-                        onChange={(e) => updateBinRow(i, { quantity: Math.max(0, Number(e.target.value) || 0) })}
-                        min={0}
-                        placeholder="Qty"
-                        className="w-24 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeBinRow(i)}
-                        className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 cursor-pointer shrink-0"
-                      >
-                        <i className="ri-delete-bin-line text-sm"></i>
-                      </button>
+                    <div key={i} className="border border-gray-200 rounded-lg p-2.5 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={row.binLocation}
+                          onChange={(e) => updateBinRow(i, { binLocation: e.target.value })}
+                          className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer"
+                        >
+                          <option value="">Select bin…</option>
+                          {binLocationOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                          {row.binLocation && !binLocationOptions.includes(row.binLocation) && <option value={row.binLocation}>{row.binLocation}</option>}
+                        </select>
+                        <input
+                          type="number"
+                          value={row.quantity === 0 ? '' : row.quantity}
+                          onChange={(e) => updateBinRow(i, { quantity: Math.max(0, Number(e.target.value) || 0) })}
+                          min={0}
+                          placeholder="Qty"
+                          className="w-24 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeBinRow(i)}
+                          className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 cursor-pointer shrink-0"
+                        >
+                          <i className="ri-delete-bin-line text-sm"></i>
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-gray-400 shrink-0 pl-0.5">Expiry</label>
+                        <input
+                          type="date"
+                          value={row.expiryDate || ''}
+                          onChange={(e) => updateBinRow(i, { expiryDate: e.target.value })}
+                          className="flex-1 px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -329,16 +347,18 @@ export default function ProductFormModal({ product, nextNum, existingBinRows, on
                 <p className="text-[11px] text-gray-400 mt-1">No bin locations defined for this warehouse yet — add some from the warehouse's detail page.</p>
               )}
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1.5">Expiry Date (optional)</label>
-              <input
-                type="date"
-                name="expiryDate"
-                value={form.expiryDate || ''}
-                onChange={handleChange}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
-              />
-            </div>
+            {binRows.length === 0 && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Expiry Date (optional)</label>
+                <input
+                  type="date"
+                  name="expiryDate"
+                  value={form.expiryDate || ''}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Low Stock Threshold</label>
               <input
