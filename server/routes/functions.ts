@@ -237,15 +237,19 @@ router.post('/report-summary', authenticate, async (req: AuthRequest, res) => {
 
     // ── Detailed analytics — real aggregates for the current period, replacing
     // what used to be static seed-table reads (daily_revenue, top_products, etc).
-    const [productsRes, warehousesRes] = await Promise.all([
-      supabase.from('products').select('id,category,stock,on_hold_stock'),
+    const [stockRes, warehousesRes] = await Promise.all([
+      supabase.from('product_warehouse_stock').select('warehouse,stock,on_hold_stock,product:products(id,category)'),
       supabase.from('warehouses').select('name').order('name', { ascending: true }),
     ]);
     const productCategory = new Map<string, string>();
     const productStock = new Map<string, { stock: number; onHold: number }>();
-    for (const p of productsRes.data ?? []) {
-      productCategory.set(p.id, p.category || 'Uncategorized');
-      productStock.set(p.id, { stock: Number(p.stock || 0), onHold: Number(p.on_hold_stock || 0) });
+    for (const row of (stockRes.data ?? []) as { warehouse: string; stock: number; on_hold_stock: number; product: { id: string; category: string } | null }[]) {
+      if (!row.product || !inScope(row.warehouse, whList)) continue;
+      productCategory.set(row.product.id, row.product.category || 'Uncategorized');
+      const existing = productStock.get(row.product.id) || { stock: 0, onHold: 0 };
+      existing.stock += Number(row.stock || 0);
+      existing.onHold += Number(row.on_hold_stock || 0);
+      productStock.set(row.product.id, existing);
     }
     const allWarehouseNames = (warehousesRes.data ?? []).map((w) => w.name as string);
     const scopedWarehouseNames = whList ? allWarehouseNames.filter((w) => whList!.includes(w)) : allWarehouseNames;

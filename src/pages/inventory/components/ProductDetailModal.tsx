@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Product, ProductBinStock } from '@/mocks/inventory';
+import type { ProductStockRow, ProductBinStock } from '@/mocks/inventory';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { availableStock } from '@/lib/stockReservations';
@@ -7,7 +7,7 @@ import { formatDateTime } from '@/lib/formatDateTime';
 import { expiryTone, formatExpiry } from '@/lib/expiry';
 
 interface ProductDetailModalProps {
-  product: Product;
+  product: ProductStockRow;
   /** productId -> quantity tied up in pending requests/orders/transfers, not yet physically deducted. */
   reserved: Record<string, number>;
   /** This product's bin split, if it's stored across more than one. */
@@ -15,9 +15,9 @@ interface ProductDetailModalProps {
   /** Other product rows sharing this SKU, one per other warehouse they're stocked in. */
   siblings: { id: string; warehouse: string; stock: number }[];
   onClose: () => void;
-  onEdit: (product: Product) => void;
-  onAdjust: (product: Product) => void;
-  onViewHistory: (product: Product) => void;
+  onEdit: (product: ProductStockRow) => void;
+  onAdjust: (product: ProductStockRow) => void;
+  onViewHistory: (product: ProductStockRow) => void;
   /** Jump the inventory table to a given warehouse — closes this modal first. */
   onJumpToWarehouse: (warehouse: string) => void;
 }

@@ -5,16 +5,10 @@ import { useAuth } from '@/contexts/AuthContext';
 
 interface Product {
   id: string;
-  name: string;
-  sku: string;
-  category: string;
   warehouse: string;
-  vendor?: string;
   stock: number;
-  lowStockThreshold: number;
   price: number;
   status: 'in_stock' | 'low_stock' | 'out_of_stock';
-  lastUpdated: string;
 }
 
 interface KpiCard {
@@ -40,36 +34,34 @@ export default function KpiCards() {
 
   useEffect(() => {
     async function fetchData() {
-      let productsQuery = supabase.from('products').select('*');
+      let stockQuery = supabase.from('product_warehouse_stock').select('warehouse, stock, low_stock_threshold, status, product:products(id, price)');
       let deliveriesQuery = supabase.from('deliveries').select('status, warehouse, destination');
-      let alertsQuery = supabase.from('products').select('stock, low_stock_threshold, severity:status').lt('stock', 50);
       let transfersQuery = supabase.from('transfers').select('status').neq('status', 'received').neq('status', 'cancelled');
       // Orders don't carry a warehouse column, so pending-order count isn't scoped.
       const ordersQuery = supabase.from('orders').select('status').eq('status', 'pending');
 
       if (warehouseScope) {
         const list = warehouseScope.join(',');
-        productsQuery = productsQuery.in('warehouse', warehouseScope);
+        stockQuery = stockQuery.in('warehouse', warehouseScope);
         deliveriesQuery = deliveriesQuery.or(`warehouse.in.(${list}),destination.in.(${list})`);
-        alertsQuery = alertsQuery.in('warehouse', warehouseScope);
         transfersQuery = transfersQuery.or(`from_warehouse.in.(${list}),to_warehouse.in.(${list})`);
       }
 
-      const [{ data: p }, { data: d }, { data: a }, { data: o }, { data: t }] = await Promise.all([
-        productsQuery,
+      const [{ data: s }, { data: d }, { data: o }, { data: t }] = await Promise.all([
+        stockQuery,
         deliveriesQuery,
-        alertsQuery,
         ordersQuery,
         transfersQuery,
       ]);
-      if (p) setProducts(p as Product[]);
-      if (d) setDeliveries(d as { status: string }[]);
-      if (a) {
-        const alerts = (a as unknown as Array<{ stock: number; low_stock_threshold: number; severity: string }>)
-          .filter((x) => x.stock <= x.low_stock_threshold)
-          .map((x) => ({ severity: x.stock === 0 ? 'critical' : 'warning' }));
-        setStockAlerts(alerts);
+      if (s) {
+        const rawRows = (s as unknown as Array<{ warehouse: string; stock: number; low_stock_threshold: number; status: 'in_stock' | 'low_stock' | 'out_of_stock'; product: { id: string; price: number } | null }>)
+          .filter((row) => row.product);
+        setProducts(rawRows.map((row) => ({ id: row.product!.id, warehouse: row.warehouse, stock: row.stock, price: row.product!.price, status: row.status })));
+        setStockAlerts(
+          rawRows.filter((row) => row.stock <= row.low_stock_threshold).map((row) => ({ severity: row.stock === 0 ? 'critical' : 'warning' }))
+        );
       }
+      if (d) setDeliveries(d as { status: string }[]);
       if (o) setPendingOrders(o.length);
       if (t) setPendingTransfers(t.length);
       setLoading(false);
@@ -87,7 +79,7 @@ export default function KpiCards() {
     );
   }
 
-  const totalProducts = products.length;
+  const totalProducts = new Set(products.map((p) => p.id)).size;
   const totalStock = products.reduce((a, b) => a + b.stock, 0);
   const lowStockCount = products.filter((p) => p.status === 'low_stock').length;
   const outOfStockCount = products.filter((p) => p.status === 'out_of_stock').length;

@@ -99,7 +99,7 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
     (async () => {
       const [{ data: wh }, { data: bins }] = await Promise.all([
         supabase.from('warehouses').select('bin_locations').eq('name', ret.warehouse).maybeSingle(),
-        supabase.from('product_bin_stock').select('bin_location').in('product_id', ret.items.map((i) => i.productId)),
+        supabase.from('product_bin_stock').select('bin_location').eq('warehouse', ret.warehouse).in('product_id', ret.items.map((i) => i.productId)),
       ]);
       const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
       const productBins = (bins || []).map((row) => row.bin_location as string);
@@ -191,7 +191,7 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
         const targetItems = target.id === ret.id ? items : target.items;
         const targetNote = target.id === ret.id ? inspectionNotes : target.inspectionNotes;
         const { error } = await restockReturnedItems(
-          targetItems.map((i) => ({ productId: i.productId, quantity: i.quantity, condition: i.condition, note: targetNote, binLocation: i.binLocation })),
+          targetItems.map((i) => ({ productId: i.productId, warehouse: target.warehouse, quantity: i.quantity, condition: i.condition, note: targetNote, binLocation: i.binLocation })),
           { reference: target.id, userName: assignedTo }
         );
         if (error) {
@@ -218,8 +218,12 @@ export default function ReturnDetailModal({ ret, history, onSelectReturn, onClos
   };
 
   const handleDownloadPdf = async () => {
-    const { data: binRows } = await supabase.from('products').select('id, bin_location').in('id', items.map((i) => i.productId));
-    const binById = new Map((binRows || []).map((r) => [r.id as string, r.bin_location as string | null]));
+    const { data: binRows } = await supabase
+      .from('product_warehouse_stock')
+      .select('product_id, bin_location')
+      .eq('warehouse', ret.warehouse)
+      .in('product_id', items.map((i) => i.productId));
+    const binById = new Map((binRows || []).map((r) => [r.product_id as string, r.bin_location as string | null]));
 
     downloadPdf(
       {

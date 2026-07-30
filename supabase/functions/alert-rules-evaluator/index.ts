@@ -205,16 +205,21 @@ async function evaluateRule(
       const category = condition.category as string | undefined;
       const threshold = (condition.threshold as number) || 5;
 
-      let query = client
-        .from('products')
-        .select('id, name, sku, category, stock')
+      const { data: stockRows } = await client
+        .from('product_warehouse_stock')
+        .select('warehouse, stock, product:products(id, name, sku, category)')
         .lt('stock', threshold);
 
-      if (category) {
-        query = query.eq('category', category);
-      }
-
-      const { data: products } = await query;
+      const products = (stockRows || [])
+        .filter((row) => row.product && (!category || row.product.category === category))
+        .map((row) => ({
+          id: row.product.id,
+          name: row.product.name,
+          sku: row.product.sku,
+          category: row.product.category,
+          stock: row.stock,
+          warehouse: row.warehouse as string,
+        }));
 
       if (products && products.length > 0) {
         const { data: existing } = await client
@@ -223,17 +228,20 @@ async function evaluateRule(
           .eq('type', 'low_stock')
           .gte('created_at', new Date(Date.now() - 3600000).toISOString());
 
-        const notifiedIds = new Set(
-          (existing || []).map((n) => (n.data as Record<string, unknown>)?.product_id as string).filter(Boolean)
+        const notified = new Set(
+          (existing || []).map((n) => {
+            const d = (n.data as Record<string, unknown>) || {};
+            return `${d.product_id}::${d.warehouse}`;
+          }).filter(Boolean)
         );
 
-        const newProducts = products.filter((p) => !notifiedIds.has(p.id));
+        const newProducts = products.filter((p) => !notified.has(`${p.id}::${p.warehouse}`));
         for (const product of newProducts) {
           const notif = {
             type: 'low_stock',
             title: `Low Stock: ${product.name}`,
-            message: `${product.name} (${product.sku}) in ${product.category} has only ${product.stock} units remaining. Threshold: ${threshold}.`,
-            data: { product_id: product.id, rule_id: rule.id, rule_name: rule.name },
+            message: `${product.name} (${product.sku}) in ${product.category} has only ${product.stock} units remaining at ${product.warehouse}. Threshold: ${threshold}.`,
+            data: { product_id: product.id, warehouse: product.warehouse, rule_id: rule.id, rule_name: rule.name },
             is_read: false,
             is_emailed: false,
             is_sms_sent: false,

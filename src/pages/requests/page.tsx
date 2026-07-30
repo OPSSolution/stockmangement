@@ -14,7 +14,7 @@ import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { notifyAdmins } from '@/lib/notifyAdmins';
 import { asArray } from '@/pages/warehouses/warehouseShared';
 import { expirySuffix, expiryTone, formatExpiry } from '@/lib/expiry';
-import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
+import { groupBinStock, lowestQuantityBin, binExpiry, binStockKey, type BinStockRow } from '@/lib/binStock';
 
 interface CustomFieldAnswer {
   key: string;
@@ -211,6 +211,7 @@ export default function RequestsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingReq, setEditingReq] = useState<StockRequest | null>(null);
   const [viewingReq, setViewingReq] = useState<StockRequest | null>(null);
+  const [approveNote, setApproveNote] = useState('');
   const [form, setForm] = useState(emptyForm(warehouseScope?.[0] || ''));
   const [selectedProduct, setSelectedProduct] = useState('');
   const [selectedBin, setSelectedBin] = useState('');
@@ -268,16 +269,25 @@ export default function RequestsPage() {
 
   useEffect(() => {
     async function loadOptions() {
-      let productsQuery = supabase.from('products').select('id, name, sku, image_url, stock, low_stock_threshold, warehouse, bin_location, expiry_date');
+      let productsQuery = supabase.from('product_warehouse_stock').select('stock, low_stock_threshold, warehouse, bin_location, expiry_date, product:products(id, name, sku, image_url)');
       let warehousesQuery = supabase.from('warehouses').select('name').order('name', { ascending: true });
       if (warehouseScope) {
         productsQuery = productsQuery.in('warehouse', warehouseScope);
         warehousesQuery = warehousesQuery.in('name', warehouseScope);
       }
-      const [{ data: p }, { data: w }, { data: bins }] = await Promise.all([productsQuery, warehousesQuery, supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date')]);
-      if (p) setProducts(p as ProductOption[]);
+      const [{ data: p }, { data: w }, { data: bins }] = await Promise.all([productsQuery, warehousesQuery, supabase.from('product_bin_stock').select('product_id, warehouse, bin_location, quantity, expiry_date')]);
+      if (p) {
+        setProducts(
+          (p as Record<string, unknown>[])
+            .filter((row) => row.product)
+            .map((row) => {
+              const prod = row.product as Record<string, unknown>;
+              return { id: prod.id as string, name: prod.name as string, sku: prod.sku as string, image_url: prod.image_url as string | null, stock: row.stock as number, low_stock_threshold: row.low_stock_threshold as number, warehouse: row.warehouse as string, bin_location: row.bin_location as string | null, expiry_date: row.expiry_date as string | null };
+            })
+        );
+      }
       if (w) setWarehouses(w.map((row) => row.name as string));
-      setBinStockByProduct(groupBinStock((bins || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
+      setBinStockByProduct(groupBinStock((bins || []) as { product_id: string; warehouse: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
     }
     loadOptions();
   }, [warehouseScope]);
@@ -309,10 +319,10 @@ export default function RequestsPage() {
     (async () => {
       const [{ data: wh }, { data: bins }] = await Promise.all([
         supabase.from('warehouses').select('bin_locations').eq('name', viewingReq.warehouse).maybeSingle(),
-        supabase.from('product_bin_stock').select('product_id, bin_location, quantity').in('product_id', viewingReq.items.map((i) => i.productId)),
+        supabase.from('product_bin_stock').select('product_id, warehouse, bin_location, quantity').eq('warehouse', viewingReq.warehouse).in('product_id', viewingReq.items.map((i) => i.productId)),
       ]);
       const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
-      const productBinRows = (bins || []) as { product_id: string; bin_location: string; quantity: number }[];
+      const productBinRows = (bins || []) as { product_id: string; warehouse: string; bin_location: string; quantity: number }[];
       setDispatchBinOptions([...new Set([...registryBins, ...productBinRows.map((row) => row.bin_location)])]);
       const qtyByProduct = groupBinStock(productBinRows);
       setDispatchBinQtyByProduct(qtyByProduct);
@@ -322,7 +332,7 @@ export default function RequestsPage() {
         const next = { ...prev };
         viewingReq.items.forEach((item) => {
           if (!next[item.productId]) {
-            const preferred = lowestQuantityBin(qtyByProduct[item.productId]);
+            const preferred = lowestQuantityBin(qtyByProduct[binStockKey(item.productId, viewingReq.warehouse)]);
             if (preferred) next[item.productId] = preferred;
           }
         });
@@ -420,10 +430,10 @@ export default function RequestsPage() {
     setShowForm(true);
   };
 
-  const selectedBinOptions = binStockByProduct[selectedProduct] || [];
+  const selectedBinOptions = binStockByProduct[binStockKey(selectedProduct, form.warehouse)] || [];
 
   const addItem = () => {
-    const product = products.find((p) => p.id === selectedProduct);
+    const product = products.find((p) => p.id === selectedProduct && p.warehouse === form.warehouse);
     if (!product || selectedQty < 1) return;
     const available = availableStock(product.stock, reserved, product.id);
     if (selectedQty > available) {
@@ -593,6 +603,11 @@ export default function RequestsPage() {
       if (note === null) return; // user cancelled the prompt
       reviewNote = note.trim() || null;
     }
+    if (status === 'approved') {
+      const note = window.prompt('Add a note for this approval? (optional)');
+      if (note === null) return; // user cancelled the prompt
+      reviewNote = note.trim() || null;
+    }
 
     const now = new Date().toISOString();
     const update = { status, return_reason: returnReason, review_note: reviewNote, updated_at: now };
@@ -610,7 +625,7 @@ export default function RequestsPage() {
   // Approve is a pure decision — no document, no stock movement. Stock only
   // leaves the warehouse once Confirm Dispatch is done (see below), backed by
   // a required document.
-  const handleApprove = async (req: StockRequest) => {
+  const handleApprove = async (req: StockRequest, note: string) => {
     if (!canApproveRequests) return;
 
     const now = new Date().toISOString();
@@ -618,6 +633,7 @@ export default function RequestsPage() {
       status: 'approved' as const,
       approved_by: requesterIdentity || 'Admin',
       approved_at: now,
+      review_note: note.trim() || null,
       updated_at: now,
     };
     const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
@@ -625,8 +641,9 @@ export default function RequestsPage() {
       showToast('Failed to approve: ' + error.message, 'error');
       return;
     }
+    setApproveNote('');
     showToast('Request approved.');
-    setViewingReq((prev) => (prev && prev.id === req.id ? { ...prev, ...update } : prev));
+    setViewingReq(null);
     setRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, ...update } : r)));
     logAudit({ action: 'update', module: 'requests', description: `Approved request ${req.id}`, referenceId: req.id });
   };
@@ -658,7 +675,7 @@ export default function RequestsPage() {
         return;
       }
 
-      const itemsWithBin = req.items.map((i) => ({ ...i, binLocation: dispatchBinByProduct[i.productId] || i.binLocation }));
+      const itemsWithBin = req.items.map((i) => ({ ...i, warehouse: req.warehouse, binLocation: dispatchBinByProduct[i.productId] || i.binLocation }));
       const { error: deductError } = await deductStockForItems(itemsWithBin, {
         reference: req.id,
         note: `Dispatched request ${req.id}`,
@@ -760,7 +777,7 @@ export default function RequestsPage() {
       { header: 'Reviewed By', value: () => req.reviewed_by || '' },
       { header: 'Reviewed By (2)', value: () => req.reviewed_by_2 || '' },
       { header: 'Approved By', value: () => req.approved_by || '' },
-      { header: 'Rejection/Review Note', value: () => req.review_note || '' },
+      { header: 'Review Note', value: () => req.review_note || '' },
       { header: 'Return Reason', value: () => req.return_reason || '' },
       { header: 'Created At', value: () => req.created_at },
       { header: 'Updated At', value: () => req.updated_at },
@@ -772,6 +789,9 @@ export default function RequestsPage() {
     if (req.reason || req.reason_tags.length > 0) {
       const tagLabels = req.reason_tags.map((tag) => REASON_TAGS.find((t) => t.value === tag)?.label || tag);
       notes.push({ label: 'Reason', text: [tagLabels.join(', '), req.reason].filter(Boolean).join(' — '), tone: 'amber' });
+    }
+    if ((req.status === 'approved' || req.status === 'fulfilled') && req.review_note) {
+      notes.push({ label: 'Approval Note', text: req.review_note, tone: 'emerald' });
     }
     if (req.status === 'rejected' && req.review_note) {
       notes.push({ label: 'Rejection Reason', text: req.review_note, tone: 'red' });
@@ -814,7 +834,7 @@ export default function RequestsPage() {
             rows: req.items.map((item) => [
               item.productName,
               item.sku,
-              item.binLocation || products.find((p) => p.id === item.productId)?.bin_location || '—',
+              item.binLocation || products.find((p) => p.id === item.productId && p.warehouse === req.warehouse)?.bin_location || '—',
               item.packageWeight ? `${item.packageWeight}${item.unit || 'kg'}` : (item.unit || '—'),
               item.quantity,
             ]),
@@ -1087,7 +1107,7 @@ export default function RequestsPage() {
                 <div className="flex flex-wrap gap-2 mb-3">
                   <select
                     value={selectedProduct}
-                    onChange={(e) => { setSelectedProduct(e.target.value); setSelectedBin(lowestQuantityBin(binStockByProduct[e.target.value])); }}
+                    onChange={(e) => { setSelectedProduct(e.target.value); setSelectedBin(lowestQuantityBin(binStockByProduct[binStockKey(e.target.value, form.warehouse)])); }}
                     disabled={!form.warehouse}
                     className="flex-1 min-w-[180px] border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-gray-800 cursor-pointer disabled:opacity-50"
                   >
@@ -1181,9 +1201,9 @@ export default function RequestsPage() {
                                 <div>
                                   <span className="font-medium text-gray-800">{item.productName}</span>
                                   {(() => {
-                                    const matchedProduct = products.find((p) => p.id === item.productId);
+                                    const matchedProduct = products.find((p) => p.id === item.productId && p.warehouse === form.warehouse);
                                     const bin = item.binLocation || matchedProduct?.bin_location;
-                                    const itemExpiry = binExpiry(binStockByProduct[item.productId], bin) ?? matchedProduct?.expiry_date;
+                                    const itemExpiry = binExpiry(binStockByProduct[binStockKey(item.productId, form.warehouse)], bin) ?? matchedProduct?.expiry_date;
                                     return (
                                       <>
                                         {bin && <p className="text-[11px] text-gray-400 font-mono">Bin: {bin}</p>}
@@ -1496,7 +1516,7 @@ export default function RequestsPage() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
-                  onClick={() => { setViewingReq(req); closeMenu(); }}
+                  onClick={() => { setViewingReq(req); setApproveNote(''); closeMenu(); }}
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
                 >
                   <i className="ri-eye-line text-gray-400"></i> View Details
@@ -1622,42 +1642,6 @@ export default function RequestsPage() {
                   );
                 })()}
               </div>
-
-              {/* Pending decision */}
-              {isPending && (canApproveRequests || isOwnRequest) && (
-                <div className="mx-6 mt-3 px-4 py-3 rounded-xl bg-amber-50/60 border border-amber-100 flex items-center justify-between gap-3 flex-wrap">
-                  <span className="text-xs font-semibold text-amber-700 flex items-center gap-1.5">
-                    <i className="ri-time-line"></i>
-                    Awaiting decision
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {isOwnRequest && (
-                      <button
-                        onClick={() => handleStatusChange(viewingReq, 'cancelled')}
-                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors cursor-pointer"
-                      >
-                        Cancel Request
-                      </button>
-                    )}
-                    {canApproveRequests && (
-                      <>
-                        <button
-                          onClick={() => handleStatusChange(viewingReq, 'rejected')}
-                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
-                        >
-                          <i className="ri-close-circle-line"></i>Reject
-                        </button>
-                        <button
-                          onClick={() => handleApprove(viewingReq)}
-                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 transition-colors cursor-pointer"
-                        >
-                          <i className="ri-checkbox-circle-line"></i>Approve
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
 
               {/* Key stats */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-6 mt-4">
@@ -1809,7 +1793,7 @@ export default function RequestsPage() {
                                 >
                                   <option value="">Unassigned</option>
                                   {dispatchBinOptions
-                                    .map((b) => ({ bin: b, qty: dispatchBinQtyByProduct[item.productId]?.find((row) => row.bin_location === b)?.quantity }))
+                                    .map((b) => ({ bin: b, qty: dispatchBinQtyByProduct[binStockKey(item.productId, viewingReq.warehouse)]?.find((row) => row.bin_location === b)?.quantity }))
                                     .sort((a, b) => (a.qty ?? Infinity) - (b.qty ?? Infinity))
                                     .map(({ bin, qty }) => (
                                       <option key={bin} value={bin}>{bin}{qty !== undefined ? ` (${qty} on hand)` : ''}</option>
@@ -1954,6 +1938,66 @@ export default function RequestsPage() {
                         </span>
                       </div>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Pending decision */}
+              {isPending && (canApproveRequests || isOwnRequest) && (
+                <div className="mx-6 mt-3 px-4 py-3 rounded-xl bg-amber-50/60 border border-amber-100 flex flex-col gap-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <span className="text-xs font-semibold text-amber-700 flex items-center gap-1.5">
+                      <i className="ri-time-line"></i>
+                      Awaiting decision
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {isOwnRequest && (
+                        <button
+                          onClick={() => handleStatusChange(viewingReq, 'cancelled')}
+                          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors cursor-pointer"
+                        >
+                          Cancel Request
+                        </button>
+                      )}
+                      {canApproveRequests && (
+                        <>
+                          <button
+                            onClick={() => handleStatusChange(viewingReq, 'rejected')}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
+                          >
+                            <i className="ri-close-circle-line"></i>Reject
+                          </button>
+                          <button
+                            onClick={() => handleApprove(viewingReq, approveNote)}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 active:bg-emerald-700 transition-colors cursor-pointer"
+                          >
+                            <i className="ri-checkbox-circle-line"></i>Approve
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {canApproveRequests && (
+                    <textarea
+                      value={approveNote}
+                      onChange={(e) => setApproveNote(e.target.value)}
+                      placeholder="Add a note before approving (optional)..."
+                      rows={2}
+                      className="w-full px-3 py-2 text-xs text-gray-700 border border-amber-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200 resize-none"
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Approval note */}
+              {(viewingReq.status === 'approved' || viewingReq.status === 'fulfilled') && viewingReq.review_note && (
+                <div className="px-6 mt-3">
+                  <div className="rounded-xl bg-emerald-50/60 border border-emerald-100 px-4 py-3 flex gap-2.5">
+                    <i className="ri-checkbox-circle-line text-emerald-400 text-base"></i>
+                    <div>
+                      <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-wide">Approval Note</p>
+                      <p className="text-sm text-gray-700 mt-0.5">{viewingReq.review_note}</p>
+                    </div>
                   </div>
                 </div>
               )}

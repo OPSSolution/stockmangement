@@ -127,15 +127,32 @@ Deno.serve(async (req) => {
           return jsonResponse(400, { error: 'Missing required order fields' });
         }
 
-        const { data: products, error: productsError } = await adminClient
-          .from('products')
-          .select('*');
+        const { data: stockRows, error: productsError } = await adminClient
+          .from('product_warehouse_stock')
+          .select('*, product:products(*)');
 
         if (productsError) {
           return jsonResponse(400, { error: productsError.message });
         }
 
-        const payload = buildOrderPayload(draft, products || []);
+        // A customer order line only names a productId, not a warehouse — fulfillment
+        // auto-picks whichever warehouse currently has the most stock of that product.
+        const bestByProduct = new Map();
+        (stockRows || []).filter((row) => row.product).forEach((row) => {
+          const flat = {
+            id: row.product.id,
+            name: row.product.name,
+            sku: row.product.sku,
+            price: row.product.price,
+            vendor: row.vendor,
+            warehouse: row.warehouse,
+            stock: row.stock,
+          };
+          const existing = bestByProduct.get(flat.id);
+          if (!existing || flat.stock > existing.stock) bestByProduct.set(flat.id, flat);
+        });
+
+        const payload = buildOrderPayload(draft, Array.from(bestByProduct.values()));
         const { data, error } = await adminClient.from('orders').insert(payload).select('*').single();
 
         if (error) {

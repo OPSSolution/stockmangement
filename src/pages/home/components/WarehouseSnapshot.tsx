@@ -24,11 +24,15 @@ export default function WarehouseSnapshot() {
 
   useEffect(() => {
     async function fetchProducts() {
-      let query = supabase.from('products').select('*');
+      let query = supabase.from('product_warehouse_stock').select('id, stock, warehouse, status, product:products(price)');
       if (warehouseScope) query = query.in('warehouse', warehouseScope);
       const { data, error } = await query;
       if (!error && data) {
-        setProducts(data as Product[]);
+        setProducts(
+          data
+            .filter((row: any) => row.product)
+            .map((row: any) => ({ id: row.id, stock: row.stock, price: row.product.price, warehouse: row.warehouse, status: row.status }))
+        );
       }
       setLoading(false);
     }

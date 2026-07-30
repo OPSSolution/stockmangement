@@ -8,6 +8,7 @@ import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 import { downloadPdf, type PdfTableSpec } from '@/lib/exportPdf';
 import { supabase } from '@/lib/supabase';
 import { asArray } from '@/pages/warehouses/warehouseShared';
+import { binStockKey } from '@/lib/binStock';
 
 interface OrderDetailModalProps {
   order: Order;
@@ -57,19 +58,19 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
       const [{ data: whData }, { data: binRows }] = await Promise.all([
         supabase.from('warehouses').select('name, bin_locations').in('name', warehouseNames),
         allProductIds.length > 0
-          ? supabase.from('product_bin_stock').select('product_id, bin_location').in('product_id', allProductIds)
-          : Promise.resolve({ data: [] as { product_id: string; bin_location: string }[] }),
+          ? supabase.from('product_bin_stock').select('product_id, warehouse, bin_location').in('warehouse', warehouseNames).in('product_id', allProductIds)
+          : Promise.resolve({ data: [] as { product_id: string; warehouse: string; bin_location: string }[] }),
       ]);
-      const productBinsByProduct: Record<string, string[]> = {};
+      const productBinsByKey: Record<string, string[]> = {};
       (binRows || []).forEach((row) => {
-        const pid = row.product_id as string;
-        (productBinsByProduct[pid] ??= []).push(row.bin_location as string);
+        const key = binStockKey(row.product_id as string, row.warehouse as string);
+        (productBinsByKey[key] ??= []).push(row.bin_location as string);
       });
       const map: Record<string, string[]> = {};
       (whData || []).forEach((w) => { map[w.name as string] = asArray<string>(w.bin_locations); });
       splits.forEach((s) => {
         const registryBins = map[s.warehouse] || [];
-        const productBins = s.items.flatMap((i) => productBinsByProduct[i.productId] || []);
+        const productBins = s.items.flatMap((i) => productBinsByKey[binStockKey(i.productId, s.warehouse)] || []);
         map[s.warehouse] = [...new Set([...registryBins, ...productBins])];
       });
       setBinOptionsByWarehouse(map);
@@ -137,8 +138,11 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
 
   const handleDownloadPdf = async () => {
     const allProductIds = splits.flatMap((split) => split.items.map((i) => i.productId));
-    const { data: binRows } = await supabase.from('products').select('id, bin_location').in('id', allProductIds);
-    const binById = new Map((binRows || []).map((r) => [r.id as string, r.bin_location as string | null]));
+    const { data: binRows } = await supabase
+      .from('product_warehouse_stock')
+      .select('product_id, warehouse, bin_location')
+      .in('product_id', allProductIds);
+    const binByKey = new Map((binRows || []).map((r) => [binStockKey(r.product_id as string, r.warehouse as string), r.bin_location as string | null]));
 
     const totalItems = splits.reduce((s, split) => s + split.items.reduce((si, i) => si + i.quantity, 0), 0);
     const tables: PdfTableSpec[] = splits.map((split) => ({
@@ -147,7 +151,7 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
       rows: split.items.map((item) => [
         item.productName,
         item.sku,
-        item.binLocation || binById.get(item.productId) || '—',
+        item.binLocation || binByKey.get(binStockKey(item.productId, split.warehouse)) || '—',
         item.quantity,
         formatAmount(item.unitPrice),
         formatAmount(item.unitPrice * item.quantity),
@@ -226,10 +230,10 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
         return;
       }
 
-      const acceptedItems: { productId: string; quantity: number; binLocation?: string }[] = [];
+      const acceptedItems: { productId: string; warehouse: string; quantity: number; binLocation?: string }[] = [];
       splits.forEach((split) => {
         split.items.forEach((item) => {
-          if (item.status === 'accepted') acceptedItems.push({ productId: item.productId, quantity: item.quantity, binLocation: binByItem[item.id] });
+          if (item.status === 'accepted') acceptedItems.push({ productId: item.productId, warehouse: item.warehouse || split.warehouse, quantity: item.quantity, binLocation: binByItem[item.id] });
         });
       });
 

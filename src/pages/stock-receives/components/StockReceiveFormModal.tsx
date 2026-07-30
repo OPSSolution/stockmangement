@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { asArray } from '@/pages/warehouses/warehouseShared';
-import { groupBinStock, lowestQuantityBin, binExpiry, buildReceiveBinOptions, type BinStockRow } from '@/lib/binStock';
+import { groupBinStock, lowestQuantityBin, binExpiry, binStockKey, buildReceiveBinOptions, type BinStockRow } from '@/lib/binStock';
 import { expiryTone, formatExpiry } from '@/lib/expiry';
 import BinCombobox from '@/components/feature/BinCombobox';
 import type { StockReceiveItem } from '@/mocks/stockReceives';
@@ -52,8 +52,8 @@ export default function StockReceiveFormModal({ onClose, onSubmit }: Props) {
       if (warehouseScope) whQuery = whQuery.in('name', warehouseScope);
       const [{ data: wh }, { data: prod }, { data: bins }] = await Promise.all([
         whQuery,
-        supabase.from('products').select('id, name, sku, image_url, stock, warehouse'),
-        supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date'),
+        supabase.from('product_warehouse_stock').select('stock, warehouse, product:products(id, name, sku, image_url)'),
+        supabase.from('product_bin_stock').select('product_id, warehouse, bin_location, quantity, expiry_date'),
       ]);
       if (wh) {
         setWarehouses(wh.map((w) => w.name as string));
@@ -61,8 +61,17 @@ export default function StockReceiveFormModal({ onClose, onSubmit }: Props) {
         setWarehouseBinLocations(Object.fromEntries(wh.map((w) => [w.name as string, asArray<string>(w.bin_locations)])));
         setForm((prev) => (prev.warehouse ? prev : { ...prev, warehouse: warehouseScope?.[0] || wh[0]?.name || '' }));
       }
-      if (prod) setProducts(prod as ProductOption[]);
-      setBinStockByProduct(groupBinStock((bins || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
+      if (prod) {
+        setProducts(
+          (prod as Record<string, unknown>[])
+            .filter((row) => row.product)
+            .map((row) => {
+              const p = row.product as Record<string, unknown>;
+              return { id: p.id as string, name: p.name as string, sku: p.sku as string, image_url: p.image_url as string | null, stock: row.stock as number, warehouse: row.warehouse as string };
+            })
+        );
+      }
+      setBinStockByProduct(groupBinStock((bins || []) as { product_id: string; warehouse: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
       setLoading(false);
     })();
   }, [warehouseScope]);
@@ -70,7 +79,7 @@ export default function StockReceiveFormModal({ onClose, onSubmit }: Props) {
   const vendorOptions = warehouseVendors[form.warehouse] || [];
   const binOptionsForWarehouse = warehouseBinLocations[form.warehouse] || [];
   const productOptions = products.filter((p) => p.warehouse === form.warehouse && !items.some((i) => i.productId === p.id));
-  const selectedBinOptions = buildReceiveBinOptions(binStockByProduct[selectedProduct], binOptionsForWarehouse);
+  const selectedBinOptions = buildReceiveBinOptions(binStockByProduct[binStockKey(selectedProduct, form.warehouse)], binOptionsForWarehouse);
 
   const handleWarehouseChange = (warehouse: string) => {
     setForm((f) => ({ ...f, warehouse, vendor: '' }));
@@ -80,18 +89,18 @@ export default function StockReceiveFormModal({ onClose, onSubmit }: Props) {
 
   const handleProductSelect = (id: string) => {
     setSelectedProduct(id);
-    const defaultBin = lowestQuantityBin(binStockByProduct[id]);
+    const defaultBin = lowestQuantityBin(binStockByProduct[binStockKey(id, form.warehouse)]);
     setSelectedBin(defaultBin);
-    setSelectedExpiry(binExpiry(binStockByProduct[id], defaultBin) || '');
+    setSelectedExpiry(binExpiry(binStockByProduct[binStockKey(id, form.warehouse)], defaultBin) || '');
   };
 
   const handleBinSelect = (bin: string) => {
     setSelectedBin(bin);
-    setSelectedExpiry(binExpiry(binStockByProduct[selectedProduct], bin) || '');
+    setSelectedExpiry(binExpiry(binStockByProduct[binStockKey(selectedProduct, form.warehouse)], bin) || '');
   };
 
   const addItem = () => {
-    const product = products.find((p) => p.id === selectedProduct);
+    const product = products.find((p) => p.id === selectedProduct && p.warehouse === form.warehouse);
     if (!product || selectedQty < 1) return;
     setItems((prev) => [
       ...prev,

@@ -43,17 +43,26 @@ export default function StockTable() {
 
   useEffect(() => {
     async function fetchProducts() {
-      let query = supabase.from('products').select('*');
+      let query = supabase.from('product_warehouse_stock').select('*, product:products(*)');
       if (warehouseScope) query = query.in('warehouse', warehouseScope);
       const { data, error } = await query;
       if (!error && data) {
         setProducts(
-          data.map((p) => ({
-            ...p,
-            status: (p.status || 'in_stock') as ProductStatus,
-            low_stock_threshold: p.low_stock_threshold || 0,
-            last_updated: p.last_updated || p.lastUpdated || '',
-          }))
+          data
+            .filter((row) => row.product)
+            .map((row) => ({
+              id: row.product.id,
+              name: row.product.name,
+              sku: row.product.sku,
+              category: row.product.category,
+              warehouse: row.warehouse,
+              vendor: row.vendor || undefined,
+              stock: row.stock,
+              low_stock_threshold: row.low_stock_threshold || 0,
+              price: row.product.price,
+              status: (row.status || 'in_stock') as ProductStatus,
+              last_updated: row.last_updated || '',
+            }))
         );
       }
       setLoading(false);
@@ -140,7 +149,7 @@ export default function StockTable() {
               const cc = categoryColors[p.category] || 'bg-gray-50 text-gray-600';
               const pct = Math.min((p.stock / (p.low_stock_threshold * 3 || 1)) * 100, 100);
               return (
-                <tr key={p.id} className="hover:bg-gray-50/50 transition-colors">
+                <tr key={`${p.id}-${p.warehouse}`} className="hover:bg-gray-50/50 transition-colors">
                   <td className="px-5 py-3.5">
                     <div>
                       <p className="text-sm font-semibold text-gray-800 leading-tight">{p.name}</p>

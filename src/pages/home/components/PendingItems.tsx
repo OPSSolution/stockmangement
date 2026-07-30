@@ -91,7 +91,6 @@ export default function PendingItems() {
 
   const visibleTypes = useMemo(
     () => TYPE_ORDER.filter((t) => canAccess(TYPE_META[t].permKey)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [canAccess]
   );
 

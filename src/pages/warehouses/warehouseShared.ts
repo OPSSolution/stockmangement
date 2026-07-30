@@ -98,7 +98,7 @@ export async function fetchWarehousesWithLiveData(
     { data: returns },
   ] = await Promise.all([
     warehousesQuery,
-    supabase.from('products').select('warehouse, stock, price, status'),
+    supabase.from('product_warehouse_stock').select('warehouse, stock, status, product:products(price)'),
     supabase.from('transfers').select('from_warehouse, to_warehouse, status, total_items, created_at'),
     supabase.from('purchases').select('warehouse, status, total, created_at'),
     supabase.from('returns').select('warehouse, status, created_at'),
@@ -121,6 +121,7 @@ export async function fetchWarehousesWithLiveData(
   const withLiveData = mapped.map((w) => {
     const wProducts = (products || []).filter((p: any) => p.warehouse === w.name);
     const totalUnits = wProducts.reduce((s: number, p: any) => s + Number(p.stock || 0), 0);
+    const priceOf = (p: any) => Number(p.product?.price || 0);
 
     const transfersIn = (transfers || []).filter((t: any) => t.to_warehouse === w.name);
     const transfersOut = (transfers || []).filter((t: any) => t.from_warehouse === w.name);
@@ -138,7 +139,7 @@ export async function fetchWarehousesWithLiveData(
     }));
 
     const extra: LiveStats = {
-      stockValue: wProducts.reduce((s: number, p: any) => s + Number(p.stock || 0) * Number(p.price || 0), 0),
+      stockValue: wProducts.reduce((s: number, p: any) => s + Number(p.stock || 0) * priceOf(p), 0),
       lowStockCount: wProducts.filter((p: any) => p.status === 'low_stock').length,
       outOfStockCount: wProducts.filter((p: any) => p.status === 'out_of_stock').length,
       pendingTransfersIn: transfersIn.filter((t: any) => TRANSFER_OPEN.includes(t.status)).length,
@@ -208,7 +209,10 @@ export async function fetchWarehouseProductsAndActivity(
     { data: purchases },
     { data: returns },
   ] = await Promise.all([
-    supabase.from('products').select('id, name, sku, category, vendor, stock, low_stock_threshold, price, status, bin_location').eq('warehouse', warehouseName),
+    supabase
+      .from('product_warehouse_stock')
+      .select('vendor, stock, low_stock_threshold, status, bin_location, product:products(id, name, sku, category, price)')
+      .eq('warehouse', warehouseName),
     supabase.from('transfers').select('id, from_warehouse, status, total_items, reason, created_at').eq('to_warehouse', warehouseName),
     supabase.from('transfers').select('id, to_warehouse, status, total_items, reason, created_at').eq('from_warehouse', warehouseName),
     supabase.from('purchases').select('id, vendor, status, total, total_items, created_at').eq('warehouse', warehouseName),
@@ -247,5 +251,20 @@ export async function fetchWarehouseProductsAndActivity(
     })),
   ].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 
-  return { products: (products || []) as WarehouseProductRow[], activity };
+  const mappedProducts: WarehouseProductRow[] = (products || [])
+    .filter((row: any) => row.product)
+    .map((row: any) => ({
+      id: row.product.id,
+      name: row.product.name,
+      sku: row.product.sku,
+      category: row.product.category,
+      vendor: row.vendor,
+      stock: row.stock,
+      low_stock_threshold: row.low_stock_threshold,
+      price: row.product.price,
+      status: row.status,
+      bin_location: row.bin_location,
+    }));
+
+  return { products: mappedProducts, activity };
 }

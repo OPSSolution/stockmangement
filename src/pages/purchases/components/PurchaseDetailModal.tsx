@@ -55,7 +55,7 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
     (async () => {
       const [{ data: wh }, { data: bins }] = await Promise.all([
         supabase.from('warehouses').select('bin_locations').eq('name', po.warehouse).maybeSingle(),
-        supabase.from('product_bin_stock').select('product_id, bin_location').in('product_id', po.items.map((i) => i.productId)),
+        supabase.from('product_bin_stock').select('product_id, bin_location').eq('warehouse', po.warehouse).in('product_id', po.items.map((i) => i.productId)),
       ]);
       const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
       const productBins = (bins || []).map((row) => row.bin_location as string);

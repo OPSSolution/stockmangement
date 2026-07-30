@@ -18,6 +18,7 @@ const NOTE_TONES: Record<string, { bg: RGB; border: RGB; text: RGB; label: RGB }
   violet: { bg: [245, 243, 255], border: [221, 214, 254], text: [91, 33, 182], label: [91, 33, 182] },
   red: { bg: [254, 242, 242], border: [254, 202, 202], text: [185, 28, 28], label: [185, 28, 28] },
   gray: { bg: [249, 250, 251], border: [229, 231, 235], text: [55, 65, 81], label: [107, 114, 128] },
+  emerald: { bg: [236, 253, 245], border: [209, 250, 229], text: [4, 120, 87], label: [4, 120, 87] },
 };
 
 const STATUS_TONES: Record<string, RGB> = {
@@ -53,7 +54,7 @@ export interface PdfInfoBox {
 export interface PdfNote {
   label: string;
   text: string;
-  tone?: 'amber' | 'violet' | 'red' | 'gray';
+  tone?: 'amber' | 'violet' | 'red' | 'gray' | 'emerald';
 }
 
 export type PdfCell = string | number | { content: string | number; colSpan?: number; styles?: { halign?: 'left' | 'center' | 'right' } };

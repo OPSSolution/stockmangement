@@ -1,31 +1,65 @@
 export type ProductType = 'kg' | 'pack' | 'box' | 'piece' | 'liter' | 'meter' | 'bottle' | 'bundle';
 
+/** Warehouse-agnostic item master data — one row per SKU, full stop. Everything about
+ * *how much of it, where* lives on `ProductWarehouseStock` instead (the same relationship
+ * `ProductBinStock` already has to bins, one level up: a product's presence in a
+ * warehouse, and its bin split within that warehouse, are both facts about the
+ * warehouse, not the item). */
 export interface Product {
   id: string;
   name: string;
   sku: string;
   category: string;
-  warehouse: string;
-  vendor?: string;
   imageUrl?: string;
+  price: number;
+  productType: ProductType;
+  lastUpdated: string;
+}
+
+/** One warehouse's stock of one product — a product can have zero, one, or several of
+ * these (stocked nowhere yet, stocked in exactly one warehouse, or split across many). */
+export interface ProductWarehouseStock {
+  id: string;
+  productId: string;
+  warehouse: string;
   stock: number;
   /** Units physically on hand but flagged unusable (e.g. damaged returns) — included in `stock`, excluded from what's available to request/sell/transfer. */
   onHoldStock?: number;
   lowStockThreshold: number;
-  price: number;
-  productType: ProductType;
   status: 'in_stock' | 'low_stock' | 'out_of_stock';
-  lastUpdated: string;
-  /** Expiry date of the most recently received batch. */
+  /** Who supplies this warehouse's stock of this SKU — the same SKU can be sourced differently per warehouse. */
+  vendor?: string;
+  /** Nearest expiry across this warehouse's bins of this product. */
   expiryDate?: string;
-  /** Physical put-away location, e.g. "A.1.1" (Aisle A, Cabinet 1, Position 1) — set from the Warehouse detail page. */
+  /** Physical put-away location, e.g. "A.1.1" (Aisle A, Cabinet 1, Position 1) — set from the Warehouse detail page. Legacy single-bin display fallback; product_bin_stock is the source of truth once split across more than one bin. */
+  binLocation?: string | null;
+  lastUpdated: string;
+}
+
+/** A product merged with one of its warehouse-stock rows — the flat, per-(product,
+ * warehouse) shape the Inventory UI actually renders one row of. Built client-side by
+ * joining `Product` (master) + `ProductWarehouseStock` (this warehouse's stock); a
+ * product with stock in 3 warehouses produces 3 of these. Mutations that touch stock/
+ * threshold/vendor/expiry/bin/status target `stockRowId` (the product_warehouse_stock
+ * row), not `id` (the product) — `id` only changes for master-field edits. */
+export interface ProductStockRow extends Product {
+  stockRowId: string;
+  warehouse: string;
+  stock: number;
+  onHoldStock?: number;
+  lowStockThreshold: number;
+  status: 'in_stock' | 'low_stock' | 'out_of_stock';
+  vendor?: string;
+  expiryDate?: string;
   binLocation?: string | null;
 }
 
-/** One bin's share of a product's total stock — a product can be split across several of these. */
+/** One bin's share of one warehouse's stock of a product — a product can be split
+ * across several of these within a warehouse, and separately across several warehouses. */
 export interface ProductBinStock {
   id: string;
   productId: string;
+  warehouse: string;
   binLocation: string;
   quantity: number;
   /** Expiry of the batch currently sitting in this bin — bins can carry different batches/dates. */
@@ -65,7 +99,26 @@ export interface DeliveryStatus {
   destination: string;
 }
 
-export const products: Product[] = [
+/** Flat pre-migration shape kept only for the static demo/search-index data below
+ * (GlobalSearch/MobileSearchOverlay use this array, not live Supabase data — see
+ * those files' own notes). Not the real `Product` type; don't use this for anything
+ * backed by the database. */
+interface LegacyMockProduct {
+  id: string;
+  name: string;
+  sku: string;
+  category: string;
+  warehouse: string;
+  vendor?: string;
+  stock: number;
+  lowStockThreshold: number;
+  price: number;
+  productType: ProductType;
+  status: 'in_stock' | 'low_stock' | 'out_of_stock';
+  lastUpdated: string;
+}
+
+export const products: LegacyMockProduct[] = [
   { id: 'P001', name: 'Wireless Bluetooth Headphones', sku: 'WBH-001', category: 'Electronics', warehouse: 'BM Warehouse', stock: 124, lowStockThreshold: 20, price: 89.99, status: 'in_stock', lastUpdated: '2026-05-19 09:15', productType: 'piece' },
   { id: 'P002', name: 'Ergonomic Office Chair', sku: 'EOC-002', category: 'Furniture', warehouse: 'BM Warehouse', stock: 8, lowStockThreshold: 15, price: 349.00, status: 'low_stock', lastUpdated: '2026-05-19 08:30', productType: 'piece' },
   { id: 'P003', name: 'USB-C Charging Cable 2m', sku: 'UCC-003', category: 'Accessories', warehouse: 'Vendor Warehouse', vendor: 'TechSupply Co.', stock: 0, lowStockThreshold: 50, price: 12.99, status: 'out_of_stock', lastUpdated: '2026-05-18 22:00', productType: 'pack' },

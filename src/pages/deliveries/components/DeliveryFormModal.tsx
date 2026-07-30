@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import type { DeliveryRecord, DeliveryStep } from '@/mocks/deliveries';
 import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 import { expiryTone, formatExpiry } from '@/lib/expiry';
-import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
+import { groupBinStock, lowestQuantityBin, binExpiry, binStockKey, type BinStockRow } from '@/lib/binStock';
 
 interface DeliveryFormModalProps {
   delivery?: DeliveryRecord;
@@ -63,16 +63,30 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
 
   useEffect(() => {
     const fetchProducts = async () => {
-      const { data, error } = await supabase.from('products').select('id, name, sku, image_url, stock, warehouse, expiry_date');
-      if (!error) setProducts((data || []) as ProductOption[]);
+      // One row per (product, warehouse) it's actually stocked in — a product with
+      // stock in 2 warehouses yields 2 options here, exactly what "select which
+      // warehouse's stock of this product" needs.
+      const { data, error } = await supabase
+        .from('product_warehouse_stock')
+        .select('stock, warehouse, expiry_date, product:products(id, name, sku, image_url)');
+      if (!error) {
+        setProducts(
+          (data || [])
+            .filter((row: Record<string, unknown>) => row.product)
+            .map((row: Record<string, unknown>) => {
+              const p = row.product as Record<string, unknown>;
+              return { id: p.id as string, name: p.name as string, sku: p.sku as string, image_url: p.image_url as string | null, stock: row.stock as number, warehouse: row.warehouse as string, expiry_date: row.expiry_date as string | null };
+            })
+        );
+      }
     };
     const fetchWarehouses = async () => {
       const { data, error } = await supabase.from('warehouses').select('name').order('name', { ascending: true });
       if (!error && data) setWarehouses(data.map((w) => w.name as string));
     };
     const fetchBinStock = async () => {
-      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date');
-      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
+      const { data } = await supabase.from('product_bin_stock').select('product_id, warehouse, bin_location, quantity, expiry_date');
+      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; warehouse: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
     };
 
     fetchProducts();
@@ -120,7 +134,7 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
   );
 
   const destinationWarehouses = warehouses.filter((w) => w !== form.fromWarehouse);
-  const selectedBinOptions = binStockByProduct[selectedProductId] || [];
+  const selectedBinOptions = binStockByProduct[binStockKey(selectedProductId, form.fromWarehouse)] || [];
 
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProductId);
@@ -427,8 +441,8 @@ export default function DeliveryFormModal({ delivery, onClose, onSave }: Deliver
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {form.items.map((item) => {
-                      const matchedProduct = products.find((p) => p.id === item.productId);
-                      const itemExpiry = binExpiry(binStockByProduct[item.productId || ''], item.fromBinLocation) ?? matchedProduct?.expiry_date;
+                      const matchedProduct = products.find((p) => p.id === item.productId && p.warehouse === form.fromWarehouse);
+                      const itemExpiry = binExpiry(binStockByProduct[binStockKey(item.productId || '', form.fromWarehouse)], item.fromBinLocation) ?? matchedProduct?.expiry_date;
                       return (
                       <tr key={`${item.sku}-${item.productName}`}>
                         <td className="px-3 py-2">

@@ -5,15 +5,22 @@ export interface BinStockRow {
   expiry_date?: string | null;
 }
 
-/** Groups product_bin_stock rows by product, sorted ascending by quantity — so the
- * lowest-stock bin (the one to draw down first) is always first in the list. */
+/** Stable key for anything scoped to one product's stock at one warehouse — a product
+ * can now have stock (and bins) in several warehouses at once, so `productId` alone is
+ * no longer a unique key for grouping bin/history rows the way it used to be. */
+export function binStockKey(productId: string, warehouse: string): string {
+  return `${productId}::${warehouse}`;
+}
+
+/** Groups product_bin_stock rows by `productId::warehouse`, sorted ascending by
+ * quantity — so the lowest-stock bin (the one to draw down first) is always first. */
 export function groupBinStock(
-  rows: { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]
+  rows: { product_id: string; warehouse: string; bin_location: string; quantity: number; expiry_date?: string | null }[]
 ): Record<string, BinStockRow[]> {
   const map: Record<string, BinStockRow[]> = {};
   rows.forEach((row) => {
-    const pid = row.product_id;
-    (map[pid] ??= []).push({ bin_location: row.bin_location, quantity: row.quantity, expiry_date: row.expiry_date });
+    const key = binStockKey(row.product_id, row.warehouse);
+    (map[key] ??= []).push({ bin_location: row.bin_location, quantity: row.quantity, expiry_date: row.expiry_date });
   });
   Object.values(map).forEach((list) => list.sort((a, b) => a.quantity - b.quantity));
   return map;

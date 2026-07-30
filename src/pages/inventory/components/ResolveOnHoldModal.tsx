@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import type { Product } from '@/mocks/inventory';
+import type { ProductStockRow } from '@/mocks/inventory';
 import type { OnHoldResolution } from '@/lib/stockDeduction';
 
 interface ResolveOnHoldModalProps {
-  product: Product;
+  product: ProductStockRow;
   onClose: () => void;
   onResolve: (quantity: number, resolution: OnHoldResolution, note: string) => void;
   resolving: boolean;

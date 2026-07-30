@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import type { Product, ProductBinStock } from '@/mocks/inventory';
+import type { ProductStockRow, ProductBinStock } from '@/mocks/inventory';
 import type { StockHistoryEntry } from '@/mocks/stockHistory';
 import BinCombobox, { type BinOption } from '@/components/feature/BinCombobox';
 import { buildReceiveBinOptions } from '@/lib/binStock';
 
 interface StockAdjustModalProps {
-  product: Product;
+  product: ProductStockRow;
   history?: StockHistoryEntry[];
   /** This product's current bin split, if it's stored across more than one. */
   binRows?: ProductBinStock[];

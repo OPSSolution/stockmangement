@@ -4,7 +4,7 @@ import OrderStatusBadge from './components/OrderStatusBadge';
 import OrderDetailModal from './components/OrderDetailModal';
 import OrderFormModal from './components/OrderFormModal';
 import { Order, OrderStatus } from '@/mocks/orders';
-import type { Product } from '@/mocks/inventory';
+import type { ProductStockRow } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -49,7 +49,7 @@ export default function OrdersPage() {
   const showEdit = canEdit('orders');
   const showDelete = canDelete('orders');
   const [orders, setOrders] = useState<Order[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<ProductStockRow[]>([]);
   const [reserved, setReserved] = useState<Record<string, number>>({});
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -113,9 +113,15 @@ export default function OrdersPage() {
   };
 
   const fetchProducts = async () => {
-    const { data, error } = await supabase.from('products').select('*').order('name', { ascending: true });
+    // One row per (product, warehouse) it's actually stocked in — an order line
+    // ships from a specific warehouse's stock, not just "the" product.
+    const { data, error } = await supabase.from('product_warehouse_stock').select('*, product:products(*)');
     if (error) console.error(error);
-    else setProducts((data || []).map(mapProductRow));
+    else {
+      const mapped = (data || []).filter((row: Record<string, unknown>) => row.product).map(mapProductRow);
+      mapped.sort((a, b) => a.name.localeCompare(b.name));
+      setProducts(mapped);
+    }
   };
 
   const filtered = useMemo(() => {

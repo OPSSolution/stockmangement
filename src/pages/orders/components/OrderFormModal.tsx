@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react';
-import type { Product } from '@/mocks/inventory';
+import type { ProductStockRow } from '@/mocks/inventory';
 import type { OrderCreateDraft } from '../orderCreateUtils';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { availableStock } from '@/lib/stockReservations';
 import { supabase } from '@/lib/supabase';
 import { expiryTone, formatExpiry } from '@/lib/expiry';
-import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
+import { groupBinStock, lowestQuantityBin, binExpiry, binStockKey, type BinStockRow } from '@/lib/binStock';
 
 interface OrderFormModalProps {
-  products: Product[];
+  products: ProductStockRow[];
   /** productId -> quantity already tied up in other pending requests/orders/transfers. */
   reserved: Record<string, number>;
   initialDraft?: OrderCreateDraft;
@@ -47,20 +47,18 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date');
-      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
+      const { data } = await supabase.from('product_bin_stock').select('product_id, warehouse, bin_location, quantity, expiry_date');
+      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; warehouse: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
     })();
   }, []);
 
   const selectedTotal = draft.lines.reduce((sum, line) => {
-    const product = products.find((p) => p.id === line.productId);
+    const product = products.find((p) => p.id === line.productId && p.warehouse === line.warehouse);
     return sum + (product ? product.price * (Number(line.quantity) || 0) : 0);
   }, 0);
 
   const selectedWarehouses = Array.from(new Set(
-    draft.lines
-      .map((line) => products.find((p) => p.id === line.productId)?.warehouse)
-      .filter((w): w is string => Boolean(w))
+    draft.lines.map((line) => line.warehouse).filter((w): w is string => Boolean(w))
   ));
 
   const warehouseOptions = Array.from(new Set(products.map((p) => p.warehouse))).sort();
@@ -69,8 +67,8 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
   const pickerProducts = pickerWarehouse
     ? products.filter((p) => p.warehouse === pickerWarehouse && !draft.lines.some((l) => l.productId === p.id))
     : [];
-  const pickerProductObj = products.find((p) => p.id === pickerProduct);
-  const pickerBinOptions = binStockByProduct[pickerProduct] || [];
+  const pickerProductObj = products.find((p) => p.id === pickerProduct && p.warehouse === pickerWarehouse);
+  const pickerBinOptions = binStockByProduct[binStockKey(pickerProduct, pickerWarehouse)] || [];
 
   const handleAddItem = () => {
     if (!pickerProduct) return;
@@ -96,12 +94,12 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
     }
     const overCommitted = draft.lines.find((line) => {
       if (!line.productId) return false;
-      const product = products.find((p) => p.id === line.productId);
+      const product = products.find((p) => p.id === line.productId && p.warehouse === line.warehouse);
       if (!product) return false;
       return Number(line.quantity) > availableStock(product.stock, reserved, product.id);
     });
     if (overCommitted) {
-      const product = products.find((p) => p.id === overCommitted.productId);
+      const product = products.find((p) => p.id === overCommitted.productId && p.warehouse === overCommitted.warehouse);
       const available = product ? availableStock(product.stock, reserved, product.id) : 0;
       setError(`Only ${available} unit${available === 1 ? '' : 's'} of "${product?.name}" available — the rest is tied up in other pending requests/orders/transfers.`);
       return;
@@ -154,7 +152,7 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
               </select>
               <select
                 value={pickerProduct}
-                onChange={(e) => { setPickerProduct(e.target.value); setPickerBin(lowestQuantityBin(binStockByProduct[e.target.value])); }}
+                onChange={(e) => { setPickerProduct(e.target.value); setPickerBin(lowestQuantityBin(binStockByProduct[binStockKey(e.target.value, pickerWarehouse)])); }}
                 disabled={!pickerWarehouse}
                 className="flex-1 min-w-40 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 cursor-pointer disabled:bg-gray-50 disabled:text-gray-400"
               >
@@ -216,9 +214,9 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {draft.lines.map((line, index) => {
-                      const product = products.find((p) => p.id === line.productId);
+                      const product = products.find((p) => p.id === line.productId && p.warehouse === line.warehouse);
                       const lineBin = line.binLocation || product?.binLocation;
-                      const lineExpiry = binExpiry(binStockByProduct[line.productId], lineBin) ?? product?.expiryDate;
+                      const lineExpiry = binExpiry(binStockByProduct[binStockKey(line.productId, line.warehouse || '')], lineBin) ?? product?.expiryDate;
                       return (
                         <tr key={index}>
                           <td className="px-3 py-2.5">

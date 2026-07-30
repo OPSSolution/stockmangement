@@ -54,15 +54,23 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
   useEffect(() => {
     if (!isReceivingStep) return;
     (async () => {
-      const [{ data: wh }, { data: destProducts }] = await Promise.all([
+      const [{ data: wh }, { data: destStock }] = await Promise.all([
         supabase.from('warehouses').select('bin_locations').eq('name', delivery.toWarehouse).maybeSingle(),
-        supabase.from('products').select('id').eq('warehouse', delivery.toWarehouse).in('sku', delivery.items.map((i) => i.sku)),
+        supabase
+          .from('product_warehouse_stock')
+          .select('product_id, product:products!inner(sku)')
+          .eq('warehouse', delivery.toWarehouse)
+          .in('product.sku', delivery.items.map((i) => i.sku)),
       ]);
       const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
       let productBins: string[] = [];
-      const destIds = (destProducts || []).map((p) => p.id as string);
+      const destIds = (destStock || []).map((row: any) => row.product_id as string);
       if (destIds.length > 0) {
-        const { data: bins } = await supabase.from('product_bin_stock').select('bin_location').in('product_id', destIds);
+        const { data: bins } = await supabase
+          .from('product_bin_stock')
+          .select('bin_location')
+          .eq('warehouse', delivery.toWarehouse)
+          .in('product_id', destIds);
         productBins = (bins || []).map((row) => row.bin_location as string);
       }
       setDestBinOptions([...new Set([...registryBins, ...productBins])]);

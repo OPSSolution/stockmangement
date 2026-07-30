@@ -7,6 +7,7 @@ interface ProductRow {
   category: string;
   stock: number;
   low_stock_threshold: number;
+  warehouse: string;
 }
 
 interface SettingsRow {
@@ -23,11 +24,23 @@ interface SettingsRow {
  * new_order/new_delivery/new_transfer, which are admin-only).
  */
 export async function checkStockAlerts(supabase: SupabaseClient) {
-  const [{ data: products }, { data: users }, { data: allSettings }] = await Promise.all([
-    supabase.from('products').select('id, name, sku, category, stock, low_stock_threshold'),
+  const [{ data: stockRows }, { data: users }, { data: allSettings }] = await Promise.all([
+    supabase.from('product_warehouse_stock').select('warehouse, stock, low_stock_threshold, product:products(id, name, sku, category)'),
     supabase.from('profiles').select('id'),
     supabase.from('notification_settings').select('user_id, category_thresholds'),
   ]);
+
+  const products: ProductRow[] = (stockRows ?? [])
+    .filter((row: any) => row.product)
+    .map((row: any) => ({
+      id: row.product.id,
+      name: row.product.name,
+      sku: row.product.sku,
+      category: row.product.category,
+      stock: row.stock,
+      low_stock_threshold: row.low_stock_threshold,
+      warehouse: row.warehouse,
+    }));
 
   if (!products || !users || products.length === 0 || users.length === 0) return { created: 0 };
 
@@ -48,22 +61,22 @@ export async function checkStockAlerts(supabase: SupabaseClient) {
         .select('id')
         .eq('user_id', user.id)
         .eq('type', type)
-        .contains('data', { product_id: product.id })
+        .contains('data', { product_id: product.id, warehouse: product.warehouse })
         .gte('created_at', oneHourAgo)
         .limit(1);
       if (recent && recent.length > 0) continue;
 
       const title = type === 'out_of_stock' ? `Out of Stock: ${product.name}` : `Low Stock: ${product.name}`;
       const message = type === 'out_of_stock'
-        ? `${product.name} (${product.sku}) is out of stock.`
-        : `${product.name} (${product.sku}) in ${product.category} has only ${product.stock} units remaining. Threshold: ${effectiveThreshold}.`;
+        ? `${product.name} (${product.sku}) is out of stock at ${product.warehouse}.`
+        : `${product.name} (${product.sku}) in ${product.category} has only ${product.stock} units remaining at ${product.warehouse}. Threshold: ${effectiveThreshold}.`;
 
       const { error } = await supabase.from('notifications').insert({
         user_id: user.id,
         type,
         title,
         message,
-        data: { product_id: product.id, product_name: product.name, stock: product.stock },
+        data: { product_id: product.id, product_name: product.name, stock: product.stock, warehouse: product.warehouse },
         is_read: false,
         is_emailed: false,
         is_webhook_sent: false,

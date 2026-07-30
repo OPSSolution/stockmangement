@@ -1,27 +1,28 @@
 import { useState } from 'react';
-import { Product, ProductBinStock } from '@/mocks/inventory';
+import { ProductStockRow, ProductBinStock } from '@/mocks/inventory';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { availableStock } from '@/lib/stockReservations';
 import { formatDateTime } from '@/lib/formatDateTime';
 import { expiryTone } from '@/lib/expiry';
+import { binStockKey } from '@/lib/binStock';
 
 interface ProductTableProps {
-  products: Product[];
+  products: ProductStockRow[];
   /** productId -> quantity tied up in pending requests/orders/transfers, not yet physically deducted. */
   reserved: Record<string, number>;
-  /** productId -> its bin split, when stock is spread across more than one bin. */
+  /** `${productId}::${warehouse}` -> its bin split, when stock is spread across more than one bin. */
   binStockByProduct: Record<string, ProductBinStock[]>;
-  /** sku -> every product row with that SKU (across all warehouses, unfiltered) — used to flag when
-   * the same SKU also exists in other warehouses as a separate row. */
-  siblingsBySku: Record<string, { id: string; warehouse: string; stock: number }[]>;
+  /** productId -> every warehouse-stock row for that product (including this one) — used to flag
+   * when a product also has stock in other warehouses. */
+  siblingsByProductId: Record<string, { id: string; warehouse: string; stock: number }[]>;
   /** Jump the table to a given warehouse, clearing other filters so the row is guaranteed visible. */
   onJumpToWarehouse: (warehouse: string) => void;
-  onEdit: (product: Product) => void;
-  onDelete: (product: Product) => void;
-  onAdjust: (product: Product) => void;
-  onViewHistory: (product: Product) => void;
-  onViewDetails: (product: Product) => void;
+  onEdit: (product: ProductStockRow) => void;
+  onDelete: (product: ProductStockRow) => void;
+  onAdjust: (product: ProductStockRow) => void;
+  onViewHistory: (product: ProductStockRow) => void;
+  onViewDetails: (product: ProductStockRow) => void;
 }
 
 const categoryColors: Record<string, string> = {
@@ -38,7 +39,7 @@ const statusConfig = {
   out_of_stock: { label: 'Out of Stock', cls: 'bg-red-50 text-red-600' },
 };
 
-export default function ProductTable({ products, reserved, binStockByProduct, siblingsBySku, onJumpToWarehouse, onEdit, onDelete, onAdjust, onViewHistory, onViewDetails }: ProductTableProps) {
+export default function ProductTable({ products, reserved, binStockByProduct, siblingsByProductId, onJumpToWarehouse, onEdit, onDelete, onAdjust, onViewHistory, onViewDetails }: ProductTableProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [openSiblingMenu, setOpenSiblingMenu] = useState<string | null>(null);
   const { formatAmount } = useCurrency();
@@ -71,9 +72,9 @@ export default function ProductTable({ products, reserved, binStockByProduct, si
             const reservedQty = reserved[p.id] || 0;
             const onHoldQty = p.onHoldStock || 0;
             const available = availableStock(p.stock, reserved, p.id, onHoldQty);
-            const siblings = (siblingsBySku[p.sku] || []).filter((s) => s.id !== p.id);
+            const siblings = (siblingsByProductId[p.id] || []).filter((s) => s.id !== p.stockRowId);
             return (
-              <tr key={p.id} className="hover:bg-gray-50/50 transition-colors">
+              <tr key={p.stockRowId} className="hover:bg-gray-50/50 transition-colors">
                 <td className="py-3 px-4">
                   <button
                     type="button"
@@ -113,13 +114,13 @@ export default function ProductTable({ products, reserved, binStockByProduct, si
                       <div className="relative mt-1">
                         <button
                           type="button"
-                          onClick={() => setOpenSiblingMenu(openSiblingMenu === p.id ? null : p.id)}
+                          onClick={() => setOpenSiblingMenu(openSiblingMenu === p.stockRowId ? null : p.stockRowId)}
                           className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-600 hover:text-sky-700 cursor-pointer"
                         >
                           <i className="ri-building-2-line"></i>
                           +{siblings.length} other warehouse{siblings.length > 1 ? 's' : ''}
                         </button>
-                        {openSiblingMenu === p.id && (
+                        {openSiblingMenu === p.stockRowId && (
                           <div
                             className="absolute left-0 top-6 z-20 w-56 bg-white border border-gray-100 rounded-xl shadow-md py-1"
                             onMouseLeave={() => setOpenSiblingMenu(null)}
@@ -144,7 +145,7 @@ export default function ProductTable({ products, reserved, binStockByProduct, si
                 </td>
                 <td className="py-3 px-4">
                   {(() => {
-                    const bins = binStockByProduct[p.id] ?? [];
+                    const bins = binStockByProduct[binStockKey(p.id, p.warehouse)] ?? [];
                     if (bins.length > 0) {
                       return (
                         <div className="flex flex-col gap-0.5">
@@ -209,14 +210,14 @@ export default function ProductTable({ products, reserved, binStockByProduct, si
                     </button>
                     {(showEdit || showDelete) && (
                       <button
-                        onClick={() => setOpenMenu(openMenu === p.id ? null : p.id)}
+                        onClick={() => setOpenMenu(openMenu === p.stockRowId ? null : p.stockRowId)}
                         className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-400 transition-colors cursor-pointer"
                       >
                         <i className="ri-more-2-line text-sm"></i>
                       </button>
                     )}
                   </div>
-                  {openMenu === p.id && (showEdit || showDelete) && (
+                  {openMenu === p.stockRowId && (showEdit || showDelete) && (
                     <div
                       className="absolute right-4 top-10 w-36 bg-white border border-gray-100 rounded-2xl shadow-sm z-30 py-1 shadow-md"
                       onMouseLeave={() => setOpenMenu(null)}

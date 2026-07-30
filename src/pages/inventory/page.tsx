@@ -9,7 +9,7 @@ import StockHistoryModal from './components/StockHistoryModal';
 import StockActivityReportModal from './components/StockActivityReportModal';
 import DeleteConfirmModal from './components/DeleteConfirmModal';
 import ResolveOnHoldModal from './components/ResolveOnHoldModal';
-import { Product, ProductBinStock } from '@/mocks/inventory';
+import { Product, ProductStockRow, ProductWarehouseStock, ProductBinStock } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
 import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
@@ -19,6 +19,7 @@ import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit, diffFields } from '@/lib/auditLog';
 import { resolveOnHoldStock, adjustBinQuantity, type OnHoldResolution } from '@/lib/stockDeduction';
+import { binStockKey } from '@/lib/binStock';
 import { formatDateTime } from '@/lib/formatDateTime';
 import { nowStamp } from '@/lib/timestamp';
 import { asArray } from '@/pages/warehouses/warehouseShared';
@@ -28,30 +29,56 @@ const CATEGORY_STORAGE_KEY = 'inventory_categories';
 
 type FilterStatus = 'all' | 'in_stock' | 'low_stock' | 'out_of_stock';
 
-function deriveStatus(stock: number, threshold: number): Product['status'] {
+function deriveStatus(stock: number, threshold: number): ProductWarehouseStock['status'] {
   if (stock === 0) return 'out_of_stock';
   if (stock <= threshold) return 'low_stock';
   return 'in_stock';
 }
 
-function mapProduct(row: Record<string, unknown>): Product {
+function mapProductMaster(row: Record<string, unknown>): Product {
   return {
     id: row.id as string,
     name: row.name as string,
     sku: row.sku as string,
     category: row.category as string,
-    warehouse: row.warehouse as string,
-    vendor: row.vendor as string | undefined,
     imageUrl: (row.image_url as string) || undefined,
+    price: row.price as number,
+    productType: (row.product_type as Product['productType']) || 'pack',
+    lastUpdated: row.last_updated as string,
+  };
+}
+
+function mapStockRow(row: Record<string, unknown>): ProductWarehouseStock {
+  return {
+    id: row.id as string,
+    productId: row.product_id as string,
+    warehouse: row.warehouse as string,
     stock: row.stock as number,
     onHoldStock: (row.on_hold_stock as number) ?? 0,
     lowStockThreshold: row.low_stock_threshold as number,
-    price: row.price as number,
-    productType: (row.product_type as Product['productType']) || 'pack',
-    status: row.status as Product['status'],
-    lastUpdated: row.last_updated as string,
+    status: row.status as ProductWarehouseStock['status'],
+    vendor: (row.vendor as string) || undefined,
     expiryDate: (row.expiry_date as string) || undefined,
     binLocation: (row.bin_location as string) || undefined,
+    lastUpdated: row.last_updated as string,
+  };
+}
+
+/** Flattens a product + one of its warehouse-stock rows into the single-row shape the
+ * Inventory table/modals render — a product stocked in 3 warehouses produces 3 of these. */
+function mergeRow(product: Product, stock: ProductWarehouseStock): ProductStockRow {
+  return {
+    ...product,
+    stockRowId: stock.id,
+    warehouse: stock.warehouse,
+    stock: stock.stock,
+    onHoldStock: stock.onHoldStock,
+    lowStockThreshold: stock.lowStockThreshold,
+    status: stock.status,
+    vendor: stock.vendor,
+    expiryDate: stock.expiryDate,
+    binLocation: stock.binLocation,
+    lastUpdated: stock.lastUpdated,
   };
 }
 
@@ -79,7 +106,7 @@ export default function InventoryPage() {
   const { warehouseScope, canAccess } = useAuth();
   const canAdjustStock = canAccess('inventory_stock_adjust');
   const [searchParams, setSearchParams] = useSearchParams();
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<ProductStockRow[]>([]);
   const [binStock, setBinStock] = useState<ProductBinStock[]>([]);
   const [reserved, setReserved] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<StockHistoryEntry[]>([]);
@@ -97,17 +124,17 @@ export default function InventoryPage() {
   const [allVendorNames, setAllVendorNames] = useState<string[]>([]);
 
   const [showAddModal, setShowAddModal] = useState(false);
-  const [editProduct, setEditProduct] = useState<Product | null>(null);
-  const [adjustProduct, setAdjustProduct] = useState<Product | null>(null);
-  const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
-  const [detailProduct, setDetailProduct] = useState<Product | null>(null);
-  const [resolveOnHoldProduct, setResolveOnHoldProduct] = useState<Product | null>(null);
+  const [editProduct, setEditProduct] = useState<ProductStockRow | null>(null);
+  const [adjustProduct, setAdjustProduct] = useState<ProductStockRow | null>(null);
+  const [historyProduct, setHistoryProduct] = useState<ProductStockRow | null>(null);
+  const [detailProduct, setDetailProduct] = useState<ProductStockRow | null>(null);
+  const [resolveOnHoldProduct, setResolveOnHoldProduct] = useState<ProductStockRow | null>(null);
   const [resolvingOnHold, setResolvingOnHold] = useState(false);
   const [resolveOnHoldError, setResolveOnHoldError] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const actionsMenuRef = useRef<HTMLDivElement>(null);
-  const [deleteProduct, setDeleteProduct] = useState<Product | null>(null);
+  const [deleteProduct, setDeleteProduct] = useState<ProductStockRow | null>(null);
 
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
 
@@ -185,7 +212,8 @@ export default function InventoryPage() {
     }
   }, [searchParams, setSearchParams]);
 
-  // Auto-open stock adjust modal when navigated with ?restock=ID
+  // Auto-open stock adjust modal when navigated with ?restock=ID — picks the first
+  // warehouse-stock row for that product id if it has more than one.
   useEffect(() => {
     const restockId = searchParams.get('restock');
     if (restockId && products.length > 0) {
@@ -200,17 +228,24 @@ export default function InventoryPage() {
 
   const fetchProducts = async () => {
     setLoading(true);
-    // Sort by id (assigned sequentially at creation, never changed afterward), not
-    // last_updated — otherwise editing/adjusting any product bumps it to the top and
-    // reshuffles the whole list every time something merely changes on it.
-    let query = supabase.from('products').select('*').order('id', { ascending: false });
+    // One row per (product, warehouse) — sourced from product_warehouse_stock joined
+    // to its product master, ordered by product id (assigned sequentially at creation,
+    // never changed afterward) so editing/adjusting anything doesn't reshuffle the list.
+    let query = supabase
+      .from('product_warehouse_stock')
+      .select('*, product:products(*)')
+      .order('product_id', { ascending: false });
     if (warehouseScope) query = query.in('warehouse', warehouseScope);
     const { data, error } = await query;
     if (error) {
       console.error(error);
       showToast('Failed to load products.', 'error');
     } else {
-      setProducts((data || []).map(mapProduct));
+      setProducts(
+        (data || [])
+          .filter((row: Record<string, unknown>) => row.product)
+          .map((row: Record<string, unknown>) => mergeRow(mapProductMaster(row.product as Record<string, unknown>), mapStockRow(row)))
+      );
     }
     setLoading(false);
   };
@@ -229,31 +264,38 @@ export default function InventoryPage() {
     else setBinStock((data || []).map((row) => ({
       id: row.id as string,
       productId: row.product_id as string,
+      warehouse: row.warehouse as string,
       binLocation: row.bin_location as string,
       quantity: row.quantity as number,
       expiryDate: (row.expiry_date as string) || undefined,
     })));
   };
 
+  // Keyed by `${productId}::${warehouse}` — a product's bins are scoped to one
+  // warehouse now, so the plain product id alone is no longer a unique key.
   const binStockByProduct = useMemo(() => {
     const map: Record<string, ProductBinStock[]> = {};
     binStock.forEach((row) => {
-      const list = map[row.productId];
-      if (list) list.push(row); else map[row.productId] = [row];
+      const key = binStockKey(row.productId, row.warehouse);
+      const list = map[key];
+      if (list) list.push(row); else map[key] = [row];
     });
     return map;
   }, [binStock]);
 
-  // Replaces every bin row for one product in a single pass — simpler and safer
-  // than diffing add/remove/edit, and the row count per product is always small.
-  const syncBinStock = async (productId: string, rows: { binLocation: string; quantity: number; expiryDate?: string }[]) => {
+  // Replaces every bin row for one product's stock at one warehouse in a single pass —
+  // simpler and safer than diffing add/remove/edit, and the row count is always small.
+  // Scoped to (productId, warehouse) so editing one warehouse's bins never touches
+  // another warehouse's bins for the same product.
+  const syncBinStock = async (productId: string, warehouse: string, rows: { binLocation: string; quantity: number; expiryDate?: string }[]) => {
     const clean = rows.filter((r) => r.binLocation.trim() && r.quantity > 0);
-    await supabase.from('product_bin_stock').delete().eq('product_id', productId);
+    await supabase.from('product_bin_stock').delete().eq('product_id', productId).eq('warehouse', warehouse);
     if (clean.length > 0) {
       const { error } = await supabase.from('product_bin_stock').insert(
         clean.map((r, i) => ({
           id: `PBS-${productId}-${Date.now()}-${i}`,
           product_id: productId,
+          warehouse,
           bin_location: r.binLocation,
           quantity: r.quantity,
           expiry_date: r.expiryDate || null,
@@ -262,13 +304,13 @@ export default function InventoryPage() {
       if (error) console.error(error);
     }
     setBinStock((prev) => [
-      ...prev.filter((r) => r.productId !== productId),
-      ...clean.map((r, i) => ({ id: `PBS-${productId}-${Date.now()}-${i}`, productId, binLocation: r.binLocation, quantity: r.quantity, expiryDate: r.expiryDate || undefined })),
+      ...prev.filter((r) => !(r.productId === productId && r.warehouse === warehouse)),
+      ...clean.map((r, i) => ({ id: `PBS-${productId}-${Date.now()}-${i}`, productId, warehouse, binLocation: r.binLocation, quantity: r.quantity, expiryDate: r.expiryDate || undefined })),
     ]);
   };
 
   const filtered = useMemo(() => {
-    return products.filter((p) => {
+    const rows = products.filter((p) => {
       const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase());
       const matchStatus = filterStatus === 'all' || p.status === filterStatus;
       const matchWarehouse = filterWarehouse === 'all' || p.warehouse === filterWarehouse;
@@ -276,16 +318,28 @@ export default function InventoryPage() {
       const matchVendor = filterVendor === 'all' || p.vendor === filterVendor;
       return matchSearch && matchStatus && matchWarehouse && matchCategory && matchVendor;
     });
+    // "All Warehouses" collapses each product to a single row (whichever warehouse
+    // currently holds the most stock) so a multi-warehouse product doesn't show up
+    // as several rows — the sibling badge (siblingsByProductId) still surfaces the
+    // other warehouses, and picking a specific warehouse in the filter reveals its
+    // own row directly.
+    if (filterWarehouse !== 'all') return rows;
+    const byProduct = new Map<string, ProductStockRow>();
+    rows.forEach((p) => {
+      const existing = byProduct.get(p.id);
+      if (!existing || p.stock > existing.stock) byProduct.set(p.id, p);
+    });
+    return Array.from(byProduct.values());
   }, [products, search, filterStatus, filterWarehouse, filterCategory, filterVendor]);
 
-  // Same SKU can exist as a separate row per warehouse (each warehouse tracks its own
-  // stock/bins) — most often because a transfer introduced it to a warehouse that
-  // didn't stock it yet. Grouped here (from the full unfiltered list) so the table can
-  // flag "also in N other warehouses" on each row regardless of the active filters.
-  const siblingsBySku = useMemo(() => {
+  // A product can now legitimately have stock in several warehouses at once (real
+  // rows sharing one product id, not duplicate products) — grouped here from the
+  // full unfiltered list so the table can flag "also in N other warehouses" on each
+  // row regardless of the active filters.
+  const siblingsByProductId = useMemo(() => {
     const map: Record<string, { id: string; warehouse: string; stock: number }[]> = {};
     products.forEach((p) => {
-      (map[p.sku] ??= []).push({ id: p.id, warehouse: p.warehouse, stock: p.stock });
+      (map[p.id] ??= []).push({ id: p.stockRowId, warehouse: p.warehouse, stock: p.stock });
     });
     return map;
   }, [products]);
@@ -303,12 +357,14 @@ export default function InventoryPage() {
   // Latest reason a product's on-hold units were placed on hold for — sourced from
   // the stock_history row restockReturnedItems writes (src/lib/stockDeduction.ts),
   // which prefixes the note "On hold — " specifically so this can be parsed back out.
-  // `history` is fetched newest-first, so the first match per product is the latest.
+  // Keyed per (product, warehouse) since on-hold stock is warehouse-scoped; `history`
+  // is fetched newest-first, so the first match per key is the latest.
   const onHoldReasons = useMemo(() => {
     const map: Record<string, string> = {};
     history.forEach((h) => {
-      if (h.type === 'return' && h.note?.startsWith('On hold — ') && map[h.productId] === undefined) {
-        map[h.productId] = h.note.slice('On hold — '.length);
+      if (h.type === 'return' && h.note?.startsWith('On hold — ')) {
+        const key = binStockKey(h.productId, h.warehouse);
+        if (map[key] === undefined) map[key] = h.note.slice('On hold — '.length);
       }
     });
     return map;
@@ -330,105 +386,178 @@ export default function InventoryPage() {
     return allVendorNames;
   }, [warehouseScope, scopedVendorNames, allVendorNames]);
 
-  const handleSaveProduct = async (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string; binRows?: { binLocation: string; quantity: number; expiryDate?: string }[] }) => {
+  const handleSaveProduct = async (data: {
+    id?: string;
+    stockRowId?: string;
+    name: string;
+    sku: string;
+    category: string;
+    imageUrl?: string;
+    price: number;
+    productType: Product['productType'];
+    warehouse: string;
+    vendor?: string;
+    stock: number;
+    lowStockThreshold: number;
+    expiryDate?: string;
+    binRows?: { binLocation: string; quantity: number; expiryDate?: string }[];
+  }) => {
     const now = nowStamp();
     const status = deriveStatus(data.stock, data.lowStockThreshold);
-    const before = data.id ? products.find((p) => p.id === data.id) : undefined;
+    const before = data.stockRowId ? products.find((p) => p.stockRowId === data.stockRowId) : undefined;
     const cleanBinRows = (data.binRows ?? []).filter((r) => r.binLocation.trim() && r.quantity > 0);
-    // products.bin_location is a single legacy field kept for quick display — it
-    // can only represent the case where all stock sits in exactly one bin.
-    // product_bin_stock (synced below) is the real source of truth once a
-    // product is split across more than one, or has none assigned yet.
+    // product_warehouse_stock.bin_location is a single legacy field kept for quick
+    // display — it can only represent the case where all stock sits in exactly one
+    // bin. product_bin_stock (synced below) is the real source of truth once a
+    // product's warehouse stock is split across more than one, or has none yet.
     const derivedBinLocation = cleanBinRows.length === 1 ? cleanBinRows[0].binLocation : null;
 
-    if (data.id) {
-      const { error } = await supabase.from('products').update({
+    let productId = data.id;
+
+    if (productId) {
+      const { error: masterErr } = await supabase.from('products').update({
         name: data.name,
         sku: data.sku,
         category: data.category,
-        warehouse: data.warehouse,
-        vendor: data.vendor || null,
         image_url: data.imageUrl || null,
-        stock: data.stock,
-        low_stock_threshold: data.lowStockThreshold,
         price: data.price,
         product_type: data.productType,
-        expiry_date: data.expiryDate || null,
-        bin_location: derivedBinLocation,
-        status,
         last_updated: now,
-      }).eq('id', data.id);
-
-      if (error) {
-        console.error(error);
+      }).eq('id', productId);
+      if (masterErr) {
+        console.error(masterErr);
         showToast('Failed to update product.', 'error');
-      } else {
-        await syncBinStock(data.id, cleanBinRows);
-        showToast('Product updated successfully.');
-        setProducts((prev) => prev.map((p) => (p.id === data.id ? { ...p, ...data, id: data.id as string, binLocation: derivedBinLocation, status, lastUpdated: now } : p)));
-        const fieldChanges = before ? diffFields(before, { ...data, status, lastUpdated: now }, [
-          { key: 'name', label: 'Name' },
-          { key: 'sku', label: 'SKU' },
-          { key: 'category', label: 'Category' },
-          { key: 'warehouse', label: 'Warehouse' },
-          { key: 'vendor', label: 'Vendor' },
-          { key: 'stock', label: 'Stock' },
-          { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
-          { key: 'price', label: 'Price' },
-          { key: 'expiryDate', label: 'Expiry Date' },
-          { key: 'status', label: 'Status' },
-        ]) : [];
-        // Image URLs (often long data URIs) aren't readable as raw before/after
-        // text, so this is logged as a plain "changed" flag instead of the values.
-        if (before && (before.imageUrl || '') !== (data.imageUrl || '')) {
-          fieldChanges.push({ field: 'Image', from: before.imageUrl ? 'Previous photo' : 'No photo', to: data.imageUrl ? 'New photo' : 'No photo' });
-        }
-        logAudit({
-          action: 'update',
-          module: 'inventory',
-          description: `Updated product "${data.name}" (${data.sku})`,
-          referenceId: data.id,
-          changes: fieldChanges,
-        });
+        return;
       }
     } else {
-      const maxNum = products.length > 0 ? Math.max(...products.map(p => parseInt(p.id.replace('P', '')) || 0)) : 0;
-      const newId = `P${String(maxNum + 1).padStart(3, '0')}`;
-
-      const { error } = await supabase.from('products').insert({
-        id: newId,
+      const maxNum = products.length > 0 ? Math.max(...products.map((p) => parseInt(p.id.replace('P', '')) || 0)) : 0;
+      productId = `P${String(maxNum + 1).padStart(3, '0')}`;
+      const { error: createErr } = await supabase.from('products').insert({
+        id: productId,
         name: data.name,
         sku: data.sku,
         category: data.category,
-        warehouse: data.warehouse,
-        vendor: data.vendor || null,
         image_url: data.imageUrl || null,
-        stock: data.stock,
-        low_stock_threshold: data.lowStockThreshold,
         price: data.price,
         product_type: data.productType,
-        expiry_date: data.expiryDate || null,
-        bin_location: derivedBinLocation,
-        status,
         last_updated: now,
       });
-
-      if (error) {
-        console.error(error);
+      if (createErr) {
+        console.error(createErr);
         showToast('Failed to add product.', 'error');
-      } else {
-        await syncBinStock(newId, cleanBinRows);
-        showToast('Product added successfully.');
-        setProducts((prev) => [{ ...data, id: newId, binLocation: derivedBinLocation, status, lastUpdated: now }, ...prev]);
-        logAudit({ action: 'create', module: 'inventory', description: `Created product "${data.name}" (${data.sku})`, referenceId: newId });
+        return;
       }
     }
+
+    // The warehouse-stock row: update it if we already know its id, otherwise
+    // find-or-create it for (productId, data.warehouse) — covers both "editing this
+    // warehouse's stock" and "this is this product's first stock record anywhere."
+    let stockRowId = data.stockRowId;
+    const stockPatch = {
+      vendor: data.vendor || null,
+      stock: data.stock,
+      low_stock_threshold: data.lowStockThreshold,
+      expiry_date: data.expiryDate || null,
+      bin_location: derivedBinLocation,
+      status,
+      last_updated: now,
+    };
+    if (stockRowId) {
+      const { error: stockErr } = await supabase.from('product_warehouse_stock').update({ ...stockPatch, warehouse: data.warehouse }).eq('id', stockRowId);
+      if (stockErr) {
+        console.error(stockErr);
+        showToast('Failed to update stock.', 'error');
+        return;
+      }
+    } else {
+      const { data: existing } = await supabase.from('product_warehouse_stock').select('id').eq('product_id', productId).eq('warehouse', data.warehouse).maybeSingle();
+      if (existing) {
+        stockRowId = existing.id as string;
+        const { error: stockErr } = await supabase.from('product_warehouse_stock').update(stockPatch).eq('id', stockRowId);
+        if (stockErr) {
+          console.error(stockErr);
+          showToast('Failed to update stock.', 'error');
+          return;
+        }
+      } else {
+        stockRowId = `PWS-${productId}-${Date.now()}`;
+        const { error: stockErr } = await supabase.from('product_warehouse_stock').insert({
+          id: stockRowId,
+          product_id: productId,
+          warehouse: data.warehouse,
+          on_hold_stock: 0,
+          ...stockPatch,
+        });
+        if (stockErr) {
+          console.error(stockErr);
+          showToast('Failed to add stock.', 'error');
+          return;
+        }
+      }
+    }
+
+    await syncBinStock(productId, data.warehouse, cleanBinRows);
+
+    const masterPatch = { name: data.name, sku: data.sku, category: data.category, imageUrl: data.imageUrl, price: data.price, productType: data.productType, lastUpdated: now };
+    const merged: ProductStockRow = {
+      id: productId,
+      ...masterPatch,
+      stockRowId,
+      warehouse: data.warehouse,
+      vendor: data.vendor,
+      stock: data.stock,
+      onHoldStock: before?.onHoldStock ?? 0,
+      lowStockThreshold: data.lowStockThreshold,
+      status,
+      expiryDate: data.expiryDate,
+      binLocation: derivedBinLocation ?? undefined,
+    };
+
+    if (before) {
+      showToast('Product updated successfully.');
+      // Master-field changes apply to every warehouse this product is stocked in —
+      // not just the one being edited right now.
+      setProducts((prev) => {
+        const withMasterUpdated = prev.map((p) => (p.id === productId ? { ...p, ...masterPatch } : p));
+        return withMasterUpdated.some((p) => p.stockRowId === stockRowId)
+          ? withMasterUpdated.map((p) => (p.stockRowId === stockRowId ? merged : p))
+          : [...withMasterUpdated, merged];
+      });
+      const fieldChanges = diffFields(before, merged, [
+        { key: 'name', label: 'Name' },
+        { key: 'sku', label: 'SKU' },
+        { key: 'category', label: 'Category' },
+        { key: 'vendor', label: 'Vendor' },
+        { key: 'stock', label: 'Stock' },
+        { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
+        { key: 'price', label: 'Price' },
+        { key: 'expiryDate', label: 'Expiry Date' },
+        { key: 'status', label: 'Status' },
+      ]);
+      // Image URLs (often long data URIs) aren't readable as raw before/after
+      // text, so this is logged as a plain "changed" flag instead of the values.
+      if ((before.imageUrl || '') !== (data.imageUrl || '')) {
+        fieldChanges.push({ field: 'Image', from: before.imageUrl ? 'Previous photo' : 'No photo', to: data.imageUrl ? 'New photo' : 'No photo' });
+      }
+      logAudit({
+        action: 'update',
+        module: 'inventory',
+        description: `Updated product "${data.name}" (${data.sku})`,
+        referenceId: productId,
+        changes: fieldChanges,
+      });
+    } else {
+      showToast('Product added successfully.');
+      setProducts((prev) => [merged, ...prev]);
+      logAudit({ action: 'create', module: 'inventory', description: `Created product "${data.name}" (${data.sku}) at ${data.warehouse}`, referenceId: productId });
+    }
+
     setEditProduct(null);
     setShowAddModal(false);
   };
 
   const handleAdjust = async (productId: string, delta: number, type: string, note: string, expiryDate?: string, binLocation?: string) => {
-    const target = products.find((p) => p.id === productId);
+    const target = adjustProduct && adjustProduct.id === productId ? adjustProduct : products.find((p) => p.id === productId);
     if (!target) return;
 
     const newStock = Math.max(0, target.stock + delta);
@@ -439,37 +568,37 @@ export default function InventoryPage() {
     // calendar day for anyone not in UTC+0 and breaking the movement report's date filter).
     const nowIso = new Date().toISOString();
 
-    // Bins carry their own expiry now — project what this adjustment does to the
-    // product's bin rows so the product-level date (used by badges/low-stock lists
+    // Bins carry their own expiry now — project what this adjustment does to this
+    // warehouse's bin rows so the per-warehouse date (used by badges/low-stock lists
     // elsewhere) can be recomputed as the nearest expiry across all of them.
-    const currentBinsForProduct = binStock.filter((r) => r.productId === productId);
-    let projectedBins = currentBinsForProduct;
+    const currentBinsForRow = binStock.filter((r) => r.productId === productId && r.warehouse === target.warehouse);
+    let projectedBins = currentBinsForRow;
     if (binLocation) {
-      const existing = currentBinsForProduct.find((r) => r.binLocation === binLocation);
+      const existing = currentBinsForRow.find((r) => r.binLocation === binLocation);
       if (existing) {
-        projectedBins = currentBinsForProduct.map((r) =>
+        projectedBins = currentBinsForRow.map((r) =>
           r === existing ? { ...r, quantity: Math.max(0, r.quantity + delta), expiryDate: delta > 0 && expiryDate ? expiryDate : r.expiryDate } : r
         );
       } else if (delta > 0) {
-        projectedBins = [...currentBinsForProduct, { id: `PBS-${productId}-${Date.now()}`, productId, binLocation, quantity: delta, expiryDate: expiryDate || undefined }];
+        projectedBins = [...currentBinsForRow, { id: `PBS-${productId}-${Date.now()}`, productId, warehouse: target.warehouse, binLocation, quantity: delta, expiryDate: expiryDate || undefined }];
       }
     }
     const newExpiryDate = projectedBins.length > 0
       ? nearestExpiry(projectedBins.map((r) => r.expiryDate))
       : (delta > 0 && expiryDate ? expiryDate : target.expiryDate);
 
-    const productUpdate: Record<string, unknown> = {
+    const stockUpdate: Record<string, unknown> = {
       stock: newStock,
       status: deriveStatus(newStock, target.lowStockThreshold),
       last_updated: now,
     };
     if (projectedBins.length > 0) {
-      productUpdate.expiry_date = newExpiryDate || null;
+      stockUpdate.expiry_date = newExpiryDate || null;
     } else if (delta > 0 && expiryDate) {
-      productUpdate.expiry_date = expiryDate;
+      stockUpdate.expiry_date = expiryDate;
     }
 
-    const { error: updateError } = await supabase.from('products').update(productUpdate).eq('id', productId);
+    const { error: updateError } = await supabase.from('product_warehouse_stock').update(stockUpdate).eq('id', target.stockRowId);
 
     if (updateError) {
       console.error(updateError);
@@ -498,12 +627,12 @@ export default function InventoryPage() {
 
     if (historyError) console.error(historyError);
 
-    await adjustBinQuantity(productId, binLocation, delta, delta > 0 ? expiryDate : undefined);
+    await adjustBinQuantity(productId, target.warehouse, binLocation, delta, delta > 0 ? expiryDate : undefined);
     if (binLocation) {
-      setBinStock((prev) => [...prev.filter((r) => r.productId !== productId), ...projectedBins]);
+      setBinStock((prev) => [...prev.filter((r) => !(r.productId === productId && r.warehouse === target.warehouse)), ...projectedBins]);
     }
 
-    setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, stock: newStock, status: newStatus, lastUpdated: now, expiryDate: newExpiryDate } : p)));
+    setProducts((prev) => prev.map((p) => (p.stockRowId === target.stockRowId ? { ...p, stock: newStock, status: newStatus, lastUpdated: now, expiryDate: newExpiryDate } : p)));
     setHistory((prev) => [
       { id: historyId, productId, type: type as StockHistoryEntry['type'], quantity: delta, stockBefore: target.stock, stockAfter: newStock, reference: 'ADJ-MANUAL', note: note || 'Manual stock adjustment', warehouse: target.warehouse, user: 'Admin', timestamp: nowIso, expiryDate: delta > 0 ? expiryDate : undefined, binLocation },
       ...prev,
@@ -544,6 +673,7 @@ export default function InventoryPage() {
 
     const { error } = await resolveOnHoldStock({
       productId: target.id,
+      warehouse: target.warehouse,
       quantity,
       resolution,
       reference: 'ON-HOLD-RESOLVE',
@@ -562,7 +692,7 @@ export default function InventoryPage() {
     const newStock = resolution === 'discard' ? Math.max(0, target.stock - quantity) : target.stock;
     const newStatus = deriveStatus(newStock, target.lowStockThreshold);
 
-    setProducts((prev) => prev.map((p) => (p.id === target.id ? { ...p, stock: newStock, onHoldStock: newOnHold, status: newStatus, lastUpdated: now } : p)));
+    setProducts((prev) => prev.map((p) => (p.stockRowId === target.stockRowId ? { ...p, stock: newStock, onHoldStock: newOnHold, status: newStatus, lastUpdated: now } : p)));
     const label = resolution === 'discard' ? 'Discarded' : 'Released to available stock';
     setHistory((prev) => [
       {
@@ -593,15 +723,29 @@ export default function InventoryPage() {
 
   const handleDelete = async () => {
     if (!deleteProduct) return;
-    const { error } = await supabase.from('products').delete().eq('id', deleteProduct.id);
+    const target = deleteProduct;
+
+    // Bins for this warehouse's stock go with it — other warehouses' bins for the
+    // same product are untouched.
+    await supabase.from('product_bin_stock').delete().eq('product_id', target.id).eq('warehouse', target.warehouse);
+    const { error } = await supabase.from('product_warehouse_stock').delete().eq('id', target.stockRowId);
     if (error) {
       console.error(error);
       showToast('Failed to delete product.', 'error');
-    } else {
-      showToast('Product deleted.', 'error');
-      setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
-      logAudit({ action: 'delete', module: 'inventory', description: `Deleted product "${deleteProduct.name}" (${deleteProduct.sku})`, referenceId: deleteProduct.id });
+      setDeleteProduct(null);
+      return;
     }
+
+    // Only cascade-delete the master product once it has no stock left in any
+    // warehouse — deleting from one warehouse must never remove it from others.
+    const { count } = await supabase.from('product_warehouse_stock').select('id', { count: 'exact', head: true }).eq('product_id', target.id);
+    if (!count) {
+      await supabase.from('products').delete().eq('id', target.id);
+    }
+
+    showToast('Product deleted.', 'error');
+    setProducts((prev) => prev.filter((p) => p.stockRowId !== target.stockRowId));
+    logAudit({ action: 'delete', module: 'inventory', description: `Deleted product "${target.name}" (${target.sku}) at ${target.warehouse}`, referenceId: target.id });
     setDeleteProduct(null);
   };
 
@@ -628,7 +772,7 @@ export default function InventoryPage() {
           {/* KPI Strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
             {[
-              { label: 'Total Products', value: products.length, icon: 'ri-box-3-line', color: 'text-gray-800', bg: 'bg-gray-100' },
+              { label: 'Total Products', value: new Set(products.map((p) => p.id)).size, icon: 'ri-box-3-line', color: 'text-gray-800', bg: 'bg-gray-100' },
               { label: 'In Stock', value: statusCounts.in_stock, icon: 'ri-checkbox-circle-line', color: 'text-emerald-700', bg: 'bg-emerald-50' },
               { label: 'Low Stock', value: statusCounts.low_stock, icon: 'ri-alert-line', color: 'text-amber-700', bg: 'bg-amber-50' },
               { label: 'Out of Stock', value: statusCounts.out_of_stock, icon: 'ri-close-circle-line', color: 'text-red-600', bg: 'bg-red-50' },
@@ -769,14 +913,14 @@ export default function InventoryPage() {
                             {
                               header: 'Bin Locations',
                               value: (p) => {
-                                const bins = binStockByProduct[p.id] ?? [];
+                                const bins = binStockByProduct[binStockKey(p.id, p.warehouse)] ?? [];
                                 if (bins.length > 0) return bins.map((b) => `${b.binLocation}: ${b.quantity}`).join('; ');
                                 return p.binLocation ? `${p.binLocation}: ${p.stock}` : '';
                               },
                             },
                             { header: 'Stock', value: (p) => p.stock },
                             { header: 'On Hold', value: (p) => p.onHoldStock || 0 },
-                            { header: 'On Hold Reason', value: (p) => (p.onHoldStock || 0) > 0 ? (onHoldReasons[p.id] || '') : '' },
+                            { header: 'On Hold Reason', value: (p) => (p.onHoldStock || 0) > 0 ? (onHoldReasons[binStockKey(p.id, p.warehouse)] || '') : '' },
                             { header: 'Available', value: (p) => availableStock(p.stock, reserved, p.id, p.onHoldStock || 0) },
                             { header: 'Low Stock Threshold', value: (p) => p.lowStockThreshold },
                             { header: 'Price', value: (p) => p.price },
@@ -803,7 +947,7 @@ export default function InventoryPage() {
               products={filtered}
               reserved={reserved}
               binStockByProduct={binStockByProduct}
-              siblingsBySku={siblingsBySku}
+              siblingsByProductId={siblingsByProductId}
               onJumpToWarehouse={handleJumpToWarehouse}
               onEdit={(p) => setEditProduct(p)}
               onDelete={(p) => setDeleteProduct(p)}
@@ -840,10 +984,10 @@ export default function InventoryPage() {
       {/* Modals */}
       {detailProduct && (
         <ProductDetailModal
-          product={products.find((p) => p.id === detailProduct.id) || detailProduct}
+          product={products.find((p) => p.stockRowId === detailProduct.stockRowId) || detailProduct}
           reserved={reserved}
-          binRows={binStockByProduct[detailProduct.id] ?? []}
-          siblings={(siblingsBySku[detailProduct.sku] ?? []).filter((s) => s.id !== detailProduct.id)}
+          binRows={binStockByProduct[binStockKey(detailProduct.id, detailProduct.warehouse)] ?? []}
+          siblings={(siblingsByProductId[detailProduct.id] ?? []).filter((s) => s.id !== detailProduct.stockRowId)}
           onClose={() => setDetailProduct(null)}
           onEdit={(p) => { setDetailProduct(null); setEditProduct(p); }}
           onAdjust={(p) => { setDetailProduct(null); setAdjustProduct(p); }}
@@ -855,7 +999,7 @@ export default function InventoryPage() {
         <ProductFormModal
           product={editProduct}
           nextNum={products.length > 0 ? Math.max(...products.map(p => parseInt(p.id.replace(/\D/g, '')) || 0)) + 1 : 1}
-          existingBinRows={editProduct ? (binStockByProduct[editProduct.id] ?? []) : []}
+          existingBinRows={editProduct ? (binStockByProduct[binStockKey(editProduct.id, editProduct.warehouse)] ?? []) : []}
           onClose={() => { setShowAddModal(false); setEditProduct(null); }}
           onSave={handleSaveProduct}
         />
@@ -864,7 +1008,7 @@ export default function InventoryPage() {
         <StockAdjustModal
           product={adjustProduct}
           history={history}
-          binRows={binStockByProduct[adjustProduct.id] ?? []}
+          binRows={binStockByProduct[binStockKey(adjustProduct.id, adjustProduct.warehouse)] ?? []}
           warehouseBinLocations={warehouseBinsByName[adjustProduct.warehouse] ?? []}
           onClose={() => setAdjustProduct(null)}
           onAdjust={handleAdjust}
@@ -872,15 +1016,15 @@ export default function InventoryPage() {
       )}
       {historyProduct && (
         <StockHistoryModal
-          product={products.find((p) => p.id === historyProduct.id) || historyProduct}
+          product={products.find((p) => p.stockRowId === historyProduct.stockRowId) || historyProduct}
           history={history}
           onClose={() => setHistoryProduct(null)}
-          onResolveOnHold={canAdjustStock ? () => setResolveOnHoldProduct(products.find((p) => p.id === historyProduct.id) || historyProduct) : undefined}
+          onResolveOnHold={canAdjustStock ? () => setResolveOnHoldProduct(products.find((p) => p.stockRowId === historyProduct.stockRowId) || historyProduct) : undefined}
         />
       )}
       {resolveOnHoldProduct && (
         <ResolveOnHoldModal
-          product={products.find((p) => p.id === resolveOnHoldProduct.id) || resolveOnHoldProduct}
+          product={products.find((p) => p.stockRowId === resolveOnHoldProduct.stockRowId) || resolveOnHoldProduct}
           onClose={() => { setResolveOnHoldProduct(null); setResolveOnHoldError(''); }}
           onResolve={handleResolveOnHold}
           resolving={resolvingOnHold}

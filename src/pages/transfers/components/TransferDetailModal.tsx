@@ -48,15 +48,23 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
   useEffect(() => {
     if (!needsDocument) return;
     (async () => {
-      const [{ data: wh }, { data: destProducts }] = await Promise.all([
+      const [{ data: wh }, { data: destStock }] = await Promise.all([
         supabase.from('warehouses').select('bin_locations').eq('name', transfer.toWarehouse).maybeSingle(),
-        supabase.from('products').select('id').eq('warehouse', transfer.toWarehouse).in('sku', transfer.items.map((i) => i.sku)),
+        supabase
+          .from('product_warehouse_stock')
+          .select('product_id, product:products!inner(sku)')
+          .eq('warehouse', transfer.toWarehouse)
+          .in('product.sku', transfer.items.map((i) => i.sku)),
       ]);
       const registryBins = wh ? asArray<string>(wh.bin_locations) : [];
       let productBins: string[] = [];
-      const destIds = (destProducts || []).map((p) => p.id as string);
+      const destIds = (destStock || []).map((row: any) => row.product_id as string);
       if (destIds.length > 0) {
-        const { data: bins } = await supabase.from('product_bin_stock').select('bin_location').in('product_id', destIds);
+        const { data: bins } = await supabase
+          .from('product_bin_stock')
+          .select('bin_location')
+          .eq('warehouse', transfer.toWarehouse)
+          .in('product_id', destIds);
         productBins = (bins || []).map((row) => row.bin_location as string);
       }
       setDestBinOptions([...new Set([...registryBins, ...productBins])]);
@@ -74,10 +82,11 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
 
   const handleDownloadPdf = async () => {
     const { data: binRows } = await supabase
-      .from('products')
-      .select('id, bin_location')
-      .in('id', transfer.items.map((i) => i.productId));
-    const binById = new Map((binRows || []).map((r) => [r.id as string, r.bin_location as string | null]));
+      .from('product_warehouse_stock')
+      .select('product_id, bin_location')
+      .eq('warehouse', transfer.fromWarehouse)
+      .in('product_id', transfer.items.map((i) => i.productId));
+    const binById = new Map((binRows || []).map((r) => [r.product_id as string, r.bin_location as string | null]));
 
     downloadPdf(
       {

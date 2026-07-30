@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { expiryTone, formatExpiry } from '@/lib/expiry';
-import { groupBinStock, lowestQuantityBin, binExpiry, type BinStockRow } from '@/lib/binStock';
+import { groupBinStock, lowestQuantityBin, binExpiry, binStockKey, type BinStockRow } from '@/lib/binStock';
 
 interface NewPOItem {
   productId: string;
@@ -78,16 +78,26 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
 
   const fetchData = async () => {
     setLoading(true);
+    // One row per (product, warehouse) it's actually stocked in — a product with
+    // stock in 2 warehouses yields 2 options here, exactly what "select which
+    // warehouse's stock of this product" needs.
     const [prodRes, vendRes, binRes] = await Promise.all([
-      supabase.from('products').select('id, name, sku, image_url, price, warehouse, bin_location, expiry_date'),
+      supabase.from('product_warehouse_stock').select('warehouse, bin_location, expiry_date, product:products(id, name, sku, image_url, price)'),
       supabase.from('vendors').select('name, contacts, payment_terms'),
-      supabase.from('product_bin_stock').select('product_id, bin_location, quantity, expiry_date'),
+      supabase.from('product_bin_stock').select('product_id, warehouse, bin_location, quantity, expiry_date'),
     ]);
     if (prodRes.error) console.error(prodRes.error);
-    else setProducts((prodRes.data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, warehouse: p.warehouse, bin_location: p.bin_location, expiry_date: p.expiry_date })));
+    else setProducts(
+      (prodRes.data || [])
+        .filter((row: Record<string, unknown>) => row.product)
+        .map((row: Record<string, unknown>) => {
+          const p = row.product as Record<string, unknown>;
+          return { id: p.id as string, name: p.name as string, sku: p.sku as string, image_url: p.image_url as string | null, price: p.price as number, warehouse: row.warehouse as string, bin_location: row.bin_location as string | null, expiry_date: row.expiry_date as string | null };
+        })
+    );
     if (vendRes.error) console.error(vendRes.error);
     else setVendors((vendRes.data || []).map((v) => ({ name: v.name, contacts: v.contacts || [], payment_terms: v.payment_terms })));
-    setBinStockByProduct(groupBinStock((binRes.data || []) as { product_id: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
+    setBinStockByProduct(groupBinStock((binRes.data || []) as { product_id: string; warehouse: string; bin_location: string; quantity: number; expiry_date?: string | null }[]));
     setLoading(false);
   };
 
@@ -118,12 +128,12 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
 
   const handleProductSelect = (id: string) => {
     setSelectedProduct(id);
-    setSelectedBin(lowestQuantityBin(binStockByProduct[id]));
-    const p = products.find((prod) => prod.id === id);
+    setSelectedBin(lowestQuantityBin(binStockByProduct[binStockKey(id, form.warehouse)]));
+    const p = products.find((prod) => prod.id === id && prod.warehouse === form.warehouse);
     if (p) setSelectedCost(p.price * 0.6);
   };
 
-  const selectedBinOptions = binStockByProduct[selectedProduct] || [];
+  const selectedBinOptions = binStockByProduct[binStockKey(selectedProduct, form.warehouse)] || [];
 
   const addItem = () => {
     const product = products.find((p) => p.id === selectedProduct);
@@ -343,9 +353,9 @@ export default function PurchaseFormModal({ onClose, onSubmit }: Props) {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {form.items.map((item) => {
-                      const matchedProduct = products.find((p) => p.id === item.productId);
+                      const matchedProduct = products.find((p) => p.id === item.productId && p.warehouse === form.warehouse);
                       const bin = item.binLocation || matchedProduct?.bin_location;
-                      const itemExpiry = binExpiry(binStockByProduct[item.productId], bin) ?? matchedProduct?.expiry_date;
+                      const itemExpiry = binExpiry(binStockByProduct[binStockKey(item.productId, form.warehouse)], bin) ?? matchedProduct?.expiry_date;
                       return (
                       <tr key={item.productId}>
                         <td className="px-4 py-2.5">

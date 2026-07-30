@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
-import { groupBinStock, lowestQuantityBin, type BinStockRow } from '@/lib/binStock';
+import { groupBinStock, lowestQuantityBin, binStockKey, type BinStockRow } from '@/lib/binStock';
 
 interface RequestOptionItem {
   productId: string;
@@ -75,8 +75,8 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
       if (!fetchError && data) setProductPrices(Object.fromEntries(data.map((p) => [p.id, p.price as number])));
     };
     const fetchBinStock = async () => {
-      const { data } = await supabase.from('product_bin_stock').select('product_id, bin_location, quantity');
-      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; bin_location: string; quantity: number }[]));
+      const { data } = await supabase.from('product_bin_stock').select('product_id, warehouse, bin_location, quantity');
+      setBinStockByProduct(groupBinStock((data || []) as { product_id: string; warehouse: string; bin_location: string; quantity: number }[]));
     };
     fetchBinStock();
     const fetchRequests = async () => {
@@ -132,7 +132,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
     // are offered here — that's what makes repeated partial returns work.
     const returnableItems = request.items.filter((i) => i.remaining > 0);
     const items: ReturnItem[] = returnableItems.map((i) => {
-      const productBins = binStockByProduct[i.productId] || [];
+      const productBins = binStockByProduct[binStockKey(i.productId, request.warehouse)] || [];
       return {
         productId: i.productId,
         productName: i.productName,
@@ -179,7 +179,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
       if (exists) {
         return { ...prev, items: prev.items.filter((i) => i.productId !== reqItem.productId) };
       }
-      const productBins = binStockByProduct[reqItem.productId] || [];
+      const productBins = binStockByProduct[binStockKey(reqItem.productId, pickedRequest?.warehouse || '')] || [];
       const newItem: ReturnItem = {
         productId: reqItem.productId,
         productName: reqItem.productName,
@@ -448,7 +448,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
                               className={`${inputClass} disabled:opacity-60 disabled:cursor-not-allowed`}
                             />
                           </div>
-                          {(binStockByProduct[reqItem.productId] || []).length > 1 ? (
+                          {(binStockByProduct[binStockKey(reqItem.productId, pickedRequest?.warehouse || '')] || []).length > 1 ? (
                             <div className="w-44">
                               <label className="block text-[10px] font-medium text-gray-500 mb-1">Bin</label>
                               <select
@@ -458,7 +458,7 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
                                 className={`${inputClass} cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed`}
                               >
                                 <option value="">Select bin…</option>
-                                {(binStockByProduct[reqItem.productId] || []).map((b) => <option key={b.bin_location} value={b.bin_location}>{b.bin_location} ({b.quantity} on hand)</option>)}
+                                {(binStockByProduct[binStockKey(reqItem.productId, pickedRequest?.warehouse || '')] || []).map((b) => <option key={b.bin_location} value={b.bin_location}>{b.bin_location} ({b.quantity} on hand)</option>)}
                               </select>
                             </div>
                           ) : formItem.binLocation ? (

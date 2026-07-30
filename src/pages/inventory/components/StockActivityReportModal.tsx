@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
-import { Product } from '@/mocks/inventory';
+import { ProductStockRow } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
 import { typeConfig } from './stockHistoryTypeConfig';
 import { downloadPdf, type PdfCell } from '@/lib/exportPdf';
+import { binStockKey } from '@/lib/binStock';
 
 interface StockActivityReportModalProps {
-  products: Product[];
+  products: ProductStockRow[];
   history: StockHistoryEntry[];
   warehouses: string[];
   onClose: () => void;
@@ -42,7 +43,11 @@ const MOVEMENT_LABELS: Partial<Record<StockHistoryEntry['type'], string>> = {
   purchase: 'Receive',
   transfer_in: 'Transfer-In',
   return: 'Return',
-  sale: 'Sale',
+  // Labeled "Order" rather than "Sale" — the underlying type is still 'sale' in the
+  // database (unchanged, since it's a fixed value in stock_history's CHECK constraint),
+  // but the only place that ever writes it is Orders being fulfilled (OrderDetailModal),
+  // so "Order" is what this column actually represents.
+  sale: 'Order',
   transfer_out: 'Transfer-Out',
   adjustment: 'Adjustment (In/Out)',
   request: 'Internal Request',
@@ -87,14 +92,18 @@ export default function StockActivityReportModal({ products, history, warehouses
     return d;
   }, [dateTo]);
 
-  // Every entry for a product, oldest first — the backward calculation below needs
-  // the *full* trail (not just what falls inside the chosen dates) to rewind from
-  // the product's current stock back to its balance at the start/end of the period.
-  const historyByProduct = useMemo(() => {
+  // Every entry for one product's stock at one warehouse, oldest first — the backward
+  // calculation below needs the *full* trail (not just what falls inside the chosen
+  // dates) to rewind from that warehouse's current stock back to its balance at the
+  // start/end of the period. Keyed per (product, warehouse) rather than just product,
+  // since a product can now have independent history at more than one warehouse —
+  // grouping by product id alone would blend two warehouses' movements into one total.
+  const historyByRow = useMemo(() => {
     const map = new Map<string, StockHistoryEntry[]>();
     history.forEach((h) => {
-      const list = map.get(h.productId);
-      if (list) list.push(h); else map.set(h.productId, [h]);
+      const key = binStockKey(h.productId, h.warehouse);
+      const list = map.get(key);
+      if (list) list.push(h); else map.set(key, [h]);
     });
     map.forEach((list) => list.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()));
     return map;
@@ -116,7 +125,7 @@ export default function StockActivityReportModal({ products, history, warehouses
     });
 
     const perProduct = scopeProducts.map((p) => {
-      const entries = historyByProduct.get(p.id) ?? [];
+      const entries = historyByRow.get(binStockKey(p.id, p.warehouse)) ?? [];
       const afterPeriod = periodEnd ? entries.filter((h) => new Date(h.timestamp) > periodEnd) : [];
       const inPeriod = entries.filter((h) => {
         const t = new Date(h.timestamp);
@@ -132,15 +141,17 @@ export default function StockActivityReportModal({ products, history, warehouses
     });
 
     if (!consolidateWarehouses || filterWarehouse !== 'all') {
-      return perProduct.map((r) => ({ key: r.productId, productName: r.productName, sku: r.sku, warehouse: r.warehouse, typeTotals: r.typeTotals, beginning: r.beginning, closing: r.closing, movements: r.movements }));
+      return perProduct.map((r) => ({ key: `${r.productId}::${r.warehouse}`, productName: r.productName, sku: r.sku, warehouse: r.warehouse, typeTotals: r.typeTotals, beginning: r.beginning, closing: r.closing, movements: r.movements }));
     }
 
-    // Consolidated: merge every warehouse's row for the same SKU into one combined line.
-    const bySku = new Map<string, MovementRow>();
+    // Consolidated: merge every warehouse's row for the same product into one combined
+    // line — grouped by product id directly now that a product id genuinely represents
+    // one item (no more duplicate-SKU rows to reconcile the way there used to be).
+    const byProductId = new Map<string, MovementRow>();
     perProduct.forEach((r) => {
-      const existing = bySku.get(r.sku);
+      const existing = byProductId.get(r.productId);
       if (!existing) {
-        bySku.set(r.sku, { key: r.sku, productName: r.productName, sku: r.sku, warehouse: 'All Warehouses', typeTotals: { ...r.typeTotals }, beginning: r.beginning, closing: r.closing, movements: r.movements });
+        byProductId.set(r.productId, { key: r.productId, productName: r.productName, sku: r.sku, warehouse: 'All Warehouses', typeTotals: { ...r.typeTotals }, beginning: r.beginning, closing: r.closing, movements: r.movements });
         return;
       }
       existing.beginning += r.beginning;
@@ -151,8 +162,8 @@ export default function StockActivityReportModal({ products, history, warehouses
         if (v) existing.typeTotals[t] = (existing.typeTotals[t] ?? 0) + v;
       });
     });
-    return Array.from(bySku.values()).sort((a, b) => a.productName.localeCompare(b.productName));
-  }, [products, historyByProduct, filterWarehouse, consolidateWarehouses, search, periodStart, periodEnd]);
+    return Array.from(byProductId.values()).sort((a, b) => a.productName.localeCompare(b.productName));
+  }, [products, historyByRow, filterWarehouse, consolidateWarehouses, search, periodStart, periodEnd]);
 
   // Always show every movement-type column, even ones with no activity in the
   // current scope/period — a stable set of columns is what makes the report
@@ -309,7 +320,7 @@ export default function StockActivityReportModal({ products, history, warehouses
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 shrink-0">
           <div>
             <h2 className="text-base font-bold text-gray-900">Stock Movement Report</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Beginning → Receive/Transfer/Return/Sale/Adjustment → Closing · {periodLabel}</p>
+            <p className="text-xs text-gray-400 mt-0.5">Beginning → Receive/Transfer/Return/Order/Adjustment → Closing · {periodLabel}</p>
           </div>
           <div className="flex items-center gap-2">
             <button

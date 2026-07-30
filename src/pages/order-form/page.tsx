@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { Product } from '@/mocks/inventory';
+import type { ProductStockRow } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
-import { buildOrderInsert, mapProductRow, type OrderCreateDraft } from '../orders/orderCreateUtils';
+import { buildOrderInsert, mapProductRow, type OrderCreateDraft, type OrderLineDraft } from '../orders/orderCreateUtils';
 import { logAudit } from '@/lib/auditLog';
 import { notifyAdmins } from '@/lib/notifyAdmins';
 import { expirySuffix } from '@/lib/expiry';
@@ -18,19 +18,27 @@ const emptyDraft: OrderCreateDraft = {
 };
 
 export default function PublicOrderFormPage() {
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<ProductStockRow[]>([]);
   const [draft, setDraft] = useState<OrderCreateDraft>(emptyDraft);
   const [status, setStatus] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     const fetchProducts = async () => {
-      const { data, error } = await supabase.from('products').select('*').order('name', { ascending: true });
+      const { data, error } = await supabase.from('product_warehouse_stock').select('*, product:products(*)');
       if (error) {
         setStatus({ type: 'error', msg: 'Unable to load products.' });
         return;
       }
-      setProducts((data || []).map(mapProductRow).filter((p) => p.stock > 0));
+      // A customer doesn't pick a warehouse, so a SKU stocked in several warehouses
+      // must collapse into one catalog entry — fulfillment auto-picks the warehouse
+      // with the most stock, so that's the row shown and ordered against here.
+      const bestByProduct = new Map<string, ProductStockRow>();
+      (data || []).filter((row) => row.product).map(mapProductRow).forEach((row) => {
+        const existing = bestByProduct.get(row.id);
+        if (!existing || row.stock > existing.stock) bestByProduct.set(row.id, row);
+      });
+      setProducts(Array.from(bestByProduct.values()).filter((p) => p.stock > 0).sort((a, b) => a.name.localeCompare(b.name)));
     };
     fetchProducts();
   }, []);
@@ -38,7 +46,14 @@ export default function PublicOrderFormPage() {
   const updateLine = (index: number, field: 'productId' | 'quantity', value: string | number | '') => {
     setDraft((prev) => ({
       ...prev,
-      lines: prev.lines.map((line, i) => i === index ? { ...line, [field]: value } : line),
+      lines: prev.lines.map((line, i): OrderLineDraft => {
+        if (i !== index) return line;
+        if (field === 'productId') {
+          const productId = value as string;
+          return { ...line, productId, warehouse: products.find((p) => p.id === productId)?.warehouse };
+        }
+        return { ...line, quantity: value as number | '' };
+      }),
     }));
   };
 

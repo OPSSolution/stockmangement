@@ -85,9 +85,31 @@ export default function PromotionFormModal({ onClose, onSubmit }: Props) {
 
   const fetchProducts = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('products').select('id, name, sku, image_url, price, stock, expiry_date');
-    if (error) console.error(error);
-    else setProducts((data || []).map((p) => ({ id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, stock: p.stock, expiry_date: p.expiry_date })));
+    // A promotion isn't scoped to one warehouse, so "in stock" here is the sum across
+    // every warehouse that carries the product, and the soonest-expiring batch anywhere.
+    const { data, error } = await supabase
+      .from('product_warehouse_stock')
+      .select('stock, expiry_date, product:products(id, name, sku, image_url, price)');
+    if (error) {
+      console.error(error);
+      setLoading(false);
+      return;
+    }
+    const byProduct = new Map<string, ProductOption>();
+    (data || []).forEach((row) => {
+      const p = row.product as unknown as { id: string; name: string; sku: string; image_url?: string | null; price: number } | null;
+      if (!p) return;
+      const existing = byProduct.get(p.id);
+      if (existing) {
+        existing.stock += row.stock ?? 0;
+        if (row.expiry_date && (!existing.expiry_date || row.expiry_date < existing.expiry_date)) {
+          existing.expiry_date = row.expiry_date;
+        }
+      } else {
+        byProduct.set(p.id, { id: p.id, name: p.name, sku: p.sku, image_url: p.image_url, price: p.price, stock: row.stock ?? 0, expiry_date: row.expiry_date });
+      }
+    });
+    setProducts(Array.from(byProduct.values()));
     setLoading(false);
   };
 

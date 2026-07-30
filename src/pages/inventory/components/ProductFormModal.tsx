@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { Product, ProductType, ProductBinStock } from '@/mocks/inventory';
+import type { ProductStockRow, ProductType, ProductBinStock } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { asArray } from '@/pages/warehouses/warehouseShared';
@@ -13,12 +13,12 @@ interface BinRow {
 }
 
 interface ProductFormModalProps {
-  product: Product | null;
+  product: ProductStockRow | null;
   nextNum: number;
-  /** This product's current bin split, if editing an existing product. */
+  /** This product's current bin split at this warehouse, if editing an existing product. */
   existingBinRows?: ProductBinStock[];
   onClose: () => void;
-  onSave: (data: Omit<Product, 'id' | 'status' | 'lastUpdated'> & { id?: string; binRows?: BinRow[] }) => void;
+  onSave: (data: ProductFormState & { id?: string; stockRowId?: string; binRows?: BinRow[] }) => void;
 }
 
 const CATEGORY_STORAGE_KEY = 'inventory_categories';
@@ -37,7 +37,21 @@ function autoSku(name: string, nextNum: number) {
   return `${prefix}-${String(nextNum).padStart(3, '0')}`;
 }
 
-type ProductFormState = Omit<Product, 'id' | 'status' | 'lastUpdated'>;
+// Master fields (name/sku/category/price/productType/imageUrl) plus the warehouse-
+// scoped fields for whichever single warehouse's stock this form instance edits.
+interface ProductFormState {
+  name: string;
+  sku: string;
+  category: string;
+  imageUrl?: string;
+  price: number;
+  productType: ProductType;
+  warehouse: string;
+  vendor?: string;
+  stock: number;
+  lowStockThreshold: number;
+  expiryDate?: string;
+}
 
 export default function ProductFormModal({ product, nextNum, existingBinRows, onClose, onSave }: ProductFormModalProps) {
   const { warehouseScope } = useAuth();
@@ -165,7 +179,7 @@ export default function ProductFormModal({ product, nextNum, existingBinRows, on
     // shown elsewhere (badges, low-stock lists) becomes the nearest of the bin rows.
     // Products with no bins yet fall back to the single date entered below.
     const expiryDate = binRows.length > 0 ? (nearestExpiry(binRows.map((r) => r.expiryDate)) || '') : (form.expiryDate || '');
-    onSave({ ...form, expiryDate, id: product?.id, binRows });
+    onSave({ ...form, expiryDate, id: product?.id, stockRowId: product?.stockRowId, binRows });
   };
 
   const allocatedQty = binRows.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
@@ -235,7 +249,16 @@ export default function ProductFormModal({ product, nextNum, existingBinRows, on
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">Warehouse</label>
-              {warehouseScope && warehouseScope.length === 1 ? (
+              {product ? (
+                // Locked once a product's stock at a warehouse already exists — moving
+                // stock to a different warehouse is what Transfers is for, not an edit.
+                <input
+                  value={form.warehouse}
+                  disabled
+                  title="Use Transfers to move stock to a different warehouse"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-500"
+                />
+              ) : warehouseScope && warehouseScope.length === 1 ? (
                 <input
                   value={warehouseScope[0]}
                   disabled

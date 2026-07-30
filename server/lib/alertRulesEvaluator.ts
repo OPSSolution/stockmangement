@@ -65,13 +65,23 @@ async function evaluateStockRule(supabase: SupabaseClient, rule: AlertRule) {
   const category = rule.trigger_condition.category as string | undefined;
   const ruleThreshold = rule.trigger_condition.threshold as number | undefined;
 
-  let productsQuery = supabase.from('products').select('id, name, sku, category, stock, low_stock_threshold');
-  if (category) productsQuery = productsQuery.eq('category', category);
-  const [{ data: products }, { data: admins }, { data: allSettings }] = await Promise.all([
-    productsQuery,
+  const [{ data: stockRows }, { data: admins }, { data: allSettings }] = await Promise.all([
+    supabase.from('product_warehouse_stock').select('warehouse, stock, low_stock_threshold, product:products(id, name, sku, category)'),
     supabase.from('profiles').select('id').eq('role', 'admin'),
     supabase.from('notification_settings').select('user_id, category_thresholds'),
   ]);
+
+  const products = (stockRows ?? [])
+    .filter((row: any) => row.product && (!category || row.product.category === category))
+    .map((row: any) => ({
+      id: row.product.id,
+      name: row.product.name,
+      sku: row.product.sku,
+      category: row.product.category,
+      stock: row.stock,
+      low_stock_threshold: row.low_stock_threshold,
+      warehouse: row.warehouse as string,
+    }));
 
   if (!products || !admins) return 0;
 
@@ -86,7 +96,7 @@ async function evaluateStockRule(supabase: SupabaseClient, rule: AlertRule) {
     // Category" actually changes who gets notified and when.
     const recipientThresholds = settingsByUser.get(admin.id)?.category_thresholds || {};
 
-    for (const product of products as { id: string; name: string; sku: string; category: string; stock: number; low_stock_threshold: number }[]) {
+    for (const product of products) {
       const effectiveThreshold = recipientThresholds[product.category] ?? ruleThreshold ?? product.low_stock_threshold;
       if (product.stock > effectiveThreshold) continue;
 
@@ -95,19 +105,19 @@ async function evaluateStockRule(supabase: SupabaseClient, rule: AlertRule) {
         .select('id')
         .eq('user_id', admin.id)
         .eq('type', rule.notification_type)
-        .contains('data', { product_id: product.id })
+        .contains('data', { product_id: product.id, warehouse: product.warehouse })
         .gte('created_at', oneHourAgo)
         .limit(1);
       if (recent && recent.length > 0) continue;
 
       const title = rule.notification_type === 'out_of_stock' ? `Out of Stock: ${product.name}` : `Low Stock: ${product.name}`;
-      const message = `${product.name} (${product.sku}) in ${product.category} has only ${product.stock} units remaining. Threshold: ${effectiveThreshold}.`;
+      const message = `${product.name} (${product.sku}) in ${product.category} has only ${product.stock} units remaining at ${product.warehouse}. Threshold: ${effectiveThreshold}.`;
       const { error } = await supabase.from('notifications').insert({
         user_id: admin.id,
         type: rule.notification_type,
         title,
         message,
-        data: { product_id: product.id, product_name: product.name, stock: product.stock, rule_id: rule.id },
+        data: { product_id: product.id, product_name: product.name, stock: product.stock, warehouse: product.warehouse, rule_id: rule.id },
         is_read: false,
         is_emailed: false,
         is_webhook_sent: false,

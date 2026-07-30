@@ -9,25 +9,38 @@ function deriveStatus(stock: number, threshold: number): 'in_stock' | 'low_stock
   return 'in_stock';
 }
 
+/** A product's stock record at one specific warehouse — every stock-moving function
+ * below operates on this, not on `products` directly, since a product can now have
+ * stock (and no single "the" warehouse) at more than one warehouse at once. */
+async function fetchStockRow(productId: string, warehouse: string) {
+  return supabase
+    .from('product_warehouse_stock')
+    .select('*, product:products(name)')
+    .eq('product_id', productId)
+    .eq('warehouse', warehouse)
+    .maybeSingle();
+}
+
 /**
- * Applies `delta` to one bin's share of a product's stock — positive to add
- * (received, restocked, transferred in), negative to remove (sold, dispatched,
- * transferred out). Every stock-moving function below routes through this so a
- * product's product_bin_stock rows stay in sync with the bin actually picked in
- * the UI, not just the product's aggregate `stock` column. No-ops when no bin
- * was picked (e.g. the product isn't split across bins, or the transaction
+ * Applies `delta` to one bin's share of a product's stock at a specific warehouse —
+ * positive to add (received, restocked, transferred in), negative to remove (sold,
+ * dispatched, transferred out). Every stock-moving function below routes through this
+ * so a product's product_bin_stock rows stay in sync with the bin actually picked in
+ * the UI, not just the product_warehouse_stock's aggregate `stock` column. No-ops when
+ * no bin was picked (e.g. the product isn't split across bins, or the transaction
  * doesn't yet know where the stock is landing).
  *
  * `expiryDate` only applies on incoming stock (delta > 0) — the bin's tracked
  * expiry is overwritten with the newly-arrived batch's date, since a single bin
  * doesn't track more than one batch's expiry at a time.
  */
-export async function adjustBinQuantity(productId: string, binLocation: string | undefined | null, delta: number, expiryDate?: string | null) {
+export async function adjustBinQuantity(productId: string, warehouse: string, binLocation: string | undefined | null, delta: number, expiryDate?: string | null) {
   if (!binLocation || delta === 0) return;
   const { data: row } = await supabase
     .from('product_bin_stock')
     .select('id, quantity')
     .eq('product_id', productId)
+    .eq('warehouse', warehouse)
     .eq('bin_location', binLocation)
     .maybeSingle();
   if (row) {
@@ -39,6 +52,7 @@ export async function adjustBinQuantity(productId: string, binLocation: string |
     await supabase.from('product_bin_stock').insert({
       id: `PBS-${productId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       product_id: productId,
+      warehouse,
       bin_location: binLocation,
       quantity: delta,
       expiry_date: expiryDate || null,
@@ -48,6 +62,7 @@ export async function adjustBinQuantity(productId: string, binLocation: string |
 
 interface DeductLine {
   productId: string;
+  warehouse: string;
   quantity: number;
   /** Which bin the units are coming out of — omit if the product isn't bin-split or the bin isn't known. */
   binLocation?: string;
@@ -66,37 +81,37 @@ export async function deductStockForItems(
   const now = new Date().toISOString();
 
   for (const item of items) {
-    if (!item.productId || !item.quantity) continue;
+    if (!item.productId || !item.warehouse || !item.quantity) continue;
 
-    const { data: product, error: fetchErr } = await supabase.from('products').select('*').eq('id', item.productId).single();
-    if (fetchErr || !product) return { error: fetchErr?.message || `Product ${item.productId} not found` };
-    if (product.stock < item.quantity) {
-      return { error: `Not enough stock for "${product.name}" — ${product.stock} on hand, ${item.quantity} needed.` };
+    const { data: row, error: fetchErr } = await fetchStockRow(item.productId, item.warehouse);
+    if (fetchErr || !row) return { error: fetchErr?.message || `Product ${item.productId} not stocked at ${item.warehouse}` };
+    if (row.stock < item.quantity) {
+      return { error: `Not enough stock for "${row.product?.name ?? item.productId}" — ${row.stock} on hand, ${item.quantity} needed.` };
     }
 
-    const newStock = product.stock - item.quantity;
-    const { error: updateErr } = await supabase.from('products').update({
+    const newStock = row.stock - item.quantity;
+    const { error: updateErr } = await supabase.from('product_warehouse_stock').update({
       stock: newStock,
-      status: deriveStatus(newStock, product.low_stock_threshold),
+      status: deriveStatus(newStock, row.low_stock_threshold),
       last_updated: now,
-    }).eq('id', product.id);
+    }).eq('id', row.id);
     if (updateErr) return { error: updateErr.message };
 
     await supabase.from('stock_history').insert({
       id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      product_id: product.id,
+      product_id: item.productId,
       type: opts.historyType || 'adjustment',
       quantity: -item.quantity,
-      stock_before: product.stock,
+      stock_before: row.stock,
       stock_after: newStock,
       reference: opts.reference,
       note: opts.note,
-      warehouse: product.warehouse,
+      warehouse: item.warehouse,
       user_name: opts.userName,
       created_at: now,
       bin_location: item.binLocation || null,
     });
-    await adjustBinQuantity(product.id, item.binLocation, -item.quantity);
+    await adjustBinQuantity(item.productId, item.warehouse, item.binLocation, -item.quantity);
   }
 
   return { error: null };
@@ -104,6 +119,7 @@ export async function deductStockForItems(
 
 interface RestockLine {
   productId: string;
+  warehouse: string;
   quantity: number;
   /** New/Good/Fair go back to available stock; Damaged/Defective are still counted as on-hand but placed on hold. Missing condition is treated as good. */
   condition?: ReturnCondition;
@@ -114,9 +130,9 @@ interface RestockLine {
 }
 
 /**
- * Physically adds returned stock back onto each product and logs a stock_history
- * entry per item — called when a Return is marked Restocked. Items in good
- * condition go straight into usable stock; damaged/defective items still land in
+ * Physically adds returned stock back onto each product's warehouse stock and logs a
+ * stock_history entry per item — called when a Return is marked Restocked. Items in
+ * good condition go straight into usable stock; damaged/defective items still land in
  * `stock` (so on-hand counts stay accurate) but are also added to `on_hold_stock`,
  * which keeps them out of `availableStock()` until someone resolves the hold.
  */
@@ -126,25 +142,26 @@ export async function restockReturnedItems(
 ): Promise<{ error: string | null }> {
   const now = new Date().toISOString();
 
-  // Group by product so distinct products can be restocked concurrently instead of
-  // one sequential fetch+update+insert chain per line — this is the main lever on
-  // how long a multi-item return takes to finish. Lines for the *same* product stay
-  // sequential within their group so their running stock/on-hold totals stay correct.
-  const byProduct = new Map<string, RestockLine[]>();
+  // Group by (product, warehouse) so distinct stock rows can be restocked concurrently
+  // instead of one sequential fetch+update+insert chain per line — this is the main
+  // lever on how long a multi-item return takes to finish. Lines for the *same* stock
+  // row stay sequential within their group so their running totals stay correct.
+  const byRow = new Map<string, { productId: string; warehouse: string; lines: RestockLine[] }>();
   items.forEach((item) => {
-    if (!item.productId || !item.quantity) return;
-    const list = byProduct.get(item.productId);
-    if (list) list.push(item);
-    else byProduct.set(item.productId, [item]);
+    if (!item.productId || !item.warehouse || !item.quantity) return;
+    const key = `${item.productId}::${item.warehouse}`;
+    const entry = byRow.get(key);
+    if (entry) entry.lines.push(item);
+    else byRow.set(key, { productId: item.productId, warehouse: item.warehouse, lines: [item] });
   });
 
   const results = await Promise.all(
-    Array.from(byProduct.entries()).map(async ([productId, lines]) => {
-      const { data: product, error: fetchErr } = await supabase.from('products').select('*').eq('id', productId).single();
-      if (fetchErr || !product) return fetchErr?.message || `Product ${productId} not found`;
+    Array.from(byRow.values()).map(async ({ productId, warehouse, lines }) => {
+      const { data: row, error: fetchErr } = await fetchStockRow(productId, warehouse);
+      if (fetchErr || !row) return fetchErr?.message || `Product ${productId} not stocked at ${warehouse}`;
 
-      let stock = product.stock;
-      let onHold = product.on_hold_stock || 0;
+      let stock = row.stock;
+      let onHold = row.on_hold_stock || 0;
 
       for (const item of lines) {
         const isGood = !item.condition || GOOD_CONDITIONS.includes(item.condition);
@@ -165,21 +182,21 @@ export async function restockReturnedItems(
           note: isGood
             ? `Returned in ${item.condition || 'good'} condition — added to available stock`
             : `On hold — ${item.note?.trim() || `Returned ${item.condition}, no reason noted`}`,
-          warehouse: product.warehouse,
+          warehouse,
           user_name: opts.userName,
           created_at: now,
           bin_location: item.binLocation || null,
         });
         if (insertErr) return insertErr.message;
-        await adjustBinQuantity(productId, item.binLocation, item.quantity);
+        await adjustBinQuantity(productId, warehouse, item.binLocation, item.quantity);
       }
 
-      const { error: updateErr } = await supabase.from('products').update({
+      const { error: updateErr } = await supabase.from('product_warehouse_stock').update({
         stock,
         on_hold_stock: onHold,
-        status: deriveStatus(stock, product.low_stock_threshold),
+        status: deriveStatus(stock, row.low_stock_threshold),
         last_updated: now,
-      }).eq('id', productId);
+      }).eq('id', row.id);
       if (updateErr) return updateErr.message;
 
       return null;
@@ -191,15 +208,16 @@ export async function restockReturnedItems(
 
 interface ReceiveLine {
   productId: string;
+  warehouse: string;
   quantity: number;
   /** Which bin the received units are being put away into — omit if not yet decided. */
   binLocation?: string;
 }
 
 /**
- * Physically adds received purchase-order stock onto each product and logs a
- * stock_history entry per item — called when a Purchase Order is marked Received.
- * Mirrors restockReturnedItems but for inbound POs instead of customer returns.
+ * Physically adds received purchase-order stock onto each product's warehouse stock
+ * and logs a stock_history entry per item — called when a Purchase Order is marked
+ * Received. Mirrors restockReturnedItems but for inbound POs instead of customer returns.
  */
 export async function receivePurchaseOrderItems(
   items: ReceiveLine[],
@@ -208,34 +226,34 @@ export async function receivePurchaseOrderItems(
   const now = new Date().toISOString();
 
   for (const item of items) {
-    if (!item.productId || !item.quantity) continue;
+    if (!item.productId || !item.warehouse || !item.quantity) continue;
 
-    const { data: product, error: fetchErr } = await supabase.from('products').select('*').eq('id', item.productId).single();
-    if (fetchErr || !product) return { error: fetchErr?.message || `Product ${item.productId} not found` };
+    const { data: row, error: fetchErr } = await fetchStockRow(item.productId, item.warehouse);
+    if (fetchErr || !row) return { error: fetchErr?.message || `Product ${item.productId} not stocked at ${item.warehouse}` };
 
-    const newStock = product.stock + item.quantity;
-    const { error: updateErr } = await supabase.from('products').update({
+    const newStock = row.stock + item.quantity;
+    const { error: updateErr } = await supabase.from('product_warehouse_stock').update({
       stock: newStock,
-      status: deriveStatus(newStock, product.low_stock_threshold),
+      status: deriveStatus(newStock, row.low_stock_threshold),
       last_updated: now,
-    }).eq('id', product.id);
+    }).eq('id', row.id);
     if (updateErr) return { error: updateErr.message };
 
     await supabase.from('stock_history').insert({
       id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      product_id: product.id,
+      product_id: item.productId,
       type: 'purchase',
       quantity: item.quantity,
-      stock_before: product.stock,
+      stock_before: row.stock,
       stock_after: newStock,
       reference: opts.reference,
       note: `Purchase order ${opts.reference} received`,
-      warehouse: product.warehouse,
+      warehouse: item.warehouse,
       user_name: opts.userName,
       created_at: now,
       bin_location: item.binLocation || null,
     });
-    await adjustBinQuantity(product.id, item.binLocation, item.quantity);
+    await adjustBinQuantity(item.productId, item.warehouse, item.binLocation, item.quantity);
   }
 
   return { error: null };
@@ -243,6 +261,7 @@ export async function receivePurchaseOrderItems(
 
 interface StockReceiveLine {
   productId: string;
+  warehouse: string;
   quantity: number;
   /** Any bin in the warehouse — not necessarily one the product already sits in. */
   binLocation?: string;
@@ -252,10 +271,11 @@ interface StockReceiveLine {
 
 /**
  * Physically adds stock from a standalone Stock Receive (no purchase order behind
- * it) onto each product, updates the destination bin's quantity and expiry, and
- * logs a stock_history entry per item. Unlike receivePurchaseOrderItems, this also
- * recomputes each product's nearest-expiry summary from its bins afterward, since
- * a receive is often the thing that introduces or changes a bin's expiry date.
+ * it) onto each product's warehouse stock, updates the destination bin's quantity
+ * and expiry, and logs a stock_history entry per item. Unlike receivePurchaseOrderItems,
+ * this also recomputes that warehouse's nearest-expiry summary from its bins
+ * afterward, since a receive is often the thing that introduces or changes a bin's
+ * expiry date.
  */
 export async function receiveStockItems(
   items: StockReceiveLine[],
@@ -264,44 +284,45 @@ export async function receiveStockItems(
   const now = new Date().toISOString();
 
   for (const item of items) {
-    if (!item.productId || !item.quantity) continue;
+    if (!item.productId || !item.warehouse || !item.quantity) continue;
 
-    const { data: product, error: fetchErr } = await supabase.from('products').select('*').eq('id', item.productId).single();
-    if (fetchErr || !product) return { error: fetchErr?.message || `Product ${item.productId} not found` };
+    const { data: row, error: fetchErr } = await fetchStockRow(item.productId, item.warehouse);
+    if (fetchErr || !row) return { error: fetchErr?.message || `Product ${item.productId} not stocked at ${item.warehouse}` };
 
-    const newStock = product.stock + item.quantity;
-    await adjustBinQuantity(product.id, item.binLocation, item.quantity, item.expiryDate);
+    const newStock = row.stock + item.quantity;
+    await adjustBinQuantity(item.productId, item.warehouse, item.binLocation, item.quantity, item.expiryDate);
 
-    // Nearest-expiry-across-bins is the product-level summary shown elsewhere
-    // (table badges, low-stock lists) — recompute it from the bins as they now
-    // stand rather than just trusting whatever this one line brought in.
-    let newExpiryDate: string | null = product.expiry_date || null;
+    // Nearest-expiry-across-bins is the per-warehouse summary shown elsewhere (table
+    // badges, low-stock lists) — recompute it from this warehouse's bins as they now
+    // stand rather than just trusting whatever this one line brought in. Scoped to
+    // this warehouse only — a product's bins in other warehouses are irrelevant here.
+    let newExpiryDate: string | null = row.expiry_date || null;
     if (item.binLocation) {
-      const { data: bins } = await supabase.from('product_bin_stock').select('expiry_date').eq('product_id', product.id);
+      const { data: bins } = await supabase.from('product_bin_stock').select('expiry_date').eq('product_id', item.productId).eq('warehouse', item.warehouse);
       const valid = (bins || []).map((b) => b.expiry_date as string | null).filter((d): d is string => Boolean(d));
       newExpiryDate = valid.length > 0 ? valid.reduce((min, d) => (d < min ? d : min)) : newExpiryDate;
     } else if (item.expiryDate) {
       newExpiryDate = item.expiryDate;
     }
 
-    const { error: updateErr } = await supabase.from('products').update({
+    const { error: updateErr } = await supabase.from('product_warehouse_stock').update({
       stock: newStock,
-      status: deriveStatus(newStock, product.low_stock_threshold),
+      status: deriveStatus(newStock, row.low_stock_threshold),
       expiry_date: newExpiryDate,
       last_updated: now,
-    }).eq('id', product.id);
+    }).eq('id', row.id);
     if (updateErr) return { error: updateErr.message };
 
     await supabase.from('stock_history').insert({
       id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      product_id: product.id,
+      product_id: item.productId,
       type: 'purchase',
       quantity: item.quantity,
-      stock_before: product.stock,
+      stock_before: row.stock,
       stock_after: newStock,
       reference: opts.reference,
       note: opts.note || `Stock receive ${opts.reference}`,
-      warehouse: product.warehouse,
+      warehouse: item.warehouse,
       user_name: opts.userName,
       created_at: now,
       expiry_date: item.expiryDate || null,
@@ -316,6 +337,7 @@ export type OnHoldResolution = 'release' | 'discard';
 
 interface ResolveOnHoldOptions {
   productId: string;
+  warehouse: string;
   quantity: number;
   resolution: OnHoldResolution;
   reference: string;
@@ -330,26 +352,26 @@ interface ResolveOnHoldOptions {
  * on_hold_stock; this is the only place that ever takes it back down.
  */
 export async function resolveOnHoldStock(opts: ResolveOnHoldOptions): Promise<{ error: string | null }> {
-  const { productId, quantity, resolution, reference, userName, note } = opts;
-  if (!productId || !quantity || quantity <= 0) return { error: 'Quantity must be greater than 0.' };
+  const { productId, warehouse, quantity, resolution, reference, userName, note } = opts;
+  if (!productId || !warehouse || !quantity || quantity <= 0) return { error: 'Quantity must be greater than 0.' };
 
-  const { data: product, error: fetchErr } = await supabase.from('products').select('*').eq('id', productId).single();
-  if (fetchErr || !product) return { error: fetchErr?.message || `Product ${productId} not found` };
+  const { data: row, error: fetchErr } = await fetchStockRow(productId, warehouse);
+  if (fetchErr || !row) return { error: fetchErr?.message || `Product ${productId} not stocked at ${warehouse}` };
 
-  const onHold = product.on_hold_stock || 0;
+  const onHold = row.on_hold_stock || 0;
   if (quantity > onHold) return { error: `Only ${onHold} unit(s) on hold — cannot resolve ${quantity}.` };
 
   const now = new Date().toISOString();
   const newOnHold = onHold - quantity;
-  const stockBefore = product.stock;
+  const stockBefore = row.stock;
   const newStock = resolution === 'discard' ? stockBefore - quantity : stockBefore;
 
-  const { error: updateErr } = await supabase.from('products').update({
+  const { error: updateErr } = await supabase.from('product_warehouse_stock').update({
     stock: newStock,
     on_hold_stock: newOnHold,
-    status: deriveStatus(newStock, product.low_stock_threshold),
+    status: deriveStatus(newStock, row.low_stock_threshold),
     last_updated: now,
-  }).eq('id', productId);
+  }).eq('id', row.id);
   if (updateErr) return { error: updateErr.message };
 
   const label = resolution === 'discard' ? 'Discarded' : 'Released to available stock';
@@ -364,7 +386,7 @@ export async function resolveOnHoldStock(opts: ResolveOnHoldOptions): Promise<{ 
     // "On hold resolved — " is a stable prefix, alongside "On hold — ", that
     // Inventory's On Hold history filter matches so it covers the full lifecycle.
     note: `On hold resolved — ${label}${note ? `: ${note}` : ''}`,
-    warehouse: product.warehouse,
+    warehouse,
     user_name: userName,
     created_at: now,
   });
@@ -382,10 +404,15 @@ interface MoveLine {
 }
 
 /**
- * Moves stock from the source warehouse's product into the destination warehouse's
- * matching product (matched by SKU) — creating it there if it doesn't exist yet —
- * and logs both sides to stock_history. Shared by Transfers (on 'received') and
+ * Moves stock from the source warehouse's stock record into the destination
+ * warehouse's stock record for the *same* product — creating that record there if
+ * this is the first time the product has ever been stocked at that warehouse — and
+ * logs both sides to stock_history. Shared by Transfers (on 'received') and
  * Deliveries (on 'delivered'), which represent the same physical movement.
+ *
+ * Unlike the old per-warehouse-product-row model, this never creates a new
+ * `products` row — a product is one master record everywhere; only its
+ * product_warehouse_stock rows multiply as it reaches new warehouses.
  */
 export async function moveStockBetweenWarehouses(
   items: MoveLine[],
@@ -393,110 +420,100 @@ export async function moveStockBetweenWarehouses(
 ): Promise<{ error: string | null }> {
   const now = new Date().toISOString();
 
-  const { data: allProducts, error: fetchErr } = await supabase.from('products').select('*');
-  if (fetchErr || !allProducts) return { error: fetchErr?.message || 'Failed to load products' };
-
-  let maxNum = allProducts.length > 0
-    ? Math.max(...allProducts.map((p) => parseInt(String(p.id).replace('P', '')) || 0))
-    : 0;
-
   for (const item of items) {
     if (!item.productId || !item.quantity) continue;
-    const sourceProduct = allProducts.find((p) => p.id === item.productId);
-    if (!sourceProduct) continue;
-    if (sourceProduct.stock < item.quantity) {
-      return { error: `Not enough stock for "${sourceProduct.name}" — ${sourceProduct.stock} on hand, ${item.quantity} needed.` };
+
+    const { data: sourceRow, error: srcFetchErr } = await fetchStockRow(item.productId, opts.fromWarehouse);
+    if (srcFetchErr) return { error: srcFetchErr.message };
+    if (!sourceRow) return { error: `Product not stocked at ${opts.fromWarehouse}.` };
+    if (sourceRow.stock < item.quantity) {
+      return { error: `Not enough stock for "${sourceRow.product?.name ?? item.productId}" — ${sourceRow.stock} on hand, ${item.quantity} needed.` };
     }
 
-    const newSourceStock = sourceProduct.stock - item.quantity;
-    const { error: srcErr } = await supabase.from('products').update({
+    const newSourceStock = sourceRow.stock - item.quantity;
+    const { error: srcErr } = await supabase.from('product_warehouse_stock').update({
       stock: newSourceStock,
-      status: deriveStatus(newSourceStock, sourceProduct.low_stock_threshold),
+      status: deriveStatus(newSourceStock, sourceRow.low_stock_threshold),
       last_updated: now,
-    }).eq('id', sourceProduct.id);
+    }).eq('id', sourceRow.id);
     if (srcErr) return { error: srcErr.message };
 
     await supabase.from('stock_history').insert({
       id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      product_id: sourceProduct.id,
+      product_id: item.productId,
       type: 'transfer_out',
       quantity: -item.quantity,
-      stock_before: sourceProduct.stock,
+      stock_before: sourceRow.stock,
       stock_after: newSourceStock,
       reference: opts.reference,
       note: `Transferred to ${opts.toWarehouse}`,
-      warehouse: sourceProduct.warehouse,
+      warehouse: opts.fromWarehouse,
       user_name: opts.userName,
       created_at: now,
       bin_location: item.fromBinLocation || null,
     });
-    await adjustBinQuantity(sourceProduct.id, item.fromBinLocation, -item.quantity);
-    sourceProduct.stock = newSourceStock;
+    await adjustBinQuantity(item.productId, opts.fromWarehouse, item.fromBinLocation, -item.quantity);
 
-    const destProduct = allProducts.find((p) => p.warehouse === opts.toWarehouse && p.sku === sourceProduct.sku);
+    // Find-or-create the destination warehouse's stock record for this product. This
+    // is the replacement for the old "clone the whole product into a brand-new
+    // products row with a new id" behavior — the master product is shared across
+    // warehouses now, so a SKU landing at a warehouse for the first time only ever
+    // needs a new product_warehouse_stock row (+ its bins), never a new product.
+    const { data: destRow, error: destFetchErr } = await fetchStockRow(item.productId, opts.toWarehouse);
+    if (destFetchErr) return { error: destFetchErr.message };
 
-    if (destProduct) {
-      const newDestStock = destProduct.stock + item.quantity;
-      const { error: destErr } = await supabase.from('products').update({
+    if (destRow) {
+      const newDestStock = destRow.stock + item.quantity;
+      const { error: destErr } = await supabase.from('product_warehouse_stock').update({
         stock: newDestStock,
-        status: deriveStatus(newDestStock, destProduct.low_stock_threshold),
+        status: deriveStatus(newDestStock, destRow.low_stock_threshold),
         last_updated: now,
-      }).eq('id', destProduct.id);
+      }).eq('id', destRow.id);
       if (destErr) return { error: destErr.message };
 
       await supabase.from('stock_history').insert({
         id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        product_id: destProduct.id,
+        product_id: item.productId,
         type: 'transfer_in',
         quantity: item.quantity,
-        stock_before: destProduct.stock,
+        stock_before: destRow.stock,
         stock_after: newDestStock,
         reference: opts.reference,
         note: `Transferred from ${opts.fromWarehouse}`,
-        warehouse: destProduct.warehouse,
+        warehouse: opts.toWarehouse,
         user_name: opts.userName,
         created_at: now,
         bin_location: item.toBinLocation || null,
       });
-      await adjustBinQuantity(destProduct.id, item.toBinLocation, item.quantity);
-      destProduct.stock = newDestStock;
+      await adjustBinQuantity(item.productId, opts.toWarehouse, item.toBinLocation, item.quantity);
     } else {
-      maxNum += 1;
-      const newId = `P${String(maxNum).padStart(3, '0')}`;
-      const { error: createErr } = await supabase.from('products').insert({
-        id: newId,
-        name: sourceProduct.name,
-        sku: sourceProduct.sku,
-        category: sourceProduct.category,
+      const { error: createErr } = await supabase.from('product_warehouse_stock').insert({
+        id: `PWS-${item.productId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        product_id: item.productId,
         warehouse: opts.toWarehouse,
-        vendor: sourceProduct.vendor || null,
-        image_url: sourceProduct.image_url || null,
         stock: item.quantity,
-        low_stock_threshold: sourceProduct.low_stock_threshold,
-        price: sourceProduct.price,
-        product_type: sourceProduct.product_type,
-        status: deriveStatus(item.quantity, sourceProduct.low_stock_threshold),
+        on_hold_stock: 0,
+        low_stock_threshold: sourceRow.low_stock_threshold,
+        status: deriveStatus(item.quantity, sourceRow.low_stock_threshold),
         last_updated: now,
       });
       if (createErr) return { error: createErr.message };
 
       await supabase.from('stock_history').insert({
         id: `SH-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        product_id: newId,
+        product_id: item.productId,
         type: 'transfer_in',
         quantity: item.quantity,
         stock_before: 0,
         stock_after: item.quantity,
         reference: opts.reference,
-        note: `Transferred from ${opts.fromWarehouse} — new product added to ${opts.toWarehouse}`,
+        note: `Transferred from ${opts.fromWarehouse} — first stock of this product at ${opts.toWarehouse}`,
         warehouse: opts.toWarehouse,
         user_name: opts.userName,
         created_at: now,
         bin_location: item.toBinLocation || null,
       });
-      await adjustBinQuantity(newId, item.toBinLocation, item.quantity);
-
-      allProducts.push({ ...sourceProduct, id: newId, warehouse: opts.toWarehouse, stock: item.quantity });
+      await adjustBinQuantity(item.productId, opts.toWarehouse, item.toBinLocation, item.quantity);
     }
   }
 

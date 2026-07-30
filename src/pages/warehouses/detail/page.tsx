@@ -109,6 +109,7 @@ export default function WarehouseDetailPage() {
           const { data: binRows } = await supabase
             .from('product_bin_stock')
             .select('product_id, bin_location, quantity')
+            .eq('warehouse', match.name)
             .in('product_id', productIds);
           const map: Record<string, { binLocation: string; quantity: number }[]> = {};
           (binRows || []).forEach((row) => {

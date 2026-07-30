@@ -113,7 +113,7 @@ export default function StockReceivesPage() {
     }
 
     const { error: stockError } = await receiveStockItems(
-      data.items.map((i) => ({ productId: i.productId, quantity: i.quantity, binLocation: i.binLocation, expiryDate: i.expiryDate })),
+      data.items.map((i) => ({ productId: i.productId, warehouse: data.warehouse, quantity: i.quantity, binLocation: i.binLocation, expiryDate: i.expiryDate })),
       { reference: newId, userName: receiverIdentity, note: `Stock receive ${newId}${data.vendor ? ` from ${data.vendor}` : ''}` }
     );
 

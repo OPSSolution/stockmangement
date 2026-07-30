@@ -231,10 +231,11 @@ export default function PurchasesPage() {
       const lines = (current?.items || [])
         .map((item) => ({
           productId: item.productId,
+          warehouse: current?.warehouse ?? '',
           quantity: extra.receivedQty![item.productId] ?? 0,
           binLocation: extra.receivedBin?.[item.productId] || undefined,
         }))
-        .filter((line) => line.quantity > 0);
+        .filter((line) => line.quantity > 0 && line.warehouse);
       const { error: stockError } = await receivePurchaseOrderItems(lines, { reference: id, userName: requesterIdentity });
       setUploadingReceipt(false);
       if (stockError) {

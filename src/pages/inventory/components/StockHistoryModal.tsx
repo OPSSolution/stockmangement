@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Product } from '@/mocks/inventory';
+import { ProductStockRow } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
 import { typeConfig } from './stockHistoryTypeConfig';
 import { getReservationDetailsForProduct, type ReservationDetail } from '@/lib/stockReservations';
 
 interface StockHistoryModalProps {
-  product: Product;
+  product: ProductStockRow;
   history: StockHistoryEntry[];
   onClose: () => void;
   /** Opens the Resolve On Hold flow — omitted when the viewer can't adjust stock. */

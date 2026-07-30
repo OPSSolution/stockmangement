@@ -29,23 +29,26 @@ export default function AlertsPanel() {
 
   useEffect(() => {
     async function fetchAlerts() {
-      let query = supabase.from('products').select('*');
+      let query = supabase.from('product_warehouse_stock').select('*, product:products(*)');
       if (warehouseScope) query = query.in('warehouse', warehouseScope);
       const { data, error } = await query;
       if (!error && data) {
         const alerts: StockAlert[] = data
-          .filter((p: Record<string, unknown>) => (p.stock as number) <= (p.low_stock_threshold as number))
-          .map((p: Record<string, unknown>) => ({
-            id: `A-${p.id}`,
-            productId: p.id as string,
-            productName: p.name as string,
-            sku: p.sku as string,
-            warehouse: p.warehouse as string,
-            currentStock: p.stock as number,
-            threshold: p.low_stock_threshold as number,
-            severity: (p.stock as number) === 0 ? 'critical' : 'warning',
-            timestamp: p.last_updated as string,
-          }));
+          .filter((row: Record<string, unknown>) => row.product && (row.stock as number) <= (row.low_stock_threshold as number))
+          .map((row: Record<string, unknown>) => {
+            const p = row.product as Record<string, unknown>;
+            return {
+              id: `A-${p.id}-${row.warehouse}`,
+              productId: p.id as string,
+              productName: p.name as string,
+              sku: p.sku as string,
+              warehouse: row.warehouse as string,
+              currentStock: row.stock as number,
+              threshold: row.low_stock_threshold as number,
+              severity: (row.stock as number) === 0 ? 'critical' : 'warning',
+              timestamp: row.last_updated as string,
+            };
+          });
         setStockAlerts(alerts);
       }
       setLoading(false);
