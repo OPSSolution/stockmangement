@@ -331,6 +331,7 @@ export default function RolesPage() {
                           className="fixed w-40 bg-white border border-gray-100 rounded-2xl shadow-md z-[60] py-1"
                           style={{ left: menuPosition.left, top: menuPosition.top }}
                           data-role-menu
+                          onMouseLeave={() => { setOpenMenuId(null); setMenuPosition(null); }}
                         >
                           {showEdit && (
                             <button
