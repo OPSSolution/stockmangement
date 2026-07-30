@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../contexts/AuthContext';
 import { useRef, useCallback } from 'react';
-222
+
 type NavItem = {
   label: string;
   icon: string;
@@ -89,8 +89,14 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
   const touchStartX = useRef<number | null>(null);
 
-  const role = (profile?.role ?? 'viewer') as UserRole;
-  const roleMeta = ROLE_META[role];
+  const role = profile?.role ?? 'viewer';
+  // Custom roles (created via the Roles page) aren't in ROLE_META — fall
+  // back to a generic badge instead of crashing the whole sidebar.
+  const roleMeta = ROLE_META[role as UserRole] ?? {
+    label: role.charAt(0).toUpperCase() + role.slice(1),
+    icon: 'ri-user-line',
+    cls: 'bg-gray-100 text-gray-600',
+  };
 
   const visibleMain          = mainNavItems.filter(i => canAccess(i.permKey));
   const visibleManagement    = managementNavItems.filter(i => canAccess(i.permKey));
