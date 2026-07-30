@@ -125,6 +125,21 @@ export default function RolesPage() {
 
   useEffect(() => { loadRoles(); }, []);
 
+  // Close the "more actions" dropdown only on an actual click outside it —
+  // not on mouse-leave, so moving the pointer off the button toward the menu
+  // (or just hovering elsewhere) doesn't dismiss it prematurely.
+  useEffect(() => {
+    if (!openMenuId) return;
+    const handleClickOutside = (e: Event) => {
+      if (!(e.target as Element).closest('[data-role-menu]')) {
+        setOpenMenuId(null);
+        setMenuPosition(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [openMenuId]);
+
   const openCreate = () => {
     setEditRole(null);
     setForm({ name: '', description: '', permissions: defaultPermissions() });
@@ -303,7 +318,7 @@ export default function RolesPage() {
                     </div>
                   </div>
                   {(showEdit || (showDelete && !role.is_system)) && (
-                    <div className="relative flex-shrink-0">
+                    <div className="relative flex-shrink-0" data-role-menu>
                       <button
                         onClick={(event) => handleToggleMenu(role.id, event)}
                         className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors cursor-pointer"
@@ -315,8 +330,7 @@ export default function RolesPage() {
                         <div
                           className="fixed w-40 bg-white border border-gray-100 rounded-2xl shadow-md z-[60] py-1"
                           style={{ left: menuPosition.left, top: menuPosition.top }}
-                          onClick={(e) => e.stopPropagation()}
-                          onMouseLeave={() => { setOpenMenuId(null); setMenuPosition(null); }}
+                          data-role-menu
                         >
                           {showEdit && (
                             <button
