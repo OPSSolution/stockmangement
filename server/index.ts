@@ -25,7 +25,10 @@ async function runMigration() {
     await pool.query(schema);
     console.log('Database migration complete.');
   } catch (err: any) {
-    console.error('Migration error (continuing):', err.message);
+    console.error('Migration error (continuing):', JSON.stringify({
+      message: err.message, code: err.code, detail: err.detail, hint: err.hint,
+      table: err.table, constraint: err.constraint, position: err.position,
+    }));
   }
 }
 
@@ -62,7 +65,10 @@ if (isProd) {
 
 // Start immediately — migration/table setup runs in background so Render health check never times out
 app.listen(PORT, () => console.log(`Server running on port ${PORT}${isProd ? '' : ' (development)'}`));
-ensureRolesTable().catch(err => console.error('Failed to ensure roles table:', err.message));
+ensureRolesTable().catch((err: any) => console.error('Failed to ensure roles table:', JSON.stringify({
+  message: err.message, code: err.code, detail: err.detail, hint: err.hint,
+  table: err.table, constraint: err.constraint, position: err.position,
+})));
 if (isProd) runMigration();
 
 // Background notification scheduling — this server process stays up
