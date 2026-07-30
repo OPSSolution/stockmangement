@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getFullAccessProfileIds } from './supabaseEnv';
 
 interface AlertRule {
   id: string;
@@ -65,9 +66,9 @@ async function evaluateStockRule(supabase: SupabaseClient, rule: AlertRule) {
   const category = rule.trigger_condition.category as string | undefined;
   const ruleThreshold = rule.trigger_condition.threshold as number | undefined;
 
-  const [{ data: stockRows }, { data: admins }, { data: allSettings }] = await Promise.all([
+  const [{ data: stockRows }, adminIds, { data: allSettings }] = await Promise.all([
     supabase.from('product_warehouse_stock').select('warehouse, stock, low_stock_threshold, product:products(id, name, sku, category)'),
-    supabase.from('profiles').select('id').eq('role', 'admin'),
+    getFullAccessProfileIds(supabase),
     supabase.from('notification_settings').select('user_id, category_thresholds'),
   ]);
 
@@ -83,18 +84,18 @@ async function evaluateStockRule(supabase: SupabaseClient, rule: AlertRule) {
       warehouse: row.warehouse as string,
     }));
 
-  if (!products || !admins) return 0;
+  if (!products || adminIds.length === 0) return 0;
 
   const settingsByUser = new Map<string, RecipientSettings>((allSettings ?? []).map((s: RecipientSettings) => [s.user_id, s]));
   const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
   let created = 0;
 
-  for (const admin of admins as { id: string }[]) {
+  for (const adminId of adminIds) {
     // A recipient's own per-category threshold (set in their Notification
     // Settings) takes priority over the rule's threshold, which in turn beats
     // the product's own low_stock_threshold — so "Stock Thresholds by
     // Category" actually changes who gets notified and when.
-    const recipientThresholds = settingsByUser.get(admin.id)?.category_thresholds || {};
+    const recipientThresholds = settingsByUser.get(adminId)?.category_thresholds || {};
 
     for (const product of products) {
       const effectiveThreshold = recipientThresholds[product.category] ?? ruleThreshold ?? product.low_stock_threshold;
@@ -103,7 +104,7 @@ async function evaluateStockRule(supabase: SupabaseClient, rule: AlertRule) {
       const { data: recent } = await supabase
         .from('notifications')
         .select('id')
-        .eq('user_id', admin.id)
+        .eq('user_id', adminId)
         .eq('type', rule.notification_type)
         .contains('data', { product_id: product.id, warehouse: product.warehouse })
         .gte('created_at', oneHourAgo)
@@ -113,7 +114,7 @@ async function evaluateStockRule(supabase: SupabaseClient, rule: AlertRule) {
       const title = rule.notification_type === 'out_of_stock' ? `Out of Stock: ${product.name}` : `Low Stock: ${product.name}`;
       const message = `${product.name} (${product.sku}) in ${product.category} has only ${product.stock} units remaining at ${product.warehouse}. Threshold: ${effectiveThreshold}.`;
       const { error } = await supabase.from('notifications').insert({
-        user_id: admin.id,
+        user_id: adminId,
         type: rule.notification_type,
         title,
         message,

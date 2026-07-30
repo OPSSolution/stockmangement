@@ -47,7 +47,8 @@ export default function ReturnFormModal({ ret, presetRequestId, onClose, onSave,
   // returns are read-only here; edit/confirm/reject cease to be legitimate.
   const isTerminal = !!ret && (ret.status === 'restocked' || ret.status === 'discarded');
   const { formatAmount } = useCurrency();
-  const { isAdmin } = useAuth();
+  const { canApprove } = useAuth();
+  const isAdmin = canApprove('returns');
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [form, setForm] = useState({
     returnedBy: ret?.returnedBy ?? '',

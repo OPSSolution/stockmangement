@@ -5,7 +5,7 @@ import { supabaseAdmin } from '../lib/supabaseEnv';
 const router = Router();
 
 type PagePermission = { view: boolean; edit: boolean; delete: boolean; approve: boolean };
-type RoleRow = { id: string; name: string; description: string | null; permissions: Record<string, unknown>; is_system: boolean };
+type RoleRow = { id: string; name: string; description: string | null; permissions: Record<string, unknown>; is_system: boolean; is_full_access: boolean };
 
 const PAGE_KEYS = [
   'dashboard', 'inventory', 'requests', 'orders', 'deliveries', 'warehouses', 'transfers',
@@ -35,6 +35,7 @@ const DEFAULT_ROLES = [
     description: 'Full access to all pages',
     permissions: buildPermissions(PAGE_KEYS, { edit: true, del: true, approve: true }),
     is_system: true,
+    is_full_access: true,
   },
   {
     id: 'staff',
@@ -49,6 +50,7 @@ const DEFAULT_ROLES = [
       { edit: true, del: false, approve: false }
     ),
     is_system: true,
+    is_full_access: false,
   },
   {
     id: 'viewer',
@@ -59,6 +61,7 @@ const DEFAULT_ROLES = [
       { edit: false, del: false }
     ),
     is_system: true,
+    is_full_access: false,
   },
 ];
 
@@ -114,15 +117,12 @@ async function normalizeAllRolePermissions() {
   }
 }
 
+// Deliberately does NOT re-seed DEFAULT_ROLES on every boot — the app now
+// expects roles to be admin-defined via the Roles page, and the 3 built-in
+// roles (admin/staff/viewer) are meant to be fully deletable once a real
+// full-access role takes over (see roles.is_full_access). DEFAULT_ROLES is
+// only still used as a lookup for normalizeAllRolePermissions' backfill.
 export async function ensureRolesTable() {
-  for (const role of DEFAULT_ROLES) {
-    const { error } = await client().from('roles').upsert(
-      { id: role.id, name: role.name, description: role.description, permissions: role.permissions, is_system: role.is_system },
-      { onConflict: 'id', ignoreDuplicates: true }
-    );
-    if (error) throw error;
-  }
-
   await normalizeAllRolePermissions();
 }
 
@@ -151,7 +151,7 @@ router.get('/:id', async (req, res) => {
 
 // POST /roles — create a new role
 router.post('/', authenticate, async (req: AuthRequest, res) => {
-  const { name, description, permissions } = req.body;
+  const { name, description, permissions, is_full_access } = req.body;
   if (!name?.trim()) {
     return res.status(400).json({ data: null, error: 'Name is required' });
   }
@@ -161,7 +161,7 @@ router.post('/', authenticate, async (req: AuthRequest, res) => {
   try {
     const { data, error } = await client()
       .from('roles')
-      .insert({ id, name: name.trim(), description: description || null, permissions: permissions ?? {}, is_system: false })
+      .insert({ id, name: name.trim(), description: description || null, permissions: permissions ?? {}, is_system: false, is_full_access: !!is_full_access })
       .select()
       .single();
     if (error) throw error;
@@ -177,7 +177,7 @@ router.post('/', authenticate, async (req: AuthRequest, res) => {
 
 // PATCH /roles/:id — update name, description, or permissions
 router.patch('/:id', authenticate, async (req: AuthRequest, res) => {
-  const { name, description, permissions } = req.body;
+  const { name, description, permissions, is_full_access } = req.body;
 
   try {
     const { data: existing, error: fetchErr } = await client().from('roles').select('*').eq('id', req.params.id).maybeSingle();
@@ -190,10 +190,11 @@ router.patch('/:id', authenticate, async (req: AuthRequest, res) => {
     const updatedName        = role.is_system ? role.name        : (name?.trim()   ?? role.name);
     const updatedDescription = description !== undefined           ? description     : role.description;
     const updatedPermissions = permissions !== undefined           ? permissions     : role.permissions;
+    const updatedIsFullAccess = is_full_access !== undefined       ? !!is_full_access : role.is_full_access;
 
     const { data, error } = await client()
       .from('roles')
-      .update({ name: updatedName, description: updatedDescription, permissions: updatedPermissions, updated_at: new Date().toISOString() })
+      .update({ name: updatedName, description: updatedDescription, permissions: updatedPermissions, is_full_access: updatedIsFullAccess, updated_at: new Date().toISOString() })
       .eq('id', req.params.id)
       .select()
       .single();

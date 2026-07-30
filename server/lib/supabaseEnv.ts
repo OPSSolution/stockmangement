@@ -23,3 +23,16 @@ export function supabaseAdmin(): SupabaseClient | null {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
+
+// Replaces `.eq('role', 'admin')` — any role can now be marked "full access"
+// from the Roles page, so finding who should be treated as an admin (e.g. for
+// admin-only notifications) is a two-step lookup: which roles have the flag,
+// then which profiles hold one of those roles.
+export async function getFullAccessProfileIds(supabase: SupabaseClient): Promise<string[]> {
+  const { data: roles } = await supabase.from('roles').select('id').eq('is_full_access', true);
+  const roleIds = (roles ?? []).map((r) => r.id as string);
+  if (roleIds.length === 0) return [];
+
+  const { data: profiles } = await supabase.from('profiles').select('id').in('role', roleIds);
+  return (profiles ?? []).map((p) => p.id as string);
+}

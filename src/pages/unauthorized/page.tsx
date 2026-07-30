@@ -26,19 +26,21 @@ export default function UnauthorizedPage() {
           does not have permission to view this page.
         </p>
 
-        {/* Role badge */}
+        {/* Role badge — 'admin'/'staff' get a distinct look, any other (including
+            custom) role falls back to a neutral badge instead of misleadingly
+            defaulting to the "viewer" styling. */}
         {profile?.role && (
           <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
             profile.role === 'admin'
               ? 'bg-purple-100 text-purple-700'
               : profile.role === 'staff'
               ? 'bg-sky-100 text-sky-700'
-              : 'bg-amber-100 text-amber-700'
+              : 'bg-gray-100 text-gray-600'
           }`}>
             <i className={`${
               profile.role === 'admin' ? 'ri-shield-star-line' :
               profile.role === 'staff' ? 'ri-user-settings-line' :
-              'ri-eye-line'
+              'ri-user-line'
             } text-sm`}></i>
             {profile.role.charAt(0).toUpperCase() + profile.role.slice(1)}
           </span>

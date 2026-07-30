@@ -2,7 +2,8 @@ import { createContext, useContext, useEffect, useRef, useState, ReactNode } fro
 import { supabase } from '../lib/supabase';
 import { logAudit } from '../lib/auditLog';
 
-type UserRole = 'admin' | 'staff' | 'viewer';
+// Any role id from the `roles` table — no longer limited to a fixed set.
+type UserRole = string;
 
 // Slim local types — no @supabase/supabase-js dependency
 export interface AppUser {
@@ -39,9 +40,8 @@ interface AuthContextType {
   profile: { full_name: string; email: string; role: UserRole; phone: string | null; warehouses: string[] } | null;
   permissions: Permissions | null;
   loading: boolean;
-  isAdmin: boolean;
-  isStaff: boolean;
-  isViewer: boolean;
+  /** True when the current role has `is_full_access` set — bypasses per-page permission checks and warehouse scoping. */
+  isFullAccess: boolean;
   /** Assigned warehouse names to scope data to, or null when the user should see all warehouses. */
   warehouseScope: string[] | null;
   canAccess: (key: string) => boolean;
@@ -61,6 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AppSession | null>(null);
   const [profile, setProfile] = useState<{ full_name: string; email: string; role: UserRole; phone: string | null; warehouses: string[] } | null>(null);
   const [permissions, setPermissions] = useState<Permissions | null>(null);
+  const [isFullAccess, setIsFullAccess] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (authUser: AppUser) => {
@@ -78,6 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await supabase.auth.signOut();
         setProfile(null);
         setPermissions(null);
+        setIsFullAccess(false);
         return;
       }
       const raw = data as { full_name: string; email: string; role: UserRole; phone: string | null; warehouses: string[] | null };
@@ -108,8 +110,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       const { data } = await res.json();
       setPermissions(data?.permissions ?? null);
+      setIsFullAccess(!!data?.is_full_access);
     } catch {
       setPermissions(null);
+      setIsFullAccess(false);
     }
   };
 
@@ -151,6 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         setProfile(null);
         setPermissions(null);
+        setIsFullAccess(false);
         setLoading(false);
       }
     });
@@ -203,6 +208,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
     setProfile(null);
     setPermissions(null);
+    setIsFullAccess(false);
     setUser(null);
     setSession(null);
   };
@@ -211,20 +217,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user) await fetchProfile(user);
   };
 
-  const isAdmin = profile?.role === 'admin';
-  const isStaff = profile?.role === 'admin' || profile?.role === 'staff';
-  const isViewer = profile?.role === 'viewer';
   const canAccess = (key: string) => permissions === null || normalizePerm(permissions[key]).view;
   const canEdit = (key: string) => permissions === null || normalizePerm(permissions[key]).edit;
   const canDelete = (key: string) => permissions === null || normalizePerm(permissions[key]).delete;
   const canApprove = (key: string) => permissions === null || normalizePerm(permissions[key]).approve;
-  // Non-admins assigned to one or more warehouses only see data tied to those
-  // warehouses; admins always see everything regardless of their own assignment.
-  const warehouseScope = !isAdmin && profile?.warehouses && profile.warehouses.length > 0 ? profile.warehouses : null;
+  // Non-full-access users assigned to one or more warehouses only see data
+  // tied to those warehouses; a full-access role always sees everything
+  // regardless of its own warehouse assignment.
+  const warehouseScope = !isFullAccess && profile?.warehouses && profile.warehouses.length > 0 ? profile.warehouses : null;
 
   return (
     <AuthContext.Provider
-      value={{ user, session, profile, permissions, loading, isAdmin, isStaff, isViewer, canAccess, canEdit, canDelete, canApprove, warehouseScope, signIn, signUp, signOut, refreshProfile }}
+      value={{ user, session, profile, permissions, loading, isFullAccess, canAccess, canEdit, canDelete, canApprove, warehouseScope, signIn, signUp, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>

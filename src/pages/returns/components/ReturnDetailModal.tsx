@@ -49,7 +49,8 @@ interface RequestProgressItem {
 
 export default function ReturnDetailModal({ ret, history, onSelectReturn, onClose, onUpdate, onCreateFollowUp }: Props) {
   const { formatAmount } = useCurrency();
-  const { isAdmin } = useAuth();
+  const { canApprove } = useAuth();
+  const isAdmin = canApprove('returns');
   const [items, setItems] = useState(ret.items);
   const [binOptions, setBinOptions] = useState<string[]>([]);
   const [inspectionNotes, setInspectionNotes] = useState(ret.inspectionNotes ?? '');

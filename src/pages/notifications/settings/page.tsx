@@ -70,7 +70,8 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 export default function NotificationSettingsPage() {
   const { settings, refresh, requestBrowserPush, browserPushPermission, browserPushSupported, subscribeBrowserPush, unsubscribeBrowserPush, browserPushSubscribed } = useNotifications();
-  const { user, isAdmin, canEdit, canDelete } = useAuth();
+  const { user, canAccess, canEdit, canDelete } = useAuth();
+  const isAdmin = canAccess('notifications_settings');
   const showEdit = canEdit('notifications_settings');
   const showDelete = canDelete('notifications_settings');
   const navigate = useNavigate();

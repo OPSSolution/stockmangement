@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { generateKeyPairSync } from 'crypto';
 import { authenticate, AuthRequest } from '../middleware/auth';
-import { supabaseForToken, supabaseAdmin } from '../lib/supabaseEnv';
+import { supabaseForToken, supabaseAdmin, getFullAccessProfileIds } from '../lib/supabaseEnv';
 import { evaluateAlertRules } from '../lib/alertRulesEvaluator';
 import { dispatchPendingNotifications } from '../lib/notificationDispatch';
 
@@ -130,13 +130,15 @@ router.post('/report-summary', authenticate, async (req: AuthRequest, res) => {
   try {
     // Resolve the caller's own warehouse scope server-side — never trust the
     // client-sent `warehouse` alone, mirroring src/contexts/AuthContext.tsx's
-    // warehouseScope (non-admin with assigned warehouses is restricted to them).
+    // warehouseScope (a role without is_full_access, assigned to specific
+    // warehouses, is restricted to them).
     let allowedWarehouses: string[] | null = null;
     if (req.user) {
       const { data: profile } = await supabase.from('profiles').select('role, warehouses').eq('id', req.user.id).maybeSingle();
       const role = (profile?.role as string) || req.user.role || 'viewer';
       const profileWarehouses = (profile?.warehouses as string[] | null) || [];
-      if (role !== 'admin' && profileWarehouses.length > 0) allowedWarehouses = profileWarehouses;
+      const { data: roleRow } = await supabase.from('roles').select('is_full_access').eq('id', role).maybeSingle();
+      if (!roleRow?.is_full_access && profileWarehouses.length > 0) allowedWarehouses = profileWarehouses;
     }
     const requestedWarehouse = warehouse || null;
     let whList: string[] | null;
@@ -456,12 +458,11 @@ router.post('/notify-admins', async (req, res) => {
   if (!admin) return res.status(503).json({ success: false, error: 'Service role is not configured on the server' });
 
   try {
-    const { data: admins, error: adminsErr } = await admin.from('profiles').select('id').eq('role', 'admin');
-    if (adminsErr) throw adminsErr;
-    if (!admins || admins.length === 0) return res.json({ success: true, notified: 0 });
+    const adminIds = await getFullAccessProfileIds(admin);
+    if (adminIds.length === 0) return res.json({ success: true, notified: 0 });
 
-    const rows = admins.map((a) => ({
-      user_id: a.id,
+    const rows = adminIds.map((id) => ({
+      user_id: id,
       type,
       title,
       message,
@@ -472,7 +473,7 @@ router.post('/notify-admins', async (req, res) => {
     }));
     const { error: insertErr } = await admin.from('notifications').insert(rows);
     if (insertErr) throw insertErr;
-    res.json({ success: true, notified: admins.length });
+    res.json({ success: true, notified: adminIds.length });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -607,29 +608,36 @@ router.post('/scheduled-dispatch', authenticate, async (req: AuthRequest, res) =
   }
 });
 
-// POST /functions/v1/invite-user  (admin only)
+// POST /functions/v1/invite-user  (requires teams.edit permission)
 // Creates the user directly in Supabase Auth + the Supabase `profiles` table —
 // that's the only database the real app (login, Teams, everything) reads from.
 // Requires SUPABASE_SERVICE_ROLE_KEY to be set on the server; that key must
 // never be exposed to the browser.
 router.post('/invite-user', authenticate, async (req: AuthRequest, res) => {
-  if (req.user?.role !== 'admin') {
-    return res.status(403).json({ success: false, error: 'Admin access required' });
-  }
-
-  const { email, full_name = 'User', role = 'staff', phone, password } = req.body;
-
-  if (!email) return res.status(400).json({ success: false, error: 'Email is required' });
-  if (!['admin', 'staff', 'viewer'].includes(role)) {
-    return res.status(400).json({ success: false, error: 'Invalid role' });
-  }
-
   const admin = supabaseAdmin();
   if (!admin) {
     return res.status(500).json({
       success: false,
       error: 'SUPABASE_SERVICE_ROLE_KEY is not configured on the server — invite cannot create a real Supabase account without it.',
     });
+  }
+
+  // Inviting a member is a team-management action — gate it on the
+  // requester's role having edit access to the 'teams' page, same as the
+  // client-side canEdit('teams') check on the Teams page.
+  const { data: requesterRole } = await admin.from('roles').select('permissions').eq('id', req.user?.role || '').maybeSingle();
+  const teamsPerm = requesterRole?.permissions?.teams;
+  const canInvite = typeof teamsPerm === 'boolean' ? teamsPerm : !!teamsPerm?.edit;
+  if (!canInvite) {
+    return res.status(403).json({ success: false, error: 'You do not have permission to invite team members' });
+  }
+
+  const { email, full_name = 'User', role = 'staff', phone, password } = req.body;
+
+  if (!email) return res.status(400).json({ success: false, error: 'Email is required' });
+  const { data: roleRow } = await admin.from('roles').select('id').eq('id', role).maybeSingle();
+  if (!roleRow) {
+    return res.status(400).json({ success: false, error: 'Invalid role' });
   }
 
   const plainPassword = password || Math.random().toString(36).slice(-10);

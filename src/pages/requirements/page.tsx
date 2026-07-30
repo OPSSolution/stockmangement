@@ -39,7 +39,7 @@ interface ToastState {
 }
 
 export default function RequirementsPage() {
-  const { isAdmin, canEdit, canDelete } = useAuth();
+  const { canAccess, canEdit, canDelete } = useAuth();
   const showEdit = canEdit('requirements');
   const showDelete = canDelete('requirements');
   const navigate = useNavigate();
@@ -187,7 +187,7 @@ export default function RequirementsPage() {
     setFilterStatus('');
   };
 
-  if (!isAdmin) {
+  if (!canAccess('requirements')) {
     return (
       <DashboardLayout title="Requirements" subtitle="System requirements tracking">
         <div className="max-w-4xl mx-auto">

@@ -85,6 +85,7 @@ interface Role {
   description: string | null;
   permissions: Record<string, boolean | Partial<PagePermission>>;
   is_system: boolean;
+  is_full_access: boolean;
   created_at: string;
 }
 
@@ -110,7 +111,7 @@ export default function RolesPage() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editRole, setEditRole] = useState<Role | null>(null);
-  const [form, setForm] = useState({ name: '', description: '', permissions: defaultPermissions() });
+  const [form, setForm] = useState({ name: '', description: '', permissions: defaultPermissions(), isFullAccess: false });
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -142,7 +143,7 @@ export default function RolesPage() {
 
   const openCreate = () => {
     setEditRole(null);
-    setForm({ name: '', description: '', permissions: defaultPermissions() });
+    setForm({ name: '', description: '', permissions: defaultPermissions(), isFullAccess: false });
     setModalOpen(true);
   };
 
@@ -170,6 +171,7 @@ export default function RolesPage() {
       name: role.name,
       description: role.description ?? '',
       permissions: normalizeAll(role.permissions),
+      isFullAccess: role.is_full_access,
     });
     setModalOpen(true);
   };
@@ -220,6 +222,7 @@ export default function RolesPage() {
         name: form.name,
         description: form.description || null,
         permissions: form.permissions,
+        is_full_access: form.isFullAccess,
       });
       logAudit({ action: 'update', module: 'roles', description: `Updated role "${form.name}"`, referenceId: editRole.id });
     } else {
@@ -227,6 +230,7 @@ export default function RolesPage() {
         name: form.name,
         description: form.description || null,
         permissions: form.permissions,
+        is_full_access: form.isFullAccess,
       });
       logAudit({ action: 'create', module: 'roles', description: `Created role "${form.name}"` });
     }
@@ -312,9 +316,14 @@ export default function RolesPage() {
                     </div>
                     <div>
                       <h3 className="font-semibold text-gray-900 leading-tight">{role.name}</h3>
-                      {role.is_system && (
-                        <span className="text-xs text-gray-400">System role</span>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {role.is_system && (
+                          <span className="text-xs text-gray-400">System role</span>
+                        )}
+                        {role.is_full_access && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-purple-50 text-purple-600">Full Access</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   {(showEdit || (showDelete && !role.is_system)) && (
@@ -446,6 +455,20 @@ export default function RolesPage() {
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
+
+              {/* Full access */}
+              <label className="flex items-start gap-2.5 p-3 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={form.isFullAccess}
+                  onChange={e => setForm(f => ({ ...f, isFullAccess: e.target.checked }))}
+                  className="mt-0.5 rounded border-gray-300 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-gray-700">Full Access</span>
+                  <span className="block text-xs text-gray-400">Bypasses per-page permission checks below and sees all warehouses regardless of assignment. Grant sparingly.</span>
+                </span>
+              </label>
 
               {/* Page permissions */}
               <div>

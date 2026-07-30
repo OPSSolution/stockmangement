@@ -51,7 +51,9 @@ function roleColor(roleId: string): string {
 
 export default function TeamsPage() {
   const navigate = useNavigate();
-  const { isAdmin, user } = useAuth();
+  const { canEdit, canDelete, user } = useAuth();
+  const canEditTeams = canEdit('teams');
+  const canDeleteTeams = canDelete('teams');
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>([]);
   const [roles, setRoles] = useState<{ id: string; name: string }[]>([]);
@@ -127,8 +129,8 @@ export default function TeamsPage() {
   );
 
   const handleUpdateRole = async (memberId: string, newRole: UserRole) => {
-    if (!isAdmin) {
-      showToast('Admin access required', 'error');
+    if (!canEditTeams) {
+      showToast('Edit access required', 'error');
       return;
     }
     const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', memberId);
@@ -143,8 +145,8 @@ export default function TeamsPage() {
   };
 
   const handleUpdateWarehouses = async (memberId: string, newWarehouses: string[]) => {
-    if (!isAdmin) {
-      showToast('Admin access required', 'error');
+    if (!canEditTeams) {
+      showToast('Edit access required', 'error');
       return;
     }
     const { error } = await supabase.from('profiles').update({ warehouses: newWarehouses }).eq('id', memberId);
@@ -183,7 +185,7 @@ export default function TeamsPage() {
   };
 
   const handleSaveEdit = async () => {
-    if (!editingMember || !isAdmin) return;
+    if (!editingMember || !canEditTeams) return;
     const { error } = await supabase
       .from('profiles')
       .update({
@@ -217,7 +219,7 @@ export default function TeamsPage() {
   };
 
   const handleInvite = async () => {
-    if (!isAdmin) return;
+    if (!canEditTeams) return;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(inviteForm.email.trim())) {
       showToast('Enter a valid email address (e.g. name@example.com)', 'error');
       return;
@@ -270,7 +272,7 @@ export default function TeamsPage() {
   };
 
   const handleRemoveMember = async (member: TeamMember) => {
-    if (!isAdmin) return;
+    if (!canDeleteTeams) return;
     if (member.id === user?.id) {
       showToast("You can't remove your own account", 'error');
       return;
@@ -331,7 +333,7 @@ export default function TeamsPage() {
               <i className="ri-download-2-line"></i>
               Export
             </button>
-            {isAdmin && (
+            {canEditTeams && (
               <button
                 onClick={() => navigate('/teams/activity-log')}
                 className="px-4 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2"
@@ -340,7 +342,7 @@ export default function TeamsPage() {
                 Activity Log
               </button>
             )}
-            {isAdmin && (
+            {canEditTeams && (
               <button
                 onClick={() => setShowInvite(true)}
                 className="px-4 py-2.5 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2"
@@ -447,7 +449,7 @@ export default function TeamsPage() {
                         </div>
                       </td>
                       <td className="px-5 py-4">
-                        {isAdmin && !member.deleted_at ? (
+                        {canEditTeams && !member.deleted_at ? (
                           <select
                             value={member.role}
                             onChange={(e) => handleUpdateRole(member.id, e.target.value as UserRole)}
@@ -462,7 +464,7 @@ export default function TeamsPage() {
                         )}
                       </td>
                       <td className="px-5 py-4">
-                        {isAdmin && !member.deleted_at ? (
+                        {canEditTeams && !member.deleted_at ? (
                           <div className="relative inline-block">
                             <button
                               onClick={(event) => handleToggleWarehouseMenu(member.id, event)}
@@ -525,7 +527,7 @@ export default function TeamsPage() {
                         )}
                       </td>
                       <td className="px-5 py-4 text-right">
-                        {isAdmin && !member.deleted_at && (
+                        {(canEditTeams || canDeleteTeams) && !member.deleted_at && (
                           <div className="relative inline-flex justify-end">
                             <button
                               onClick={(event) => handleToggleMenu(member.id, event)}
@@ -544,17 +546,19 @@ export default function TeamsPage() {
                                   setMenuPosition(null);
                                 }}
                               >
-                                <button
-                                  onClick={() => {
-                                    setEditingMember(member);
-                                    setOpenMenuId(null);
-                                    setMenuPosition(null);
-                                  }}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
-                                >
-                                  <i className="ri-edit-line text-gray-400"></i> Edit
-                                </button>
-                                {member.id !== user?.id && (
+                                {canEditTeams && (
+                                  <button
+                                    onClick={() => {
+                                      setEditingMember(member);
+                                      setOpenMenuId(null);
+                                      setMenuPosition(null);
+                                    }}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                                  >
+                                    <i className="ri-edit-line text-gray-400"></i> Edit
+                                  </button>
+                                )}
+                                {canDeleteTeams && member.id !== user?.id && (
                                   <button
                                     onClick={() => {
                                       setRemovingMember(member);

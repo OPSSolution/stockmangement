@@ -46,7 +46,8 @@ function mapTransfer(row: Record<string, unknown>): StockTransfer {
 }
 
 export default function TransfersPage() {
-  const { warehouseScope, isAdmin } = useAuth();
+  const { warehouseScope, isFullAccess, canApprove } = useAuth();
+  const canDecideTransfers = canApprove('transfers');
   const [searchParams, setSearchParams] = useSearchParams();
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -113,9 +114,9 @@ export default function TransfersPage() {
     const transfer = transfers.find((t) => t.id === id);
     if (status === 'received' && !documentFile) return;
 
-    if ((status === 'approved' || status === 'in_transit' || status === 'received') && !isAdmin) {
+    if ((status === 'approved' || status === 'in_transit' || status === 'received') && !canDecideTransfers) {
       const action = status === 'approved' ? 'approve' : status === 'in_transit' ? 'mark in transit' : 'confirm receipt of';
-      window.alert(`Only an admin can ${action} this transfer.`);
+      window.alert(`You don't have permission to ${action} this transfer.`);
       return;
     }
 
@@ -435,8 +436,8 @@ export default function TransfersPage() {
           transfer={selectedTransfer}
           onClose={() => setSelectedTransfer(null)}
           onStatusChange={handleStatusChange}
-          isSendingWarehouse={isAdmin}
-          isReceivingWarehouse={isAdmin}
+          isSendingWarehouse={isFullAccess}
+          isReceivingWarehouse={isFullAccess}
           statusChanging={statusChanging}
         />
       )}

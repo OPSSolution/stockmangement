@@ -30,7 +30,7 @@ const timelineIcons: Record<DeliveryStep, string> = {
 };
 
 export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: DeliveryDetailModalProps) {
-  const { profile, isAdmin } = useAuth();
+  const { profile, isFullAccess } = useAuth();
   const [note, setNote] = useState('');
   const [photo, setPhoto] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -46,7 +46,7 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
   // dispatch) belong to the sending warehouse. Admins can always do either.
   const requiredWarehouse = nextStep === 'delivered' ? delivery.toWarehouse : delivery.fromWarehouse;
   const isReceivingStep = nextStep === 'delivered';
-  const canAdvance = isAdmin || !!profile?.warehouses.includes(requiredWarehouse);
+  const canAdvance = isFullAccess || !!profile?.warehouses.includes(requiredWarehouse);
 
   // Bin options come from the destination warehouse's registry PLUS any bin
   // already used by a matching product (by SKU) sitting in that warehouse —

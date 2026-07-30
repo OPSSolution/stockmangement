@@ -25,8 +25,8 @@ const vendorStatusColors: Record<string, string> = {
 
 export default function OrderDetailModal({ order, onClose, onUpdateOrder }: OrderDetailModalProps) {
   const { formatAmount } = useCurrency();
-  const { isAdmin, profile } = useAuth();
-  const canDecide = isAdmin;
+  const { canApprove, profile } = useAuth();
+  const canDecide = canApprove('orders');
   const [splits, setSplits] = useState<VendorSplit[]>(order.vendorSplits);
   const [partialQty, setPartialQty] = useState<Record<string, number>>({});
   const [confirmMsg, setConfirmMsg] = useState('');

@@ -192,10 +192,10 @@ function defaultValueForField(field: TemplateField): string | number | boolean {
 }
 
 export default function RequestsPage() {
-  const { profile, isAdmin, warehouseScope, canEdit, canDelete } = useAuth();
+  const { profile, warehouseScope, canEdit, canDelete, canApprove } = useAuth();
   const canSubmit = canEdit('requests');
   const canHardDelete = canDelete('requests');
-  const canApproveRequests = isAdmin;
+  const canApproveRequests = canApprove('requests');
   const requesterIdentity = profile?.full_name || profile?.email;
 
   const [requests, setRequests] = useState<StockRequest[]>([]);
@@ -1506,7 +1506,7 @@ export default function RequestsPage() {
             const req = filtered.find((r) => r.id === openMenuId);
             if (!req) return null;
             const isOwn = req.submitted_by === requesterIdentity;
-            const canEditRow = req.status === 'pending' && (isAdmin || isOwn);
+            const canEditRow = req.status === 'pending' && (canApproveRequests || isOwn);
 
             return (
               <div
@@ -1555,7 +1555,7 @@ export default function RequestsPage() {
         // Pending requests need an explicit Approve/Reject decision from an admin (or a role
         // an admin has granted "approve" to) — the submitter can no longer self-approve.
         // Once decided, admins/owners can still move it through fulfilled/cancelled/returned below.
-        const canChangeStatus = !isPending && (isAdmin || isOwnRequest);
+        const canChangeStatus = !isPending && (canApproveRequests || isOwnRequest);
 
         return (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setViewingReq(null)}>
@@ -1754,7 +1754,7 @@ export default function RequestsPage() {
                         </div>
                       </div>
                     ) : viewingReq.dispatched_at ? (
-                      (isAdmin || isOwnRequest) ? (
+                      (canApproveRequests || isOwnRequest) ? (
                         <div className="space-y-2">
                           <input
                             type="text"
