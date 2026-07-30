@@ -7,7 +7,8 @@ import DashboardLayout from '@/components/feature/DashboardLayout';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
 
-type UserRole = 'admin' | 'staff' | 'viewer';
+// Any role id from the `roles` table — no longer limited to the 3 built-in ones.
+type UserRole = string;
 
 interface TeamMember {
   id: string;
@@ -27,23 +28,33 @@ interface ToastState {
   type: 'success' | 'error';
 }
 
-const ROLE_COLORS: Record<UserRole, string> = {
+// Fixed colors for the 3 built-in roles; custom roles fall back to a
+// deterministic pick from this palette so each one still gets a stable color.
+const ROLE_COLORS: Record<string, string> = {
   admin: 'bg-rose-50 text-rose-600',
   staff: 'bg-sky-50 text-sky-600',
   viewer: 'bg-gray-100 text-gray-500',
 };
+const ROLE_COLOR_PALETTE = [
+  'bg-violet-50 text-violet-600',
+  'bg-amber-50 text-amber-600',
+  'bg-emerald-50 text-emerald-600',
+  'bg-fuchsia-50 text-fuchsia-600',
+  'bg-cyan-50 text-cyan-600',
+];
 
-const ROLE_LABELS: Record<UserRole, string> = {
-  admin: 'Admin',
-  staff: 'Staff',
-  viewer: 'Viewer',
-};
+function roleColor(roleId: string): string {
+  if (ROLE_COLORS[roleId]) return ROLE_COLORS[roleId];
+  const hash = [...roleId].reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+  return ROLE_COLOR_PALETTE[hash % ROLE_COLOR_PALETTE.length];
+}
 
 export default function TeamsPage() {
   const navigate = useNavigate();
   const { isAdmin, user } = useAuth();
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>([]);
+  const [roles, setRoles] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
@@ -105,7 +116,15 @@ export default function TeamsPage() {
     supabase.from('warehouses').select('name').order('name', { ascending: true }).then(({ data }) => {
       if (data) setWarehouses(data.map((w) => w.name as string));
     });
+    supabase.from('roles').select('id, name').order('name', { ascending: true }).then(({ data }) => {
+      if (data) setRoles(data as { id: string; name: string }[]);
+    });
   }, [fetchMembers]);
+
+  const roleLabel = useCallback(
+    (roleId: string) => roles.find((r) => r.id === roleId)?.name || roleId,
+    [roles]
+  );
 
   const handleUpdateRole = async (memberId: string, newRole: UserRole) => {
     if (!isAdmin) {
@@ -365,9 +384,7 @@ export default function TeamsPage() {
             className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:border-emerald-400 cursor-pointer"
           >
             <option value="all">All Roles</option>
-            <option value="admin">Admin</option>
-            <option value="staff">Staff</option>
-            <option value="viewer">Viewer</option>
+            {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
         </div>
 
@@ -436,13 +453,11 @@ export default function TeamsPage() {
                             onChange={(e) => handleUpdateRole(member.id, e.target.value as UserRole)}
                             className="px-2 py-1 text-xs font-medium rounded-lg border border-gray-200 bg-white focus:outline-none focus:border-emerald-400 cursor-pointer"
                           >
-                            <option value="admin">Admin</option>
-                            <option value="staff">Staff</option>
-                            <option value="viewer">Viewer</option>
+                            {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                           </select>
                         ) : (
-                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${ROLE_COLORS[member.role]}`}>
-                            {ROLE_LABELS[member.role]}
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${roleColor(member.role)}`}>
+                            {roleLabel(member.role)}
                           </span>
                         )}
                       </td>
@@ -622,9 +637,7 @@ export default function TeamsPage() {
                   }
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-emerald-400 bg-white cursor-pointer"
                 >
-                  <option value="admin">Admin</option>
-                  <option value="staff">Staff</option>
-                  <option value="viewer">Viewer</option>
+                  {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
               </div>
               <div>
@@ -720,9 +733,7 @@ export default function TeamsPage() {
                     onChange={(e) => setInviteForm((f) => ({ ...f, role: e.target.value as UserRole }))}
                     className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-emerald-400 bg-white cursor-pointer"
                   >
-                    <option value="staff">Staff</option>
-                    <option value="admin">Admin</option>
-                    <option value="viewer">Viewer</option>
+                    {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 </div>
                 <div>
