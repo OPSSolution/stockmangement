@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import { pool } from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { supabaseAdmin } from '../lib/supabaseEnv';
 
 const router = Router();
 
 type PagePermission = { view: boolean; edit: boolean; delete: boolean; approve: boolean };
+type RoleRow = { id: string; name: string; description: string | null; permissions: Record<string, unknown>; is_system: boolean };
 
 const PAGE_KEYS = [
   'dashboard', 'inventory', 'requests', 'orders', 'deliveries', 'warehouses', 'transfers',
@@ -61,13 +62,23 @@ const DEFAULT_ROLES = [
   },
 ];
 
+function client() {
+  const supabase = supabaseAdmin();
+  if (!supabase) throw new Error('Supabase admin client unavailable — check SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.');
+  return supabase;
+}
+
 // Upgrades roles still storing legacy `{ page: boolean }` permissions (pre per-action
-// permissions) to the `{ page: { view, edit, delete } }` shape. Idempotent — once a
-// role's permissions are all objects, this is a no-op for it.
-async function migrateLegacyPermissions() {
-  const { rows } = await pool.query('SELECT id, permissions FROM roles');
-  for (const row of rows) {
-    const perms = row.permissions as Record<string, unknown>;
+// permissions) to the `{ page: { view, edit, delete } }` shape, and backfills default
+// entries for any PAGE_KEYS introduced after a role row was first seeded. Idempotent.
+async function normalizeAllRolePermissions() {
+  const { data: rows, error } = await client().from('roles').select('id, permissions');
+  if (error) throw error;
+
+  const defaultsById = new Map(DEFAULT_ROLES.map((r) => [r.id, r.permissions]));
+
+  for (const row of rows || []) {
+    const perms = (row.permissions || {}) as Record<string, unknown>;
     let changed = false;
     const upgraded: Record<string, PagePermission> = {};
 
@@ -87,66 +98,40 @@ async function migrateLegacyPermissions() {
       }
     }
 
+    const missing = PAGE_KEYS.filter((key) => !(key in upgraded));
+    if (missing.length > 0) {
+      changed = true;
+      const knownDefaults = defaultsById.get(row.id);
+      for (const key of missing) {
+        upgraded[key] = knownDefaults?.[key] ?? { view: false, edit: false, delete: false, approve: false };
+      }
+    }
+
     if (changed) {
-      await pool.query('UPDATE roles SET permissions = $1 WHERE id = $2', [JSON.stringify(upgraded), row.id]);
+      const { error: updateErr } = await client().from('roles').update({ permissions: upgraded }).eq('id', row.id);
+      if (updateErr) throw updateErr;
     }
-  }
-}
-
-// Adds default permission entries for any PAGE_KEYS introduced after a role
-// row was first seeded (e.g. 'requests') — INSERT ... ON CONFLICT DO NOTHING
-// never touches pre-existing rows, so without this they'd be missing the key
-// entirely and canAccess() would treat that as "no access".
-async function backfillMissingPageKeys() {
-  const defaultsById = new Map(DEFAULT_ROLES.map((r) => [r.id, r.permissions]));
-
-  const { rows } = await pool.query('SELECT id, permissions FROM roles');
-  for (const row of rows) {
-    const perms = row.permissions as Record<string, PagePermission>;
-    const missing = PAGE_KEYS.filter((key) => !(key in perms));
-    if (missing.length === 0) continue;
-
-    // Known system roles (admin/staff/viewer) inherit this key's shipped default;
-    // custom roles get a safe "no access until an admin opts in" default.
-    const knownDefaults = defaultsById.get(row.id);
-    for (const key of missing) {
-      perms[key] = knownDefaults?.[key] ?? { view: false, edit: false, delete: false, approve: false };
-    }
-    await pool.query('UPDATE roles SET permissions = $1 WHERE id = $2', [JSON.stringify(perms), row.id]);
   }
 }
 
 export async function ensureRolesTable() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS roles (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
-      description TEXT,
-      permissions JSONB NOT NULL DEFAULT '{}',
-      is_system BOOLEAN NOT NULL DEFAULT FALSE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
   for (const role of DEFAULT_ROLES) {
-    await pool.query(
-      `INSERT INTO roles (id, name, description, permissions, is_system)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id) DO NOTHING`,
-      [role.id, role.name, role.description, JSON.stringify(role.permissions), role.is_system]
+    const { error } = await client().from('roles').upsert(
+      { id: role.id, name: role.name, description: role.description, permissions: role.permissions, is_system: role.is_system },
+      { onConflict: 'id', ignoreDuplicates: true }
     );
+    if (error) throw error;
   }
 
-  await migrateLegacyPermissions();
-  await backfillMissingPageKeys();
+  await normalizeAllRolePermissions();
 }
 
 // GET /roles — list all roles
 router.get('/', async (_req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM roles ORDER BY created_at ASC');
-    res.json({ data: rows, error: null });
+    const { data, error } = await client().from('roles').select('*').order('created_at', { ascending: true });
+    if (error) throw error;
+    res.json({ data, error: null });
   } catch (err: any) {
     res.status(500).json({ data: null, error: err.message });
   }
@@ -155,9 +140,10 @@ router.get('/', async (_req, res) => {
 // GET /roles/:id — get single role with permissions
 router.get('/:id', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM roles WHERE id = $1', [req.params.id]);
-    if (!rows[0]) return res.status(404).json({ data: null, error: 'Role not found' });
-    res.json({ data: rows[0], error: null });
+    const { data, error } = await client().from('roles').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ data: null, error: 'Role not found' });
+    res.json({ data, error: null });
   } catch (err: any) {
     res.status(500).json({ data: null, error: err.message });
   }
@@ -173,13 +159,13 @@ router.post('/', authenticate, async (req: AuthRequest, res) => {
   const id = name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
 
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO roles (id, name, description, permissions, is_system)
-       VALUES ($1, $2, $3, $4, false)
-       RETURNING *`,
-      [id, name.trim(), description || null, JSON.stringify(permissions ?? {})]
-    );
-    res.status(201).json({ data: rows[0], error: null });
+    const { data, error } = await client()
+      .from('roles')
+      .insert({ id, name: name.trim(), description: description || null, permissions: permissions ?? {}, is_system: false })
+      .select()
+      .single();
+    if (error) throw error;
+    res.status(201).json({ data, error: null });
   } catch (err: any) {
     const isDuplicate = err.code === '23505';
     res.status(isDuplicate ? 409 : 500).json({
@@ -194,24 +180,25 @@ router.patch('/:id', authenticate, async (req: AuthRequest, res) => {
   const { name, description, permissions } = req.body;
 
   try {
-    const existing = await pool.query('SELECT * FROM roles WHERE id = $1', [req.params.id]);
-    if (!existing.rows[0]) {
+    const { data: existing, error: fetchErr } = await client().from('roles').select('*').eq('id', req.params.id).maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!existing) {
       return res.status(404).json({ data: null, error: 'Role not found' });
     }
 
-    const role = existing.rows[0];
+    const role = existing as RoleRow;
     const updatedName        = role.is_system ? role.name        : (name?.trim()   ?? role.name);
     const updatedDescription = description !== undefined           ? description     : role.description;
     const updatedPermissions = permissions !== undefined           ? permissions     : role.permissions;
 
-    const { rows } = await pool.query(
-      `UPDATE roles
-       SET name = $1, description = $2, permissions = $3, updated_at = NOW()
-       WHERE id = $4
-       RETURNING *`,
-      [updatedName, updatedDescription, JSON.stringify(updatedPermissions), req.params.id]
-    );
-    res.json({ data: rows[0], error: null });
+    const { data, error } = await client()
+      .from('roles')
+      .update({ name: updatedName, description: updatedDescription, permissions: updatedPermissions, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ data, error: null });
   } catch (err: any) {
     res.status(500).json({ data: null, error: err.message });
   }
@@ -220,15 +207,17 @@ router.patch('/:id', authenticate, async (req: AuthRequest, res) => {
 // DELETE /roles/:id — delete a custom role (system roles are protected)
 router.delete('/:id', authenticate, async (req: AuthRequest, res) => {
   try {
-    const { rows } = await pool.query('SELECT is_system FROM roles WHERE id = $1', [req.params.id]);
-    if (!rows[0]) {
+    const { data: existing, error: fetchErr } = await client().from('roles').select('is_system').eq('id', req.params.id).maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!existing) {
       return res.status(404).json({ data: null, error: 'Role not found' });
     }
-    if (rows[0].is_system) {
+    if (existing.is_system) {
       return res.status(403).json({ data: null, error: 'System roles cannot be deleted' });
     }
 
-    await pool.query('DELETE FROM roles WHERE id = $1', [req.params.id]);
+    const { error } = await client().from('roles').delete().eq('id', req.params.id);
+    if (error) throw error;
     res.json({ data: { id: req.params.id }, error: null });
   } catch (err: any) {
     res.status(500).json({ data: null, error: err.message });
