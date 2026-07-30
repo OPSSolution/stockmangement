@@ -10,6 +10,7 @@
     "dev": "vite",
     "server": "tsx server/index.ts",
     "dev:server": "tsx watch server/index.ts",
+    "backup": "tsx server/scripts/backupDatabase.ts",
     "build": "vite build --mode production",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
