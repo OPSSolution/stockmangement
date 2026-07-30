@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCurrency } from '@/contexts/CurrencyContext';
+import { parseDeliveryItems } from '@/lib/deliveryItems';
 
 type PendingType = 'order' | 'delivery' | 'transfer' | 'return' | 'purchase' | 'request';
 
@@ -130,20 +131,22 @@ export default function PendingItems() {
         tasks.push((async () => {
           let q = supabase
             .from('deliveries')
-            .select('id, order_id, customer, city, total_items, status, created_at')
+            .select('id, from_warehouse, to_warehouse, warehouse, destination, transfer_id, items_detail, status, created_at')
             .not('status', 'in', `(${TERMINAL_STATUSES.delivery.join(',')})`)
             .order('created_at', { ascending: false })
             .limit(25);
           if (scopeList) q = q.or(`warehouse.in.(${scopeList}),destination.in.(${scopeList})`);
           const { data } = await q;
           (data || []).forEach((row: Record<string, unknown>) => {
-            const totalItems = Number(row.total_items || 0);
+            const totalItems = parseDeliveryItems(row).reduce((sum, item) => sum + (item.quantity || 0), 0);
             const status = (row.status as string) || 'prepare';
+            const from = (row.from_warehouse as string) || (row.warehouse as string) || '';
+            const to = (row.to_warehouse as string) || (row.destination as string) || '';
             results.push({
               id: `delivery-${row.id}`,
               type: 'delivery',
-              title: (row.customer as string) || (row.order_id as string) || `Delivery ${row.id}`,
-              subtitle: `${row.city ? row.city + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''}`,
+              title: from && to ? `${from} → ${to}` : (row.transfer_id as string) || `Delivery ${row.id}`,
+              subtitle: `${totalItems} item${totalItems !== 1 ? 's' : ''}`,
               status,
               statusLabel: getStatusLabel('delivery', status),
               createdAt: (row.created_at as string) || '',
