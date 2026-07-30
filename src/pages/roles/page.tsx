@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, MouseEvent } from 'react';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { useAuth, normalizePerm, type PagePermission } from '@/contexts/AuthContext';
 import { exportToCsv } from '@/lib/exportCsv';
@@ -113,6 +113,8 @@ export default function RolesPage() {
   const [form, setForm] = useState({ name: '', description: '', permissions: defaultPermissions() });
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
 
   const loadRoles = async () => {
     setLoading(true);
@@ -127,6 +129,24 @@ export default function RolesPage() {
     setEditRole(null);
     setForm({ name: '', description: '', permissions: defaultPermissions() });
     setModalOpen(true);
+  };
+
+  const handleToggleMenu = (roleId: string, event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 160;
+    const menuHeight = 88;
+    const left = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth));
+    const top = Math.max(8, Math.min(window.innerHeight - menuHeight - 8, rect.bottom + 8));
+
+    if (openMenuId === roleId) {
+      setOpenMenuId(null);
+      setMenuPosition(null);
+      return;
+    }
+
+    setOpenMenuId(roleId);
+    setMenuPosition({ left, top });
   };
 
   const openEdit = (role: Role) => {
@@ -282,26 +302,42 @@ export default function RolesPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex gap-1 flex-shrink-0">
-                    {showEdit && (
+                  {(showEdit || (showDelete && !role.is_system)) && (
+                    <div className="relative flex-shrink-0">
                       <button
-                        onClick={() => openEdit(role)}
+                        onClick={(event) => handleToggleMenu(role.id, event)}
                         className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors cursor-pointer"
-                        title="Edit"
+                        title="More actions"
                       >
-                        <i className="ri-edit-line text-sm"></i>
+                        <i className="ri-more-2-line text-sm"></i>
                       </button>
-                    )}
-                    {showDelete && !role.is_system && (
-                      <button
-                        onClick={() => setDeleteConfirm(role.id)}
-                        className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
-                        title="Delete"
-                      >
-                        <i className="ri-delete-bin-line text-sm"></i>
-                      </button>
-                    )}
-                  </div>
+                      {openMenuId === role.id && menuPosition && (
+                        <div
+                          className="fixed w-40 bg-white border border-gray-100 rounded-2xl shadow-md z-[60] py-1"
+                          style={{ left: menuPosition.left, top: menuPosition.top }}
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseLeave={() => { setOpenMenuId(null); setMenuPosition(null); }}
+                        >
+                          {showEdit && (
+                            <button
+                              onClick={() => { openEdit(role); setOpenMenuId(null); setMenuPosition(null); }}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
+                            >
+                              <i className="ri-edit-line text-gray-400"></i> Edit
+                            </button>
+                          )}
+                          {showDelete && !role.is_system && (
+                            <button
+                              onClick={() => { setDeleteConfirm(role.id); setOpenMenuId(null); setMenuPosition(null); }}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                            >
+                              <i className="ri-delete-bin-line text-red-400"></i> Delete
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {role.description && (
