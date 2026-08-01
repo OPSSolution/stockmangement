@@ -49,6 +49,8 @@ export default function VendorsPage() {
   const { canEdit, canDelete, warehouseScope } = useAuth();
   const showEdit = canEdit('vendors');
   const showDelete = canDelete('vendors');
+  // "New Vendor" is available to every role, regardless of the vendors.edit permission.
+  const canCreate = true;
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
@@ -293,7 +295,7 @@ export default function VendorsPage() {
                 >
                   <i className="ri-download-2-line"></i>Export
                 </button>
-                {showEdit && (
+                {canCreate && (
                   <button
                     onClick={openNew}
                     className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap"

@@ -192,8 +192,9 @@ function defaultValueForField(field: TemplateField): string | number | boolean {
 }
 
 export default function RequestsPage() {
-  const { profile, warehouseScope, canEdit, canDelete, canApprove } = useAuth();
-  const canSubmit = canEdit('requests');
+  const { profile, warehouseScope, canDelete, canApprove } = useAuth();
+  // "New Request" is available to every role, regardless of the requests.edit permission.
+  const canSubmit = true;
   const canHardDelete = canDelete('requests');
   const canApproveRequests = canApprove('requests');
   const requesterIdentity = profile?.full_name || profile?.email;
