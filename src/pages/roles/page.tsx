@@ -54,7 +54,7 @@ const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
     group: 'Management',
     pages: [
       { key: 'reports',      label: 'Reports',      icon: 'ri-bar-chart-2-line', actions: [] },
-      { key: 'teams',        label: 'Teams',        icon: 'ri-team-line',        actions: ['edit'] },
+      { key: 'teams',        label: 'Teams',        icon: 'ri-team-line',        actions: ['edit', 'delete'] },
       { key: 'requirements', label: 'Requirements', icon: 'ri-list-check-2',     actions: ['edit', 'delete'] },
       { key: 'roles',        label: 'Roles',        icon: 'ri-shield-user-line', actions: ['edit', 'delete'] },
     ],

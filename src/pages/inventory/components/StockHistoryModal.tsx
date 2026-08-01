@@ -26,6 +26,11 @@ const sourceIcon: Record<ReservationDetail['source'], string> = {
 // together these are the full on-hold lifecycle for this product.
 const isOnHoldEntry = (h: StockHistoryEntry) => h.note?.startsWith('On hold — ') || h.note?.startsWith('On hold resolved — ');
 
+// Both standalone Stock Receives and Purchase Order receiving log as the same
+// 'purchase' stock_history type — their notes are the only thing that tells
+// them apart ("Stock receive RCV-..." vs "Purchase order PO-... received").
+const isStockReceiveEntry = (h: StockHistoryEntry) => h.note?.startsWith('Stock receive ');
+
 export default function StockHistoryModal({ product, history, onClose, onResolveOnHold }: StockHistoryModalProps) {
   const productHistory = history.filter((h) => h.productId === product.id);
   const [filter, setFilter] = useState<HistoryFilter>('all');
@@ -176,7 +181,7 @@ export default function StockHistoryModal({ product, history, onClose, onResolve
             </div>
           ) : (
             filteredHistory.map((entry) => {
-              const cfg = typeConfig[entry.type] ?? typeConfig.adjustment;
+              const cfg = isStockReceiveEntry(entry) ? { ...typeConfig.purchase, label: 'Stock Receive' } : (typeConfig[entry.type] ?? typeConfig.adjustment);
               return (
                 <div key={entry.id} className="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors">
                   <div className={`w-8 h-8 rounded-lg ${cfg.bg} flex items-center justify-center shrink-0 mt-0.5`}>
