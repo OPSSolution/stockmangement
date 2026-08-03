@@ -15,6 +15,7 @@ import { notifyAdmins } from '@/lib/notifyAdmins';
 import { asArray } from '@/pages/warehouses/warehouseShared';
 import { expirySuffix, expiryTone, formatExpiry } from '@/lib/expiry';
 import { groupBinStock, lowestQuantityBin, binExpiry, binStockKey, type BinStockRow } from '@/lib/binStock';
+import TextCombobox from '@/components/feature/TextCombobox';
 
 interface CustomFieldAnswer {
   key: string;
@@ -64,6 +65,8 @@ interface StockRequest {
   reason: string | null;
   /** Checkbox-style reasons from the paper form (damaged / expired / other). */
   reason_tags: string[];
+  /** Freeform note, picked from previously-used remarks or typed fresh. */
+  remark: string | null;
   status: 'pending' | 'approved' | 'rejected' | 'fulfilled' | 'cancelled' | 'returned';
   fulfillment_type: 'transfer' | 'purchase' | null;
   fulfillment_ref_id: string | null;
@@ -181,6 +184,7 @@ const emptyForm = (warehouse: string) => ({
   priority: 'normal' as StockRequest['priority'],
   reason: '',
   reasonTags: [] as string[],
+  remark: '',
   needsReturn: false,
   items: [] as RequestItem[],
   templateId: null as string | null,
@@ -189,6 +193,29 @@ const emptyForm = (warehouse: string) => ({
 
 function defaultValueForField(field: TemplateField): string | number | boolean {
   return field.type === 'checkbox' ? false : '';
+}
+
+// Continues today's "Req: YYYYMMDDNNN" sequence (the format already in use) from
+// whatever the highest NNN seen today is — starts a fresh 001 once the date rolls
+// over. Only a starting suggestion: the Reference field stays freely editable.
+function nextRequestReference(existing: StockRequest[]): string {
+  const now = new Date();
+  const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  const pattern = new RegExp(`^Req:\\s*${datePart}(\\d+)$`);
+
+  let maxSeq = 0;
+  let seqWidth = 3;
+  for (const r of existing) {
+    const match = r.reference?.match(pattern);
+    if (!match) continue;
+    const seq = parseInt(match[1], 10);
+    if (seq > maxSeq) {
+      maxSeq = seq;
+      seqWidth = match[1].length;
+    }
+  }
+
+  return `Req: ${datePart}${String(maxSeq + 1).padStart(seqWidth, '0')}`;
 }
 
 export default function RequestsPage() {
@@ -207,6 +234,8 @@ export default function RequestsPage() {
   const [reserved, setReserved] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
+  const [remarkFilter, setRemarkFilter] = useState('');
+  const [remarkCatalog, setRemarkCatalog] = useState<string[]>([]);
 
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -267,6 +296,12 @@ export default function RequestsPage() {
   }, [warehouseScope]);
 
   useEffect(() => { loadRequests(); }, [loadRequests]);
+
+  useEffect(() => {
+    supabase.from('request_remarks').select('value').order('value', { ascending: true }).then(({ data }) => {
+      if (data) setRemarkCatalog(data.map((r) => r.value as string));
+    });
+  }, []);
 
   useEffect(() => {
     async function loadOptions() {
@@ -373,9 +408,25 @@ export default function RequestsPage() {
 
   const activeTemplates = templates.filter((t) => t.is_active);
 
+  // Backed by request_remarks (a standalone catalog, not derived from stock_requests)
+  // so a remark created via the combobox's "type new + Enter" flow stays selectable
+  // for every future request — including after closing and reopening the app —
+  // not just for as long as it lives in this page's in-memory state.
+  const remarkOptions = useMemo(
+    () => Array.from(new Set([
+      ...requests.map((r) => r.remark).filter((r): r is string => !!r?.trim()),
+      ...remarkCatalog,
+    ])).sort(),
+    [requests, remarkCatalog]
+  );
+  const addRemark = (v: string) => {
+    setRemarkCatalog((prev) => (prev.includes(v) ? prev : [...prev, v]));
+    supabase.from('request_remarks').upsert({ value: v }, { onConflict: 'value', ignoreDuplicates: true });
+  };
+
   const openNew = () => {
     setEditingReq(null);
-    setForm(emptyForm(warehouseScope?.[0] || warehouses[0] || ''));
+    setForm({ ...emptyForm(warehouseScope?.[0] || warehouses[0] || ''), reference: nextRequestReference(requests) });
     setSelectedProduct('');
     setSelectedQty(1);
     setSelectedPackageWeight('');
@@ -416,6 +467,7 @@ export default function RequestsPage() {
       priority: req.priority,
       reason: req.reason || '',
       reasonTags: Array.isArray(req.reason_tags) ? req.reason_tags : [],
+      remark: req.remark || '',
       needsReturn: req.needs_return || false,
       items: req.items,
       templateId: req.template_id,
@@ -509,6 +561,7 @@ export default function RequestsPage() {
       priority: form.priority,
       reason: form.reason.trim() || null,
       reason_tags: form.reasonTags,
+      remark: form.remark.trim() || null,
       needs_return: form.needsReturn,
       requested_by: form.requestedByName.trim(),
       template_id: activeTemplate?.id || null,
@@ -763,6 +816,7 @@ export default function RequestsPage() {
       { header: 'Date of Receive', value: () => req.date_of_receive || '' },
       { header: 'Reason', value: () => req.reason || '' },
       { header: 'Reason Tags', value: () => req.reason_tags.join('; ') },
+      { header: 'Remark', value: () => req.remark || '' },
       { header: 'Product', value: (i) => i.productName },
       { header: 'SKU', value: (i) => i.sku },
       { header: 'Quantity', value: (i) => i.quantity },
@@ -868,7 +922,9 @@ export default function RequestsPage() {
 
   const closeMenu = () => { setOpenMenuId(null); setMenuPosition(null); };
 
-  const filtered = requests.filter((r) => activeTab === 'all' || r.status === activeTab);
+  const filtered = requests.filter(
+    (r) => (activeTab === 'all' || r.status === activeTab) && (!remarkFilter || r.remark === remarkFilter)
+  );
 
   const stats = {
     total: requests.length,
@@ -932,6 +988,16 @@ export default function RequestsPage() {
               })}
             </div>
             <div className="flex items-center gap-2">
+              <select
+                value={remarkFilter}
+                onChange={(e) => setRemarkFilter(e.target.value)}
+                className="px-3 py-2 bg-white border border-gray-200 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-200"
+              >
+                <option value="">All Remarks</option>
+                {remarkOptions.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
               <button
                 onClick={() => exportToCsv('requests', filtered, [
                   { header: 'ID', value: (r) => r.id },
@@ -943,6 +1009,7 @@ export default function RequestsPage() {
                   { header: 'Total Items', value: (r) => r.total_items },
                   { header: 'Total Kg', value: (r) => r.total_kg },
                   { header: 'Reason', value: (r) => r.reason || '' },
+                  { header: 'Remark', value: (r) => r.remark || '' },
                   { header: 'Reference', value: (r) => r.reference || '' },
                   { header: 'Approved By', value: (r) => r.approved_by || '' },
                   { header: 'Created At', value: (r) => r.created_at },
@@ -1307,6 +1374,17 @@ export default function RequestsPage() {
                 />
               </div>
 
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-gray-700 mb-2">Remark</label>
+                <TextCombobox
+                  options={remarkOptions}
+                  value={form.remark}
+                  onChange={(v) => setForm((f) => ({ ...f, remark: v }))}
+                  onCreate={addRemark}
+                  placeholder="Select a previous remark or type a new one, then press Enter…"
+                />
+              </div>
+
               {activeTemplate && customFieldDefs.length > 0 && (
                 <div className="mb-4 border border-emerald-100 bg-emerald-50/30 rounded-lg p-4">
                   <p className="text-xs font-semibold text-emerald-700 mb-3 flex items-center gap-1.5">
@@ -1663,6 +1741,14 @@ export default function RequestsPage() {
                     <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Reference</p>
                     <p className="text-sm font-bold text-gray-800 mt-0.5 flex items-center gap-1.5">
                       <i className="ri-hashtag text-gray-400"></i>{viewingReq.reference}
+                    </p>
+                  </div>
+                )}
+                {viewingReq.remark && (
+                  <div className="rounded-xl bg-gray-50 px-4 py-3">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Remark</p>
+                    <p className="text-sm font-bold text-gray-800 mt-0.5 flex items-center gap-1.5">
+                      <i className="ri-chat-3-line text-gray-400"></i>{viewingReq.remark}
                     </p>
                   </div>
                 )}
