@@ -10,10 +10,12 @@ interface TransferDetailModalProps {
   transfer: StockTransfer;
   onClose: () => void;
   onStatusChange: (id: string, status: TransferStatus, documentFile?: File, toBinByProduct?: Record<string, string>) => void;
-  /** Only the sending warehouse (or an admin) may approve a transfer or mark it in transit. */
-  isSendingWarehouse: boolean;
-  /** Only the receiving warehouse (or an admin) may confirm a transfer as received. */
-  isReceivingWarehouse: boolean;
+  /** Only the sending warehouse with "Approve" permission (or an admin) may approve a transfer. */
+  canApproveStep: boolean;
+  /** Only the sending warehouse with "Ship" permission (or an admin) may mark a transfer in transit. */
+  canMarkInTransitStep: boolean;
+  /** Only the receiving warehouse with "Ship" permission (or an admin) may confirm a transfer as received. */
+  canConfirmReceivedStep: boolean;
   statusChanging: boolean;
 }
 
@@ -32,7 +34,7 @@ function getNextStatus(current: TransferStatus): TransferStatus | null {
   return stepOrder[idx + 1] as TransferStatus;
 }
 
-export default function TransferDetailModal({ transfer, onClose, onStatusChange, isSendingWarehouse, isReceivingWarehouse, statusChanging }: TransferDetailModalProps) {
+export default function TransferDetailModal({ transfer, onClose, onStatusChange, canApproveStep, canMarkInTransitStep, canConfirmReceivedStep, statusChanging }: TransferDetailModalProps) {
   const { formatAmount } = useCurrency();
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [toBinByProduct, setToBinByProduct] = useState<Record<string, string>>({});
@@ -279,7 +281,7 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
 
           {/* Action */}
           {!isCancelled && nextStatus && (() => {
-            const canAct = nextStatus === 'received' ? isReceivingWarehouse : isSendingWarehouse;
+            const canAct = nextStatus === 'approved' ? canApproveStep : nextStatus === 'in_transit' ? canMarkInTransitStep : canConfirmReceivedStep;
             return (
             <div className="bg-gray-50 rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -288,13 +290,13 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
                   <p className="text-xs text-gray-500 mt-0.5">
                     {nextStatus === 'approved' && (canAct
                       ? 'Approve this transfer request to allow dispatch.'
-                      : 'Only an admin can approve this transfer.')}
+                      : `Only staff assigned to ${transfer.fromWarehouse} with Approve permission (or an admin) can approve this transfer.`)}
                     {nextStatus === 'in_transit' && (canAct
                       ? 'Mark as In Transit once stock has left the source warehouse.'
-                      : 'Only an admin can mark this transfer in transit.')}
+                      : `Only staff assigned to ${transfer.fromWarehouse} with Ship permission (or an admin) can mark this transfer in transit.`)}
                     {nextStatus === 'received' && (canAct
                       ? 'Confirm received once stock arrives at destination.'
-                      : 'Only an admin can confirm receipt of this transfer.')}
+                      : `Only staff assigned to ${transfer.toWarehouse} with Ship permission (or an admin) can confirm receipt of this transfer.`)}
                   </p>
                 </div>
                 {canAct && !needsDocument && (
@@ -369,7 +371,10 @@ export default function TransferDetailModal({ transfer, onClose, onStatusChange,
             );
           })()}
 
-          {!isCancelled && transfer.status === 'requested' && (
+          {/* Cancelling a still-pending request is an approver-level call — same
+              permission that gates approving it in the first place — not something
+              every user who can merely view the transfer should be able to do. */}
+          {!isCancelled && transfer.status === 'requested' && canApproveStep && (
             <div className="flex justify-end">
               <button
                 onClick={() => onStatusChange(transfer.id, 'cancelled')}

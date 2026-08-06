@@ -4,7 +4,6 @@ import DashboardLayout from '@/components/feature/DashboardLayout';
 import ProductTable from './components/ProductTable';
 import ProductFormModal from './components/ProductFormModal';
 import ProductDetailModal from './components/ProductDetailModal';
-import StockAdjustModal from './components/StockAdjustModal';
 import StockHistoryModal from './components/StockHistoryModal';
 import StockActivityReportModal from './components/StockActivityReportModal';
 import DeleteConfirmModal from './components/DeleteConfirmModal';
@@ -12,18 +11,15 @@ import ResolveOnHoldModal from './components/ResolveOnHoldModal';
 import { Product, ProductStockRow, ProductWarehouseStock, ProductBinStock } from '@/mocks/inventory';
 import { StockHistoryEntry } from '@/mocks/stockHistory';
 import { supabase } from '@/lib/supabase';
-import { api } from '@/lib/api';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { getReservedQuantities, availableStock } from '@/lib/stockReservations';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit, diffFields } from '@/lib/auditLog';
-import { resolveOnHoldStock, adjustBinQuantity, type OnHoldResolution } from '@/lib/stockDeduction';
+import { resolveOnHoldStock, type OnHoldResolution } from '@/lib/stockDeduction';
 import { binStockKey } from '@/lib/binStock';
 import { formatDateTime } from '@/lib/formatDateTime';
 import { nowStamp } from '@/lib/timestamp';
-import { asArray } from '@/pages/warehouses/warehouseShared';
-import { nearestExpiry } from '@/lib/expiry';
 
 const CATEGORY_STORAGE_KEY = 'inventory_categories';
 
@@ -119,13 +115,11 @@ export default function InventoryPage() {
   const [filterVendor, setFilterVendor] = useState('all');
   const [categories, setCategories] = useState<string[]>(['Electronics', 'Furniture', 'Accessories', 'Lighting', 'Smart Home']);
   const [warehouses, setWarehouses] = useState<string[]>([]);
-  const [warehouseBinsByName, setWarehouseBinsByName] = useState<Record<string, string[]>>({});
   const [scopedVendorNames, setScopedVendorNames] = useState<string[]>([]);
   const [allVendorNames, setAllVendorNames] = useState<string[]>([]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editProduct, setEditProduct] = useState<ProductStockRow | null>(null);
-  const [adjustProduct, setAdjustProduct] = useState<ProductStockRow | null>(null);
   const [historyProduct, setHistoryProduct] = useState<ProductStockRow | null>(null);
   const [detailProduct, setDetailProduct] = useState<ProductStockRow | null>(null);
   const [resolveOnHoldProduct, setResolveOnHoldProduct] = useState<ProductStockRow | null>(null);
@@ -163,12 +157,11 @@ export default function InventoryPage() {
     };
 
     const loadWarehouses = async () => {
-      let query = supabase.from('warehouses').select('name, vendor_names, bin_locations').order('name', { ascending: true });
+      let query = supabase.from('warehouses').select('name, vendor_names').order('name', { ascending: true });
       if (warehouseScope) query = query.in('name', warehouseScope);
       const { data } = await query;
       if (data) {
         setWarehouses(data.map((w) => w.name as string));
-        setWarehouseBinsByName(Object.fromEntries(data.map((w) => [w.name as string, asArray<string>(w.bin_locations)])));
         if (warehouseScope) {
           const merged = new Set<string>();
           data.forEach((w) => ((w.vendor_names as string[]) || []).forEach((v) => merged.add(v)));
@@ -211,20 +204,6 @@ export default function InventoryPage() {
       setSearchParams(searchParams, { replace: true });
     }
   }, [searchParams, setSearchParams]);
-
-  // Auto-open stock adjust modal when navigated with ?restock=ID — picks the first
-  // warehouse-stock row for that product id if it has more than one.
-  useEffect(() => {
-    const restockId = searchParams.get('restock');
-    if (restockId && products.length > 0) {
-      const target = products.find((p) => p.id === restockId);
-      if (target && canAdjustStock) {
-        setAdjustProduct(target);
-      }
-      searchParams.delete('restock');
-      setSearchParams(searchParams, { replace: true });
-    }
-  }, [products, searchParams, setSearchParams, canAdjustStock]);
 
   const fetchProducts = async () => {
     setLoading(true);
@@ -556,115 +535,6 @@ export default function InventoryPage() {
     setShowAddModal(false);
   };
 
-  const handleAdjust = async (productId: string, delta: number, type: string, note: string, expiryDate?: string, binLocation?: string) => {
-    const target = adjustProduct && adjustProduct.id === productId ? adjustProduct : products.find((p) => p.id === productId);
-    if (!target) return;
-
-    const newStock = Math.max(0, target.stock + delta);
-    const now = nowStamp();
-    // stock_history.created_at is timestamptz — it needs a real UTC instant, not
-    // nowStamp()'s naive local-clock string (Postgres would otherwise reinterpret
-    // that string in the DB's own timezone, silently shifting it onto the wrong
-    // calendar day for anyone not in UTC+0 and breaking the movement report's date filter).
-    const nowIso = new Date().toISOString();
-
-    // Bins carry their own expiry now — project what this adjustment does to this
-    // warehouse's bin rows so the per-warehouse date (used by badges/low-stock lists
-    // elsewhere) can be recomputed as the nearest expiry across all of them.
-    const currentBinsForRow = binStock.filter((r) => r.productId === productId && r.warehouse === target.warehouse);
-    let projectedBins = currentBinsForRow;
-    if (binLocation) {
-      const existing = currentBinsForRow.find((r) => r.binLocation === binLocation);
-      if (existing) {
-        projectedBins = currentBinsForRow.map((r) =>
-          r === existing ? { ...r, quantity: Math.max(0, r.quantity + delta), expiryDate: delta > 0 && expiryDate ? expiryDate : r.expiryDate } : r
-        );
-      } else if (delta > 0) {
-        projectedBins = [...currentBinsForRow, { id: `PBS-${productId}-${Date.now()}`, productId, warehouse: target.warehouse, binLocation, quantity: delta, expiryDate: expiryDate || undefined }];
-      }
-    }
-    const newExpiryDate = projectedBins.length > 0
-      ? nearestExpiry(projectedBins.map((r) => r.expiryDate))
-      : (delta > 0 && expiryDate ? expiryDate : target.expiryDate);
-
-    const stockUpdate: Record<string, unknown> = {
-      stock: newStock,
-      status: deriveStatus(newStock, target.lowStockThreshold),
-      last_updated: now,
-    };
-    if (projectedBins.length > 0) {
-      stockUpdate.expiry_date = newExpiryDate || null;
-    } else if (delta > 0 && expiryDate) {
-      stockUpdate.expiry_date = expiryDate;
-    }
-
-    const { error: updateError } = await supabase.from('product_warehouse_stock').update(stockUpdate).eq('id', target.stockRowId);
-
-    if (updateError) {
-      console.error(updateError);
-      showToast('Failed to adjust stock.', 'error');
-      setAdjustProduct(null);
-      return;
-    }
-
-    const newStatus = deriveStatus(newStock, target.lowStockThreshold);
-    const historyId = `SH-${Date.now()}`;
-    const { error: historyError } = await supabase.from('stock_history').insert({
-      id: historyId,
-      product_id: productId,
-      type,
-      quantity: delta,
-      stock_before: target.stock,
-      stock_after: newStock,
-      reference: 'ADJ-MANUAL',
-      note: note || 'Manual stock adjustment',
-      warehouse: target.warehouse,
-      user_name: 'Admin',
-      created_at: nowIso,
-      expiry_date: delta > 0 ? expiryDate || null : null,
-      bin_location: binLocation || null,
-    });
-
-    if (historyError) console.error(historyError);
-
-    await adjustBinQuantity(productId, target.warehouse, binLocation, delta, delta > 0 ? expiryDate : undefined);
-    if (binLocation) {
-      setBinStock((prev) => [...prev.filter((r) => !(r.productId === productId && r.warehouse === target.warehouse)), ...projectedBins]);
-    }
-
-    setProducts((prev) => prev.map((p) => (p.stockRowId === target.stockRowId ? { ...p, stock: newStock, status: newStatus, lastUpdated: now, expiryDate: newExpiryDate } : p)));
-    setHistory((prev) => [
-      { id: historyId, productId, type: type as StockHistoryEntry['type'], quantity: delta, stockBefore: target.stock, stockAfter: newStock, reference: 'ADJ-MANUAL', note: note || 'Manual stock adjustment', warehouse: target.warehouse, user: 'Admin', timestamp: nowIso, expiryDate: delta > 0 ? expiryDate : undefined, binLocation },
-      ...prev,
-    ]);
-    setAdjustProduct(null);
-    logAudit({
-      action: 'update',
-      module: 'inventory',
-      description: `Adjusted stock for "${target.name}" (${delta > 0 ? '+' : ''}${delta})`,
-      referenceId: productId,
-      changes: [{ field: 'Stock', from: target.stock, to: newStock }],
-    });
-
-    // Real-time low-stock alert pipeline trigger
-    if (newStock <= target.lowStockThreshold) {
-      showToast(`Stock adjusted. Checking alert rules...`);
-      try {
-        const { data: evalData } = await api.functions.invoke('alert-rules-evaluator', { body: {} });
-        if (evalData && evalData.total_created > 0) {
-          showToast(`Low stock alert created! ${evalData.total_created} notification(s) generated.`);
-        } else {
-          showToast('Stock is low — no new alert rules matched (already notified within last hour).');
-        }
-      } catch (evalErr) {
-        console.error('Alert evaluator call failed:', evalErr);
-        showToast('Stock adjusted, but alert check failed.', 'error');
-      }
-    } else {
-      showToast('Stock adjusted successfully.');
-    }
-  };
-
   const handleResolveOnHold = async (quantity: number, resolution: OnHoldResolution, note: string) => {
     if (!resolveOnHoldProduct) return;
     const target = resolveOnHoldProduct;
@@ -951,7 +821,6 @@ export default function InventoryPage() {
               onJumpToWarehouse={handleJumpToWarehouse}
               onEdit={(p) => setEditProduct(p)}
               onDelete={(p) => setDeleteProduct(p)}
-              onAdjust={(p) => setAdjustProduct(p)}
               onViewHistory={(p) => setHistoryProduct(p)}
               onViewDetails={(p) => setDetailProduct(p)}
             />
@@ -990,7 +859,6 @@ export default function InventoryPage() {
           siblings={(siblingsByProductId[detailProduct.id] ?? []).filter((s) => s.id !== detailProduct.stockRowId)}
           onClose={() => setDetailProduct(null)}
           onEdit={(p) => { setDetailProduct(null); setEditProduct(p); }}
-          onAdjust={(p) => { setDetailProduct(null); setAdjustProduct(p); }}
           onViewHistory={(p) => { setDetailProduct(null); setHistoryProduct(p); }}
           onJumpToWarehouse={(w) => { setDetailProduct(null); handleJumpToWarehouse(w); }}
         />
@@ -1002,16 +870,6 @@ export default function InventoryPage() {
           existingBinRows={editProduct ? (binStockByProduct[binStockKey(editProduct.id, editProduct.warehouse)] ?? []) : []}
           onClose={() => { setShowAddModal(false); setEditProduct(null); }}
           onSave={handleSaveProduct}
-        />
-      )}
-      {adjustProduct && (
-        <StockAdjustModal
-          product={adjustProduct}
-          history={history}
-          binRows={binStockByProduct[binStockKey(adjustProduct.id, adjustProduct.warehouse)] ?? []}
-          warehouseBinLocations={warehouseBinsByName[adjustProduct.warehouse] ?? []}
-          onClose={() => setAdjustProduct(null)}
-          onAdjust={handleAdjust}
         />
       )}
       {historyProduct && (

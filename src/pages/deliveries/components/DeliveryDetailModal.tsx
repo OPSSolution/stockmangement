@@ -30,7 +30,7 @@ const timelineIcons: Record<DeliveryStep, string> = {
 };
 
 export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: DeliveryDetailModalProps) {
-  const { profile, isFullAccess } = useAuth();
+  const { profile, isFullAccess, canShip } = useAuth();
   const [note, setNote] = useState('');
   const [photo, setPhoto] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -44,9 +44,11 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
 
   // Confirming delivery is the receiving warehouse's call; earlier steps (pack,
   // dispatch) belong to the sending warehouse. Admins can always do either.
+  // Also gated on the role's "ship" permission for Deliveries, so an admin
+  // can decide per-role whether a role may advance/confirm shipments at all.
   const requiredWarehouse = nextStep === 'delivered' ? delivery.toWarehouse : delivery.fromWarehouse;
   const isReceivingStep = nextStep === 'delivered';
-  const canAdvance = isFullAccess || !!profile?.warehouses.includes(requiredWarehouse);
+  const canAdvance = canShip('deliveries') && (isFullAccess || !!profile?.warehouses.includes(requiredWarehouse));
 
   // Bin options come from the destination warehouse's registry PLUS any bin
   // already used by a matching product (by SKU) sitting in that warehouse —
@@ -259,7 +261,7 @@ export default function DeliveryDetailModal({ delivery, onClose, onAdvance }: De
               {!canAdvance ? (
                 <div className="flex items-start gap-2 text-xs text-gray-500 bg-white rounded-lg border border-gray-200 px-3 py-2.5">
                   <i className="ri-lock-line text-gray-400 mt-0.5"></i>
-                  <span>Only staff assigned to <strong>{requiredWarehouse}</strong> (or an admin) can {nextLabel?.toLowerCase()}.</span>
+                  <span>Only staff assigned to <strong>{requiredWarehouse}</strong> with Ship permission (or an admin) can {nextLabel?.toLowerCase()}.</span>
                 </div>
               ) : !confirming ? (
                 <button

@@ -17,8 +17,10 @@ interface Props {
   onClose: () => void;
   onStatusChange: (id: string, status: PurchaseStatus, extra?: StatusChangeExtra) => void;
   uploading?: boolean;
-  /** Only an admin may approve/reject or move a PO through its ordered/received workflow. */
+  /** Only an admin (or a role granted "approve") may approve/reject or mark a PO as ordered. */
   canDecide: boolean;
+  /** Only an admin (or a role granted "ship") may confirm receipt — the step that adds stock. */
+  canConfirmReceipt: boolean;
   /** The submitter may withdraw their own still-pending purchase, even without canDecide. */
   canCancel: boolean;
 }
@@ -29,7 +31,7 @@ const workflow: { from: PurchaseStatus; to: PurchaseStatus; label: string; icon:
   { from: 'ordered', to: 'received', label: 'Confirm Receipt', icon: 'ri-check-double-line', color: 'bg-emerald-500 hover:bg-emerald-600' },
 ];
 
-export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploading, canDecide, canCancel }: Props) {
+export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploading, canDecide, canConfirmReceipt, canCancel }: Props) {
   const { formatAmount } = useCurrency();
   const [receivedQty, setReceivedQty] = useState<Record<string, number>>(
     Object.fromEntries(po.items.map((i) => [i.productId, i.orderedQty]))
@@ -77,13 +79,14 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
   // Close immediately instead of waiting on the network round-trip — feedback
   // comes via the toast once the status change actually resolves.
   const handleAction = () => {
-    if (!canDecide || !action) return;
+    if (!action) return;
     if (isReceiving) {
-      if (!documentFile) return;
+      if (!canConfirmReceipt || !documentFile) return;
       onStatusChange(po.id, action.to, { receivedQty, receivedBin, documentFile });
       onClose();
       return;
     }
+    if (!canDecide) return;
     onStatusChange(po.id, action.to);
     onClose();
   };
@@ -362,7 +365,7 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
                 <i className="ri-close-circle-line mr-1.5"></i>Reject
               </button>
             )}
-            {action && po.status !== 'cancelled' && po.status !== 'rejected' && canDecide && (
+            {action && po.status !== 'cancelled' && po.status !== 'rejected' && (isReceiving ? canConfirmReceipt : canDecide) && (
               <button
                 onClick={handleAction}
                 disabled={(isReceiving && !documentFile) || uploading}
@@ -372,8 +375,10 @@ export default function PurchaseDetailModal({ po, onClose, onStatusChange, uploa
                 <i className={`${uploading ? 'ri-loader-4-line animate-spin' : action.icon} mr-1.5`}></i>{uploading ? 'Uploading…' : action.label}
               </button>
             )}
-            {action && po.status !== 'cancelled' && po.status !== 'rejected' && !canDecide && (
-              <span className="text-xs text-gray-400 italic self-center">Only an admin can advance this order.</span>
+            {action && po.status !== 'cancelled' && po.status !== 'rejected' && !(isReceiving ? canConfirmReceipt : canDecide) && (
+              <span className="text-xs text-gray-400 italic self-center">
+                {isReceiving ? 'Only a role with "Ship" permission can confirm receipt.' : 'Only an admin can advance this order.'}
+              </span>
             )}
           </div>
         </div>

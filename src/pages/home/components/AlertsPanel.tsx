@@ -63,7 +63,7 @@ export default function AlertsPanel() {
   };
 
   const handleRestock = (productId: string) => {
-    navigate(`/inventory?restock=${productId}`);
+    navigate(`/stock-adjust?restock=${productId}`);
   };
 
   if (loading) {

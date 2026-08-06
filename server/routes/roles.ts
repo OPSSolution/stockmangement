@@ -4,7 +4,7 @@ import { supabaseAdmin } from '../lib/supabaseEnv';
 
 const router = Router();
 
-type PagePermission = { view: boolean; edit: boolean; delete: boolean; approve: boolean };
+type PagePermission = { view: boolean; edit: boolean; delete: boolean; approve: boolean; ship: boolean };
 type RoleRow = { id: string; name: string; description: string | null; permissions: Record<string, unknown>; is_system: boolean; is_full_access: boolean };
 
 const PAGE_KEYS = [
@@ -18,12 +18,12 @@ const PAGE_KEYS = [
 // applying the given edit/delete defaults to every page it can view.
 function buildPermissions(
   viewablePages: readonly string[],
-  { edit = false, del = false, approve = false }: { edit?: boolean; del?: boolean; approve?: boolean } = {}
+  { edit = false, del = false, approve = false, ship = false }: { edit?: boolean; del?: boolean; approve?: boolean; ship?: boolean } = {}
 ): Record<string, PagePermission> {
   const perms: Record<string, PagePermission> = {};
   for (const key of PAGE_KEYS) {
     const view = viewablePages.includes(key);
-    perms[key] = { view, edit: view && edit, delete: view && del, approve: view && approve };
+    perms[key] = { view, edit: view && edit, delete: view && del, approve: view && approve, ship: view && ship };
   }
   return perms;
 }
@@ -33,7 +33,7 @@ const DEFAULT_ROLES = [
     id: 'admin',
     name: 'Admin',
     description: 'Full access to all pages',
-    permissions: buildPermissions(PAGE_KEYS, { edit: true, del: true, approve: true }),
+    permissions: buildPermissions(PAGE_KEYS, { edit: true, del: true, approve: true, ship: true }),
     is_system: true,
     is_full_access: true,
   },
@@ -45,9 +45,10 @@ const DEFAULT_ROLES = [
       ['dashboard', 'inventory', 'requests', 'orders', 'deliveries', 'warehouses', 'transfers',
        'returns', 'purchases', 'promotions', 'vendors', 'reports',
        'notifications_history', 'notifications_settings'],
-      // approve is off by default for staff — an admin opts individual roles into
-      // approving requests from the Roles editor, it isn't granted automatically.
-      { edit: true, del: false, approve: false }
+      // approve/ship are off by default for staff — an admin opts individual roles
+      // into approving decisions or confirming shipments from the Roles editor,
+      // neither is granted automatically.
+      { edit: true, del: false, approve: false, ship: false }
     ),
     is_system: true,
     is_full_access: false,
@@ -93,11 +94,12 @@ async function normalizeAllRolePermissions() {
           edit: value && row.id !== 'viewer',
           delete: value && row.id === 'admin',
           approve: value && row.id === 'admin',
+          ship: value && row.id === 'admin',
         };
       } else if (value && typeof value === 'object') {
         const v = value as Partial<PagePermission>;
-        if (v.approve === undefined) changed = true;
-        upgraded[key] = { view: !!v.view, edit: !!v.edit, delete: !!v.delete, approve: !!v.approve };
+        if (v.approve === undefined || v.ship === undefined) changed = true;
+        upgraded[key] = { view: !!v.view, edit: !!v.edit, delete: !!v.delete, approve: !!v.approve, ship: !!v.ship };
       }
     }
 
@@ -106,7 +108,7 @@ async function normalizeAllRolePermissions() {
       changed = true;
       const knownDefaults = defaultsById.get(row.id);
       for (const key of missing) {
-        upgraded[key] = knownDefaults?.[key] ?? { view: false, edit: false, delete: false, approve: false };
+        upgraded[key] = knownDefaults?.[key] ?? { view: false, edit: false, delete: false, approve: false, ship: false };
       }
     }
 

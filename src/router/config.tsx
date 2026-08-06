@@ -6,6 +6,7 @@ import LoginPage from "../pages/login/page";
 import SignupPage from "../pages/signup/page";
 import Home from "../pages/home/page";
 import InventoryPage from "../pages/inventory/page";
+import StockAdjustPage from "../pages/stock-adjust/page";
 import RequestsPage from "../pages/requests/page";
 import OrdersPage from "../pages/orders/page";
 import PublicOrderFormPage from "../pages/order-form/page";
@@ -50,6 +51,10 @@ const routes: RouteObject[] = [
   {
     path: "/inventory",
     element: <ProtectedRoute permKey="inventory"><InventoryPage /></ProtectedRoute>,
+  },
+  {
+    path: "/stock-adjust",
+    element: <ProtectedRoute permKey="inventory_stock_adjust"><StockAdjustPage /></ProtectedRoute>,
   },
   {
     path: "/requests",

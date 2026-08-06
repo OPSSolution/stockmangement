@@ -19,6 +19,7 @@ type FilterStatus = 'all' | OrderStatus;
 function mapOrder(row: Record<string, unknown>): Order {
   return {
     id: (row.id as string) || '',
+    orderType: ((row.order_type as Order['orderType']) || 'regular'),
     requestedBy: ((row.requestedBy as string | undefined) ?? (row.requested_by as string | undefined)) || undefined,
     customer: (row.customer as string) || '',
     email: (row.email as string) || '',
@@ -45,19 +46,21 @@ function mapOrder(row: Record<string, unknown>): Order {
 
 export default function OrdersPage() {
   const { formatAmount } = useCurrency();
-  const { canEdit, canDelete } = useAuth();
+  const { canEdit, canDelete, profile } = useAuth();
   const showEdit = canEdit('orders');
   const showDelete = canDelete('orders');
+  const requesterName = profile?.full_name || profile?.email || '';
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<ProductStockRow[]>([]);
   const [reserved, setReserved] = useState<Record<string, number>>({});
   const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [search, setSearch] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createMode, setCreateMode] = useState<'regular' | 'quick' | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -181,7 +184,7 @@ export default function OrdersPage() {
   const handleCreateOrder = async (draft: OrderCreateDraft) => {
     // Close right away instead of waiting on the network round-trip — feedback
     // comes via the toast once the request actually resolves.
-    setShowCreateModal(false);
+    setCreateMode(null);
     try {
       const payload = buildOrderInsert(draft, products);
       const { error } = await supabase.from('orders').insert(payload);
@@ -354,6 +357,7 @@ export default function OrdersPage() {
                         onClick={() => {
                           exportToCsv('orders', filtered, [
                             { header: 'ID', value: (o) => o.id },
+                            { header: 'Type', value: (o) => o.orderType === 'quick' ? 'Quick' : 'Regular' },
                             { header: 'Requested By', value: (o) => o.requestedBy || '' },
                             { header: 'Customer', value: (o) => o.customer },
                             { header: 'Email', value: (o) => o.email },
@@ -382,12 +386,49 @@ export default function OrdersPage() {
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => { getReservedQuantities().then(setReserved); setShowCreateModal(true); }}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
-                >
-                  <i className="ri-add-line"></i> Create Order
-                </button>
+                <div className="relative">
+                  <button
+                    onClick={() => setShowCreateMenu((v) => !v)}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-add-line"></i> Create Order
+                  </button>
+                  {showCreateMenu && (
+                    <div
+                      onMouseLeave={() => setShowCreateMenu(false)}
+                      className="absolute right-0 top-full mt-2 w-56 bg-white border border-gray-100 rounded-xl shadow-lg z-20 py-1"
+                    >
+                      <button
+                        onClick={() => {
+                          getReservedQuantities().then(setReserved);
+                          setCreateMode('quick');
+                          setShowCreateMenu(false);
+                        }}
+                        className="w-full flex items-start gap-2.5 px-3 py-2.5 text-left hover:bg-gray-50 cursor-pointer"
+                      >
+                        <i className="ri-flashlight-line text-amber-500 mt-0.5"></i>
+                        <span>
+                          <span className="block text-sm font-medium text-gray-800">Quick Order</span>
+                          <span className="block text-xs text-gray-400">Products + a note. No customer details.</span>
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          getReservedQuantities().then(setReserved);
+                          setCreateMode('regular');
+                          setShowCreateMenu(false);
+                        }}
+                        className="w-full flex items-start gap-2.5 px-3 py-2.5 text-left hover:bg-gray-50 cursor-pointer"
+                      >
+                        <i className="ri-file-list-3-line text-emerald-600 mt-0.5"></i>
+                        <span>
+                          <span className="block text-sm font-medium text-gray-800">Regular Order</span>
+                          <span className="block text-xs text-gray-400">Full customer & delivery details.</span>
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -397,6 +438,7 @@ export default function OrdersPage() {
                 <thead>
                   <tr className="border-b border-gray-100">
                     <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Order ID</th>
+                    <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Type</th>
                     <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Customer / Requester</th>
                     <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Vendors</th>
                     <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Items</th>
@@ -415,10 +457,21 @@ export default function OrdersPage() {
                           <span className="font-mono text-xs font-semibold text-gray-800">{order.id}</span>
                         </td>
                         <td className="py-3 px-4">
+                          {order.orderType === 'quick' ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
+                              <i className="ri-flashlight-line"></i>Quick
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                              Regular
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
                           <div>
                             <p className="font-medium text-gray-800">{order.customer}</p>
-                            <p className="text-xs text-gray-400">{order.city}</p>
-                            {order.requestedBy && <p className="text-xs text-emerald-600 mt-0.5">By {order.requestedBy}</p>}
+                            {order.city && <p className="text-xs text-gray-400">{order.city}</p>}
+                            {order.requestedBy && order.requestedBy !== order.customer && <p className="text-xs text-emerald-600 mt-0.5">By {order.requestedBy}</p>}
                           </div>
                         </td>
                         <td className="py-3 px-4">
@@ -535,17 +588,20 @@ export default function OrdersPage() {
           products={products}
           reserved={reserved}
           initialDraft={mapOrderToDraft(editingOrder)}
-          title="Edit Order"
+          mode={editingOrder.orderType === 'quick' ? 'quick' : 'regular'}
+          title={editingOrder.orderType === 'quick' ? 'Edit Quick Order' : 'Edit Order'}
           submitLabel="Save Changes"
           onClose={() => setEditingOrder(null)}
           onSave={handleEditOrder}
         />
       )}
-      {showCreateModal && (
+      {createMode && (
         <OrderFormModal
           products={products}
           reserved={reserved}
-          onClose={() => setShowCreateModal(false)}
+          mode={createMode}
+          requesterName={requesterName}
+          onClose={() => setCreateMode(null)}
           onSave={handleCreateOrder}
         />
       )}

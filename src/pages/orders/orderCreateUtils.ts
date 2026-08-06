@@ -22,6 +22,8 @@ export interface OrderCreateDraft {
   city: string;
   notes: string;
   lines: OrderLineDraft[];
+  /** 'quick' = products + note only, no customer contact details required. */
+  orderType: 'regular' | 'quick';
 }
 
 /** Maps one row of a `product_warehouse_stock` (joined to its `products` master) query
@@ -93,6 +95,7 @@ export function buildOrderInsert(draft: OrderCreateDraft, products: ProductStock
 
   return {
     id: `ORD-${Date.now()}`,
+    order_type: draft.orderType,
     requested_by: draft.requestedBy.trim(),
     customer: draft.customer.trim(),
     email: draft.email.trim(),
@@ -123,6 +126,7 @@ export function mapOrderToDraft(order: Order): OrderCreateDraft {
     city: order.city,
     notes: order.notes ?? '',
     lines,
+    orderType: order.orderType ?? 'regular',
   };
 }
 

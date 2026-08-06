@@ -25,13 +25,15 @@ export interface PagePermission {
   delete: boolean;
   /** Can approve/reject pending requests — only meaningful on pages that support it (e.g. Requests). */
   approve: boolean;
+  /** Can confirm shipment/receipt/delivery — the step that actually moves stock, separate from the approve/reject decision. */
+  ship: boolean;
 }
 
 export type Permissions = Record<string, boolean | Partial<PagePermission>>;
 
 export const normalizePerm = (value: boolean | Partial<PagePermission> | undefined): PagePermission => {
-  if (typeof value === 'boolean') return { view: value, edit: value, delete: value, approve: value };
-  return { view: value?.view ?? false, edit: value?.edit ?? false, delete: value?.delete ?? false, approve: value?.approve ?? false };
+  if (typeof value === 'boolean') return { view: value, edit: value, delete: value, approve: value, ship: value };
+  return { view: value?.view ?? false, edit: value?.edit ?? false, delete: value?.delete ?? false, approve: value?.approve ?? false, ship: value?.ship ?? false };
 };
 
 interface AuthContextType {
@@ -48,6 +50,7 @@ interface AuthContextType {
   canEdit: (key: string) => boolean;
   canDelete: (key: string) => boolean;
   canApprove: (key: string) => boolean;
+  canShip: (key: string) => boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string, role?: UserRole, phone?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
@@ -221,6 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const canEdit = (key: string) => permissions === null || normalizePerm(permissions[key]).edit;
   const canDelete = (key: string) => permissions === null || normalizePerm(permissions[key]).delete;
   const canApprove = (key: string) => permissions === null || normalizePerm(permissions[key]).approve;
+  const canShip = (key: string) => permissions === null || normalizePerm(permissions[key]).ship;
   // Non-full-access users assigned to one or more warehouses only see data
   // tied to those warehouses; a full-access role always sees everything
   // regardless of its own warehouse assignment.
@@ -228,7 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, session, profile, permissions, loading, isFullAccess, canAccess, canEdit, canDelete, canApprove, warehouseScope, signIn, signUp, signOut, refreshProfile }}
+      value={{ user, session, profile, permissions, loading, isFullAccess, canAccess, canEdit, canDelete, canApprove, canShip, warehouseScope, signIn, signUp, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>

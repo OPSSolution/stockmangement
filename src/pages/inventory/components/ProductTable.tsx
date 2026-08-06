@@ -20,7 +20,6 @@ interface ProductTableProps {
   onJumpToWarehouse: (warehouse: string) => void;
   onEdit: (product: ProductStockRow) => void;
   onDelete: (product: ProductStockRow) => void;
-  onAdjust: (product: ProductStockRow) => void;
   onViewHistory: (product: ProductStockRow) => void;
   onViewDetails: (product: ProductStockRow) => void;
 }
@@ -39,14 +38,13 @@ const statusConfig = {
   out_of_stock: { label: 'Out of Stock', cls: 'bg-red-50 text-red-600' },
 };
 
-export default function ProductTable({ products, reserved, binStockByProduct, siblingsByProductId, onJumpToWarehouse, onEdit, onDelete, onAdjust, onViewHistory, onViewDetails }: ProductTableProps) {
+export default function ProductTable({ products, reserved, binStockByProduct, siblingsByProductId, onJumpToWarehouse, onEdit, onDelete, onViewHistory, onViewDetails }: ProductTableProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [openSiblingMenu, setOpenSiblingMenu] = useState<string | null>(null);
   const { formatAmount } = useCurrency();
-  const { canEdit, canDelete, canAccess } = useAuth();
+  const { canEdit, canDelete } = useAuth();
   const showEdit = canEdit('inventory');
   const showDelete = canDelete('inventory');
-  const showAdjust = canAccess('inventory_stock_adjust');
 
   return (
     <div className="overflow-x-auto">
@@ -192,15 +190,6 @@ export default function ProductTable({ products, reserved, binStockByProduct, si
                 <td className="py-3 px-4 text-xs text-gray-400 whitespace-nowrap">{formatDateTime(p.lastUpdated)}</td>
                 <td className="py-3 px-4 relative">
                   <div className="flex items-center gap-1">
-                    {showAdjust && (
-                      <button
-                        onClick={() => onAdjust(p)}
-                        className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-emerald-50 text-gray-400 hover:text-emerald-600 transition-colors cursor-pointer"
-                        title="Adjust Stock"
-                      >
-                        <i className="ri-equalizer-line text-sm"></i>
-                      </button>
-                    )}
                     <button
                       onClick={() => onViewHistory(p)}
                       className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-sky-50 text-gray-400 hover:text-sky-600 transition-colors cursor-pointer"

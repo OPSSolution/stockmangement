@@ -16,7 +16,6 @@ interface ProductDetailModalProps {
   siblings: { id: string; warehouse: string; stock: number }[];
   onClose: () => void;
   onEdit: (product: ProductStockRow) => void;
-  onAdjust: (product: ProductStockRow) => void;
   onViewHistory: (product: ProductStockRow) => void;
   /** Jump the inventory table to a given warehouse — closes this modal first. */
   onJumpToWarehouse: (warehouse: string) => void;
@@ -28,12 +27,11 @@ const statusConfig = {
   out_of_stock: { label: 'Out of Stock', cls: 'bg-red-50 text-red-600' },
 };
 
-export default function ProductDetailModal({ product, reserved, binRows, siblings, onClose, onEdit, onAdjust, onViewHistory, onJumpToWarehouse }: ProductDetailModalProps) {
+export default function ProductDetailModal({ product, reserved, binRows, siblings, onClose, onEdit, onViewHistory, onJumpToWarehouse }: ProductDetailModalProps) {
   const [showSiblings, setShowSiblings] = useState(false);
   const { formatAmount } = useCurrency();
-  const { canEdit, canAccess } = useAuth();
+  const { canEdit } = useAuth();
   const showEdit = canEdit('inventory');
-  const showAdjust = canAccess('inventory_stock_adjust');
 
   const reservedQty = reserved[product.id] || 0;
   const onHoldQty = product.onHoldStock || 0;
@@ -196,11 +194,6 @@ export default function ProductDetailModal({ product, reserved, binRows, sibling
           <button onClick={() => onViewHistory(product)} className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium text-sky-700 bg-sky-50 rounded-lg hover:bg-sky-100 transition-colors cursor-pointer whitespace-nowrap">
             <i className="ri-history-line"></i> History
           </button>
-          {showAdjust && (
-            <button onClick={() => onAdjust(product)} className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer whitespace-nowrap">
-              <i className="ri-equalizer-line"></i> Adjust
-            </button>
-          )}
           {showEdit && (
             <button onClick={() => onEdit(product)} className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors cursor-pointer whitespace-nowrap">
               <i className="ri-edit-line"></i> Edit

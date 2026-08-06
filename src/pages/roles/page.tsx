@@ -20,7 +20,7 @@ async function rolesApi(path: string, method = 'GET', body?: unknown) {
   return res.json();
 }
 
-type PageAction = 'edit' | 'delete' | 'approve';
+type PageAction = 'edit' | 'delete' | 'approve' | 'ship';
 
 interface PageDef {
   key: string;
@@ -38,13 +38,13 @@ const PAGE_GROUPS: { group: string; pages: PageDef[] }[] = [
       { key: 'inventory',  label: 'Inventory',  icon: 'ri-archive-stack-line',   actions: ['edit', 'delete'] },
       { key: 'inventory_stock_adjust', label: 'Stock Adjust', icon: 'ri-equalizer-line', actions: [] },
       { key: 'categories', label: 'Categories', icon: 'ri-price-tag-2-line',     actions: ['edit', 'delete'] },
-      { key: 'requests',   label: 'Requests',   icon: 'ri-file-list-3-line',     actions: ['edit', 'delete', 'approve'] },
-      { key: 'orders',     label: 'Orders',     icon: 'ri-shopping-bag-3-line',  actions: ['edit', 'delete', 'approve'] },
-      { key: 'deliveries', label: 'Deliveries', icon: 'ri-truck-line',           actions: ['edit', 'delete'] },
+      { key: 'requests',   label: 'Requests',   icon: 'ri-file-list-3-line',     actions: ['edit', 'delete', 'approve', 'ship'] },
+      { key: 'orders',     label: 'Orders',     icon: 'ri-shopping-bag-3-line',  actions: ['edit', 'delete', 'approve', 'ship'] },
+      { key: 'deliveries', label: 'Deliveries', icon: 'ri-truck-line',           actions: ['edit', 'delete', 'ship'] },
       { key: 'warehouses', label: 'Warehouses', icon: 'ri-building-2-line',      actions: ['edit', 'delete'] },
-      { key: 'transfers',  label: 'Transfers',  icon: 'ri-swap-box-line',        actions: ['approve'] },
+      { key: 'transfers',  label: 'Transfers',  icon: 'ri-swap-box-line',        actions: ['approve', 'ship'] },
       { key: 'returns',    label: 'Returns',    icon: 'ri-arrow-go-back-line',   actions: ['edit', 'delete', 'approve'] },
-      { key: 'purchases',  label: 'Purchases',  icon: 'ri-shopping-cart-2-line', actions: ['approve'] },
+      { key: 'purchases',  label: 'Purchases',  icon: 'ri-shopping-cart-2-line', actions: ['approve', 'ship'] },
       { key: 'stock_receives', label: 'Stock Receives', icon: 'ri-inbox-archive-line', actions: [] },
       { key: 'promotions', label: 'Promotions', icon: 'ri-price-tag-3-line',     actions: [] },
       { key: 'vendors',    label: 'Vendors',    icon: 'ri-store-2-line',         actions: ['edit', 'delete'] },
@@ -91,7 +91,7 @@ interface Role {
 
 const defaultPermissions = (): Permissions => {
   const perms: Permissions = {};
-  ALL_PAGES.forEach(p => { perms[p.key] = { view: false, edit: false, delete: false, approve: false }; });
+  ALL_PAGES.forEach(p => { perms[p.key] = { view: false, edit: false, delete: false, approve: false, ship: false }; });
   return perms;
 };
 
@@ -176,7 +176,7 @@ export default function RolesPage() {
     setModalOpen(true);
   };
 
-  // Toggling view off also clears edit/delete/approve for that page; toggling it on doesn't grant anything else.
+  // Toggling view off also clears edit/delete/approve/ship for that page; toggling it on doesn't grant anything else.
   const toggleView = (key: string) =>
     setForm(f => {
       const current = f.permissions[key];
@@ -185,7 +185,7 @@ export default function RolesPage() {
         ...f,
         permissions: {
           ...f.permissions,
-          [key]: nextView ? { ...current, view: true } : { view: false, edit: false, delete: false, approve: false },
+          [key]: nextView ? { ...current, view: true } : { view: false, edit: false, delete: false, approve: false, ship: false },
         },
       };
     });
@@ -208,7 +208,7 @@ export default function RolesPage() {
     setForm(f => {
       const perms = { ...f.permissions };
       group.pages.forEach(p => {
-        perms[p.key] = allOn ? { view: false, edit: false, delete: false, approve: false } : { view: true, edit: false, delete: false, approve: false };
+        perms[p.key] = allOn ? { view: false, edit: false, delete: false, approve: false, ship: false } : { view: true, edit: false, delete: false, approve: false, ship: false };
       });
       return { ...f, permissions: perms };
     });
@@ -274,7 +274,7 @@ export default function RolesPage() {
                     .filter((p) => normalizePerm(r.permissions[p.key]).view)
                     .map((p) => {
                       const perm = normalizePerm(r.permissions[p.key]);
-                      const flags = [perm.edit && 'edit', perm.delete && 'delete', perm.approve && 'approve'].filter(Boolean).join('+');
+                      const flags = [perm.edit && 'edit', perm.delete && 'delete', perm.approve && 'approve', perm.ship && 'ship'].filter(Boolean).join('+');
                       return flags ? `${p.label} (${flags})` : p.label;
                     })
                     .join('; '),
@@ -562,6 +562,19 @@ export default function RolesPage() {
                                         }`}
                                       >
                                         <i className="ri-checkbox-circle-line mr-1"></i>Approve
+                                      </button>
+                                    )}
+                                    {page.actions.includes('ship') && (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleAction(page.key, 'ship')}
+                                        disabled={!perm.view}
+                                        title={`Allow this role to confirm shipment/receipt for ${page.label.toLowerCase()} — the step that moves stock, separate from Approve`}
+                                        className={`text-xs font-medium px-2 py-1 rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                                          perm.ship ? 'bg-sky-100 text-sky-700 hover:bg-sky-200' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                                        }`}
+                                      >
+                                        <i className="ri-truck-line mr-1"></i>Ship
                                       </button>
                                     )}
                                   </div>

@@ -55,9 +55,10 @@ function mapPurchase(row: Record<string, unknown>): PurchaseOrder {
 
 export default function PurchasesPage() {
   const { formatAmount } = useCurrency();
-  const { profile, canApprove, warehouseScope } = useAuth();
+  const { profile, canApprove, canShip, warehouseScope } = useAuth();
   const requesterIdentity = profile?.full_name || profile?.email || 'Unknown';
   const canDecide = canApprove('purchases');
+  const canConfirmReceipt = canShip('purchases');
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
@@ -179,7 +180,13 @@ export default function PurchasesPage() {
   ) => {
     const target = purchases.find((p) => p.id === id);
     const isOwner = !!target && target.submittedBy === requesterIdentity;
-    if (status === 'cancelled' ? (!canDecide && !isOwner) : !canDecide) return;
+    if (status === 'cancelled') {
+      if (!canDecide && !isOwner) return;
+    } else if (status === 'received') {
+      if (!canConfirmReceipt) return;
+    } else if (!canDecide) {
+      return;
+    }
     if (status === 'received' && !extra?.documentFile) return;
 
     if (extra?.documentFile) setUploadingReceipt(true);
@@ -462,6 +469,7 @@ export default function PurchasesPage() {
           onStatusChange={handleStatusChange}
           uploading={uploadingReceipt}
           canDecide={canDecide}
+          canConfirmReceipt={canConfirmReceipt}
           canCancel={canDecide || selectedPO.submittedBy === requesterIdentity}
         />
       )}

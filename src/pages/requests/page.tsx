@@ -219,11 +219,12 @@ function nextRequestReference(existing: StockRequest[]): string {
 }
 
 export default function RequestsPage() {
-  const { profile, warehouseScope, canDelete, canApprove } = useAuth();
+  const { profile, warehouseScope, canDelete, canApprove, canShip } = useAuth();
   // "New Request" is available to every role, regardless of the requests.edit permission.
   const canSubmit = true;
   const canHardDelete = canDelete('requests');
   const canApproveRequests = canApprove('requests');
+  const canShipRequests = canShip('requests');
   const requesterIdentity = profile?.full_name || profile?.email;
 
   const [requests, setRequests] = useState<StockRequest[]>([]);
@@ -709,7 +710,7 @@ export default function RequestsPage() {
   const handleConfirmReceipt = async (req: StockRequest, file: File | null) => {
     if (!receiptName.trim() || !receiptChecked) return;
     const alreadyDispatched = !!req.dispatched_at;
-    if (!alreadyDispatched && (!canApproveRequests || !file)) return;
+    if (!alreadyDispatched && (!canShipRequests || !file)) return;
 
     setUploadingApproval(true);
     const now = new Date().toISOString();
@@ -1841,7 +1842,7 @@ export default function RequestsPage() {
                         </div>
                       </div>
                     ) : viewingReq.dispatched_at ? (
-                      (canApproveRequests || isOwnRequest) ? (
+                      (canShipRequests || isOwnRequest) ? (
                         <div className="space-y-2">
                           <input
                             type="text"
@@ -1865,7 +1866,7 @@ export default function RequestsPage() {
                       ) : (
                         <p className="text-xs text-gray-400 italic">Awaiting receipt confirmation.</p>
                       )
-                    ) : canApproveRequests ? (
+                    ) : canShipRequests ? (
                       <div className="space-y-2">
                         {dispatchBinOptions.length > 0 && viewingReq && (
                           <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">

@@ -14,24 +14,33 @@ interface OrderFormModalProps {
   initialDraft?: OrderCreateDraft;
   title?: string;
   submitLabel?: string;
+  /** 'quick' hides the customer contact fields entirely — just products + a note,
+   * auto-attributed to the current user. Both modes flow through the same
+   * approve → confirm shipment pipeline afterwards. */
+  mode?: 'regular' | 'quick';
+  /** Who to attribute a quick order to — pre-fills requestedBy/customer, no typing needed. */
+  requesterName?: string;
   onClose: () => void;
   onSave: (draft: OrderCreateDraft) => void;
 }
 
-const emptyDraft: OrderCreateDraft = {
-  requestedBy: '',
-  customer: '',
-  email: '',
-  phone: '',
-  address: '',
-  city: '',
-  notes: '',
-  lines: [],
-};
+function makeEmptyDraft(mode: 'regular' | 'quick', requesterName: string): OrderCreateDraft {
+  return {
+    requestedBy: requesterName,
+    customer: mode === 'quick' ? requesterName : '',
+    email: '',
+    phone: '',
+    address: '',
+    city: '',
+    notes: '',
+    lines: [],
+    orderType: mode,
+  };
+}
 
-export default function OrderFormModal({ products, reserved, initialDraft, title = 'Create Order', submitLabel = 'Create Order', onClose, onSave }: OrderFormModalProps) {
+export default function OrderFormModal({ products, reserved, initialDraft, title, submitLabel, mode = 'regular', requesterName = '', onClose, onSave }: OrderFormModalProps) {
   const { formatAmount } = useCurrency();
-  const [draft, setDraft] = useState<OrderCreateDraft>(initialDraft ?? emptyDraft);
+  const [draft, setDraft] = useState<OrderCreateDraft>(initialDraft ?? makeEmptyDraft(mode, requesterName));
   const [error, setError] = useState('');
   const [pickerWarehouse, setPickerWarehouse] = useState('');
   const [pickerProduct, setPickerProduct] = useState('');
@@ -84,7 +93,7 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!draft.requestedBy.trim() || !draft.customer.trim() || !draft.email.trim() || !draft.phone.trim() || !draft.address.trim() || !draft.city.trim()) {
+    if (mode === 'regular' && (!draft.requestedBy.trim() || !draft.customer.trim() || !draft.email.trim() || !draft.phone.trim() || !draft.address.trim() || !draft.city.trim())) {
       setError('Please fill requester and customer details.');
       return;
     }
@@ -113,8 +122,10 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
       <div className="bg-white rounded-2xl w-full max-w-2xl mx-4 shadow-xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 shrink-0">
           <div>
-            <h2 className="text-base font-bold text-gray-900">{title}</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Admin-created order for review and fulfillment.</p>
+            <h2 className="text-base font-bold text-gray-900">{title ?? (mode === 'quick' ? 'Quick Order' : 'Create Order')}</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {mode === 'quick' ? 'Fast order — pick products and a note. No customer details needed.' : 'Admin-created order for review and fulfillment.'}
+            </p>
           </div>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 cursor-pointer">
             <i className="ri-close-line text-lg"></i>
@@ -122,14 +133,20 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
         </div>
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <input value={draft.requestedBy} onChange={(e) => setDraft({ ...draft, requestedBy: e.target.value })} placeholder="Created/requested by" className="md:col-span-2 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
-            <input value={draft.customer} onChange={(e) => setDraft({ ...draft, customer: e.target.value })} placeholder="Customer name" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
-            <input value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="Email" type="email" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
-            <input value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} placeholder="Phone" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
-            <input value={draft.city} onChange={(e) => setDraft({ ...draft, city: e.target.value })} placeholder="City" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
-            <input value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} placeholder="Address" className="md:col-span-2 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
-          </div>
+          {mode === 'quick' ? (
+            <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+              <i className="ri-user-line mr-1.5 text-gray-400"></i>Submitting as <span className="font-medium text-gray-700">{draft.requestedBy || 'you'}</span>
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input value={draft.requestedBy} onChange={(e) => setDraft({ ...draft, requestedBy: e.target.value })} placeholder="Created/requested by" className="md:col-span-2 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
+              <input value={draft.customer} onChange={(e) => setDraft({ ...draft, customer: e.target.value })} placeholder="Customer name" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
+              <input value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="Email" type="email" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
+              <input value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} placeholder="Phone" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
+              <input value={draft.city} onChange={(e) => setDraft({ ...draft, city: e.target.value })} placeholder="City" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
+              <input value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} placeholder="Address" className="md:col-span-2 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />
+            </div>
+          )}
 
           <div className="space-y-2">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Items</p>
@@ -273,7 +290,7 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
           </div>
           <div className="flex items-center gap-3">
             <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">Cancel</button>
-            <button onClick={handleSubmit} className="px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 cursor-pointer">{submitLabel}</button>
+            <button onClick={handleSubmit} className="px-4 py-2 text-sm font-medium text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 cursor-pointer">{submitLabel ?? (mode === 'quick' ? 'Submit Quick Order' : 'Create Order')}</button>
           </div>
         </div>
       </div>

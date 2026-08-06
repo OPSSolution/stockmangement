@@ -15,6 +15,7 @@ const emptyDraft: OrderCreateDraft = {
   city: '',
   notes: '',
   lines: [{ productId: '', quantity: 1 }],
+  orderType: 'regular',
 };
 
 export default function PublicOrderFormPage() {

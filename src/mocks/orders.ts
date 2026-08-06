@@ -27,6 +27,10 @@ export interface VendorSplit {
 
 export interface Order {
   id: string;
+  /** 'quick' = products + note only, auto-attributed to the creator, no customer contact
+   * details. 'regular' = the original full customer-details flow. Both go through the
+   * same approve → confirm shipment pipeline afterwards. Missing/undefined means 'regular'. */
+  orderType?: 'regular' | 'quick';
   requestedBy?: string;
   customer: string;
   email: string;

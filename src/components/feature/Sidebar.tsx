@@ -13,6 +13,7 @@ type NavItem = {
 const mainNavItems: NavItem[] = [
   { label: 'Dashboard',  icon: 'ri-dashboard-3-line',     path: '/',           permKey: 'dashboard' },
   { label: 'Inventory',  icon: 'ri-archive-stack-line',   path: '/inventory',  permKey: 'inventory' },
+  { label: 'Stock Adjust', icon: 'ri-equalizer-line',     path: '/stock-adjust', permKey: 'inventory_stock_adjust' },
   { label: 'Warehouses', icon: 'ri-building-2-line',      path: '/warehouses', permKey: 'warehouses' },
   { label: 'Vendors',    icon: 'ri-store-2-line',         path: '/vendors',    permKey: 'vendors' },
   { label: 'Orders',     icon: 'ri-shopping-bag-3-line',  path: '/orders',     permKey: 'orders' },

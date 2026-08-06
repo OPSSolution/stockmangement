@@ -46,8 +46,9 @@ function mapTransfer(row: Record<string, unknown>): StockTransfer {
 }
 
 export default function TransfersPage() {
-  const { warehouseScope, isFullAccess, canApprove } = useAuth();
+  const { warehouseScope, isFullAccess, canApprove, canShip, profile } = useAuth();
   const canDecideTransfers = canApprove('transfers');
+  const canShipTransfers = canShip('transfers');
   const [searchParams, setSearchParams] = useSearchParams();
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,10 +115,21 @@ export default function TransfersPage() {
     const transfer = transfers.find((t) => t.id === id);
     if (status === 'received' && !documentFile) return;
 
-    if ((status === 'approved' || status === 'in_transit' || status === 'received') && !canDecideTransfers) {
-      const action = status === 'approved' ? 'approve' : status === 'in_transit' ? 'mark in transit' : 'confirm receipt of';
+    if (status === 'approved' && !canDecideTransfers) {
+      window.alert(`You don't have permission to approve this transfer.`);
+      return;
+    }
+    if ((status === 'in_transit' || status === 'received') && !canShipTransfers) {
+      const action = status === 'in_transit' ? 'mark in transit' : 'confirm receipt of';
       window.alert(`You don't have permission to ${action} this transfer.`);
       return;
+    }
+    if (status === 'cancelled') {
+      const canCancel = canDecideTransfers && (isFullAccess || !!profile?.warehouses.includes(transfer?.fromWarehouse ?? ''));
+      if (!canCancel) {
+        window.alert(`You don't have permission to cancel this transfer.`);
+        return;
+      }
     }
 
     setStatusChanging(true);
@@ -436,8 +448,9 @@ export default function TransfersPage() {
           transfer={selectedTransfer}
           onClose={() => setSelectedTransfer(null)}
           onStatusChange={handleStatusChange}
-          isSendingWarehouse={isFullAccess}
-          isReceivingWarehouse={isFullAccess}
+          canApproveStep={canDecideTransfers && (isFullAccess || !!profile?.warehouses.includes(selectedTransfer.fromWarehouse))}
+          canMarkInTransitStep={canShipTransfers && (isFullAccess || !!profile?.warehouses.includes(selectedTransfer.fromWarehouse))}
+          canConfirmReceivedStep={canShipTransfers && (isFullAccess || !!profile?.warehouses.includes(selectedTransfer.toWarehouse))}
           statusChanging={statusChanging}
         />
       )}

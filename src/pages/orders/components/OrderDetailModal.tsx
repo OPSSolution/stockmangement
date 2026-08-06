@@ -25,8 +25,9 @@ const vendorStatusColors: Record<string, string> = {
 
 export default function OrderDetailModal({ order, onClose, onUpdateOrder }: OrderDetailModalProps) {
   const { formatAmount } = useCurrency();
-  const { canApprove, profile } = useAuth();
+  const { canApprove, canShip, profile } = useAuth();
   const canDecide = canApprove('orders');
+  const canConfirmShipment = canShip('orders');
   const [splits, setSplits] = useState<VendorSplit[]>(order.vendorSplits);
   const [partialQty, setPartialQty] = useState<Record<string, number>>({});
   const [confirmMsg, setConfirmMsg] = useState('');
@@ -43,14 +44,14 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
   );
   const [binOptionsByWarehouse, setBinOptionsByWarehouse] = useState<Record<string, string[]>>({});
   const isPending = order.status === 'pending';
-  const canShip = order.status === 'accepted' || order.status === 'partial';
+  const isShippable = order.status === 'accepted' || order.status === 'partial';
 
   // Bin options come from each split's own warehouse registry PLUS any bin
   // its products already use — the registry alone can be empty even when
   // real bins are already in use. Picked when confirming shipment, since
   // that's the one action that actually deducts stock.
   useEffect(() => {
-    if (!canShip || order.shippedAt) return;
+    if (!isShippable || order.shippedAt) return;
     (async () => {
       const warehouseNames = [...new Set(splits.map((s) => s.warehouse))];
       if (warehouseNames.length === 0) return;
@@ -76,7 +77,7 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
       setBinOptionsByWarehouse(map);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canShip, order.shippedAt]);
+  }, [isShippable, order.shippedAt]);
 
   const updateItemStatus = (splitIdx: number, itemId: string, status: OrderItem['status']) => {
     setSplits((prev) =>
@@ -166,14 +167,14 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
         docType: 'Purchase Order',
         docId: order.id,
         status: order.status,
-        subtitle: `${order.customer} · ${order.city}`,
+        subtitle: order.city ? `${order.customer} · ${order.city}` : order.customer,
         infoBoxes: [
           {
             title: 'Customer',
             rows: [
-              { label: 'Email', value: order.email },
-              { label: 'Phone', value: order.phone },
-              { label: 'Address', value: `${order.address}, ${order.city}` },
+              ...(order.email ? [{ label: 'Email', value: order.email }] : []),
+              ...(order.phone ? [{ label: 'Phone', value: order.phone }] : []),
+              ...(order.address || order.city ? [{ label: 'Address', value: [order.address, order.city].filter(Boolean).join(', ') }] : []),
               { label: 'Ordered', value: order.createdAt },
             ],
           },
@@ -209,7 +210,7 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
   const handleConfirmReceipt = async () => {
     if (!receiptName.trim() || !receiptChecked) return;
     const alreadyShipped = !!order.shippedAt;
-    if (!alreadyShipped && (!canDecide || !shipmentDocFile)) return;
+    if (!alreadyShipped && (!canConfirmShipment || !shipmentDocFile)) return;
 
     setShipping(true);
     const now = new Date().toISOString();
@@ -282,8 +283,13 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
             <div className="flex items-center gap-3">
               <h2 className="text-base font-bold text-gray-900">{order.id}</h2>
               <OrderStatusBadge status={order.status} />
+              {order.orderType === 'quick' && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
+                  <i className="ri-flashlight-line"></i>Quick
+                </span>
+              )}
             </div>
-            <p className="text-xs text-gray-400 mt-0.5">{order.customer} · {order.city} · {order.createdAt}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{order.customer}{order.city ? ` · ${order.city}` : ''} · {order.createdAt}</p>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <button onClick={handleDownloadPdf} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer whitespace-nowrap">
@@ -302,18 +308,24 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
               <i className="ri-user-line text-gray-400"></i>
               <span>Requested by {order.customer}</span>
             </div>
-            <div className="flex items-center gap-2 text-gray-500">
-              <i className="ri-mail-line text-gray-400"></i>
-              <span>{order.email}</span>
-            </div>
-            <div className="flex items-center gap-2 text-gray-500">
-              <i className="ri-phone-line text-gray-400"></i>
-              <span>{order.phone}</span>
-            </div>
-            <div className="flex items-center gap-2 text-gray-500">
-              <i className="ri-map-pin-line text-gray-400"></i>
-              <span>{order.address}, {order.city}</span>
-            </div>
+            {order.email && (
+              <div className="flex items-center gap-2 text-gray-500">
+                <i className="ri-mail-line text-gray-400"></i>
+                <span>{order.email}</span>
+              </div>
+            )}
+            {order.phone && (
+              <div className="flex items-center gap-2 text-gray-500">
+                <i className="ri-phone-line text-gray-400"></i>
+                <span>{order.phone}</span>
+              </div>
+            )}
+            {(order.address || order.city) && (
+              <div className="flex items-center gap-2 text-gray-500">
+                <i className="ri-map-pin-line text-gray-400"></i>
+                <span>{[order.address, order.city].filter(Boolean).join(', ')}</span>
+              </div>
+            )}
           </div>
           {order.notes && (
             <div className="mt-2 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
@@ -409,7 +421,7 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
               two-step flow (shippedAt set, receipt not yet confirmed) just needs the
               sign-off — its stock was already deducted, so no document/re-deduction
               is asked for. */}
-          {(canShip || order.status === 'processing' || order.status === 'fulfilled') && (
+          {(isShippable || order.status === 'processing' || order.status === 'fulfilled') && (
             <div className="rounded-xl border border-gray-100 p-4 space-y-3">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Receipt Confirmation</p>
 
@@ -427,7 +439,7 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
                   </div>
                 </div>
               ) : order.shippedAt ? (
-                canDecide ? (
+                canConfirmShipment ? (
                   <div className="space-y-2">
                     <input
                       type="text"
@@ -451,7 +463,7 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
                 ) : (
                   <p className="text-xs text-gray-400 italic">Awaiting receipt confirmation.</p>
                 )
-              ) : canDecide ? (
+              ) : canConfirmShipment ? (
                 <div className="space-y-2">
                   {splits.some((s) => (binOptionsByWarehouse[s.warehouse] || []).length > 0) && (
                     <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
