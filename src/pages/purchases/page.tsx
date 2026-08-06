@@ -84,6 +84,16 @@ export default function PurchasesPage() {
     }
   }, [searchParams, setSearchParams]);
 
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (id && purchases.length > 0) {
+      const found = purchases.find((p) => p.id === id);
+      if (found) setSelectedPO(found);
+      searchParams.delete('id');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [purchases, searchParams, setSearchParams]);
+
   const showToast = (msg: string) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(''), 3000);

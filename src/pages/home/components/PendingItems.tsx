@@ -9,6 +9,7 @@ type PendingType = 'order' | 'delivery' | 'transfer' | 'return' | 'purchase' | '
 
 interface PendingItem {
   id: string;
+  recordId: string;
   type: PendingType;
   title: string;
   subtitle: string;
@@ -116,6 +117,7 @@ export default function PendingItems() {
             const status = (row.status as string) || 'pending';
             results.push({
               id: `order-${row.id}`,
+              recordId: String(row.id),
               type: 'order',
               title: (row.customer as string) || `Order ${row.id}`,
               subtitle: `${row.city ? row.city + ' · ' : ''}${itemCount} item${itemCount !== 1 ? 's' : ''} · ${formatAmount(Number(row.total || 0))}`,
@@ -144,6 +146,7 @@ export default function PendingItems() {
             const to = (row.to_warehouse as string) || (row.destination as string) || '';
             results.push({
               id: `delivery-${row.id}`,
+              recordId: String(row.id),
               type: 'delivery',
               title: from && to ? `${from} → ${to}` : (row.transfer_id as string) || `Delivery ${row.id}`,
               subtitle: `${totalItems} item${totalItems !== 1 ? 's' : ''}`,
@@ -170,6 +173,7 @@ export default function PendingItems() {
             const status = (row.status as string) || 'requested';
             results.push({
               id: `transfer-${row.id}`,
+              recordId: String(row.id),
               type: 'transfer',
               title: `${row.from_warehouse} → ${row.to_warehouse}`,
               subtitle: `${row.reason ? row.reason + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''}`,
@@ -196,6 +200,7 @@ export default function PendingItems() {
             const status = (row.status as string) || 'pending';
             results.push({
               id: `return-${row.id}`,
+              recordId: String(row.id),
               type: 'return',
               title: (row.customer as string) || `Return ${row.id}`,
               subtitle: `${row.reason ? row.reason + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''} · ${formatAmount(Number(row.total_value || 0))}`,
@@ -222,6 +227,7 @@ export default function PendingItems() {
             const status = (row.status as string) || 'pending';
             results.push({
               id: `purchase-${row.id}`,
+              recordId: String(row.id),
               type: 'purchase',
               title: (row.vendor as string) || `Purchase ${row.id}`,
               subtitle: `${row.warehouse ? row.warehouse + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''} · ${formatAmount(Number(row.total || 0))}`,
@@ -248,6 +254,7 @@ export default function PendingItems() {
             const status = (row.status as string) || 'pending';
             results.push({
               id: `request-${row.id}`,
+              recordId: String(row.id),
               type: 'request',
               title: (row.reference as string) || (row.requested_by as string) || `Request ${row.id}`,
               subtitle: `${row.warehouse ? row.warehouse + ' · ' : ''}${totalItems} item${totalItems !== 1 ? 's' : ''}${row.requested_by ? ' · ' + row.requested_by : ''}`,
@@ -345,7 +352,7 @@ export default function PendingItems() {
             return (
               <button
                 key={item.id}
-                onClick={() => navigate(meta.path)}
+                onClick={() => navigate(`${meta.path}?id=${encodeURIComponent(item.recordId)}`)}
                 className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50/40 transition-colors text-left cursor-pointer"
               >
                 <div className={`w-9 h-9 rounded-lg ${meta.iconBg} flex items-center justify-center flex-shrink-0`}>

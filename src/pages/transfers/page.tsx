@@ -71,6 +71,16 @@ export default function TransfersPage() {
     }
   }, [searchParams, setSearchParams]);
 
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (id && transfers.length > 0) {
+      const found = transfers.find((t) => t.id === id);
+      if (found) setSelectedTransfer(found);
+      searchParams.delete('id');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [transfers, searchParams, setSearchParams]);
+
   const fetchTransfers = async () => {
     setLoading(true);
     let query = supabase.from('transfers').select('*').order('created_at', { ascending: false });

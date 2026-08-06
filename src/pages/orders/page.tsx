@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, type MouseEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import OrderStatusBadge from './components/OrderStatusBadge';
 import OrderDetailModal from './components/OrderDetailModal';
@@ -50,6 +51,7 @@ export default function OrdersPage() {
   const showEdit = canEdit('orders');
   const showDelete = canDelete('orders');
   const requesterName = profile?.full_name || profile?.email || '';
+  const [searchParams, setSearchParams] = useSearchParams();
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<ProductStockRow[]>([]);
   const [reserved, setReserved] = useState<Record<string, number>>({});
@@ -69,6 +71,16 @@ export default function OrdersPage() {
     fetchOrders();
     fetchProducts();
   }, []);
+
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (id && orders.length > 0) {
+      const found = orders.find((o) => o.id === id);
+      if (found) setSelectedOrder(found);
+      searchParams.delete('id');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [orders, searchParams, setSearchParams]);
 
   const showToast = (msg: string) => {
     setToast(msg);

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, type MouseEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import DeliveryStepTracker from './components/DeliveryStepTracker';
 import DeliveryDetailModal from './components/DeliveryDetailModal';
@@ -75,6 +76,7 @@ export default function DeliveriesPage() {
   const { canEdit, canDelete, profile } = useAuth();
   const showEdit = canEdit('deliveries');
   const showDelete = canDelete('deliveries');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [deliveries, setDeliveries] = useState<DeliveryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
@@ -105,6 +107,16 @@ export default function DeliveriesPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (id && deliveries.length > 0) {
+      const found = deliveries.find((d) => d.id === id);
+      if (found) setSelectedDelivery(found);
+      searchParams.delete('id');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [deliveries, searchParams, setSearchParams]);
 
   const showToast = (msg: string) => {
     setToast(msg);

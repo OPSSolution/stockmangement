@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, type MouseEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
@@ -227,6 +228,7 @@ export default function RequestsPage() {
   const canShipRequests = canShip('requests');
   const requesterIdentity = profile?.full_name || profile?.email;
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [requests, setRequests] = useState<StockRequest[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [binStockByProduct, setBinStockByProduct] = useState<Record<string, BinStockRow[]>>({});
@@ -297,6 +299,16 @@ export default function RequestsPage() {
   }, [warehouseScope]);
 
   useEffect(() => { loadRequests(); }, [loadRequests]);
+
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (id && requests.length > 0) {
+      const found = requests.find((r) => r.id === id);
+      if (found) setViewingReq(found);
+      searchParams.delete('id');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [requests, searchParams, setSearchParams]);
 
   useEffect(() => {
     supabase.from('request_remarks').select('value').order('value', { ascending: true }).then(({ data }) => {

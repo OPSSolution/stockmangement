@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { type ReturnRequest, type ReturnStatus } from '@/mocks/returns';
 import ReturnStatusBadge from './components/ReturnStatusBadge';
@@ -80,6 +81,7 @@ export default function ReturnsPage() {
   const { canEdit, canDelete, warehouseScope, profile } = useAuth();
   const showEdit = canEdit('returns');
   const showDelete = canDelete('returns');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [returns, setReturns] = useState<ReturnRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
@@ -97,6 +99,16 @@ export default function ReturnsPage() {
   useEffect(() => {
     fetchReturns();
   }, [warehouseScope]);
+
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (id && returns.length > 0) {
+      const found = returns.find((r) => r.id === id);
+      if (found) setSelectedReturn(found);
+      searchParams.delete('id');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [returns, searchParams, setSearchParams]);
 
   const fetchReturns = async () => {
     setLoading(true);
