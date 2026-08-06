@@ -23,7 +23,7 @@ const steps: { key: TransferStatus; label: string; icon: string }[] = [
   { key: 'requested', label: 'Requested', icon: 'ri-time-line' },
   { key: 'approved', label: 'Approved', icon: 'ri-checkbox-circle-line' },
   { key: 'in_transit', label: 'In Transit', icon: 'ri-truck-line' },
-  { key: 'received', label: 'Complete', icon: 'ri-check-double-line' },
+  { key: 'received', label: 'Fulfilled', icon: 'ri-check-double-line' },
 ];
 
 const stepOrder = ['requested', 'approved', 'in_transit', 'received'];

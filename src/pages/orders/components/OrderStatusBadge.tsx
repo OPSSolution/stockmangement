@@ -6,7 +6,7 @@ const config: Record<OrderStatus, { label: string; cls: string }> = {
   rejected: { label: 'Rejected', cls: 'bg-red-50 text-red-600' },
   partial: { label: 'Partial', cls: 'bg-sky-50 text-sky-700' },
   processing: { label: 'Complete', cls: 'bg-violet-50 text-violet-700' },
-  fulfilled: { label: 'Fulfilled', cls: 'bg-gray-100 text-gray-600' },
+  fulfilled: { label: 'Fulfilled', cls: 'bg-emerald-50 text-emerald-600' },
 };
 
 export default function OrderStatusBadge({ status }: { status: OrderStatus }) {

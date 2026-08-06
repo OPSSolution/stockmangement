@@ -22,7 +22,7 @@ const tabs: { key: FilterTab; label: string }[] = [
   { key: 'pending', label: 'Pending' },
   { key: 'inspecting', label: 'Inspecting' },
   { key: 'approved', label: 'Approved' },
-  { key: 'restocked', label: 'Complete' },
+  { key: 'restocked', label: 'Fulfilled' },
   { key: 'discarded', label: 'Discarded' },
 ];
 
@@ -342,7 +342,7 @@ export default function ReturnsPage() {
               { label: 'Pending Review', value: kpi.pending, icon: 'ri-time-line', color: 'text-amber-600', bg: 'bg-amber-50', click: 'pending' as FilterTab },
               { label: 'Under Inspection', value: kpi.inspecting, icon: 'ri-search-eye-line', color: 'text-sky-600', bg: 'bg-sky-50', click: 'inspecting' as FilterTab },
               { label: 'Approved', value: kpi.approved, icon: 'ri-checkbox-circle-line', color: 'text-violet-600', bg: 'bg-violet-50', click: 'approved' as FilterTab },
-              { label: 'Complete', value: kpi.restocked, icon: 'ri-archive-stack-line', color: 'text-emerald-600', bg: 'bg-emerald-50', click: 'restocked' as FilterTab },
+              { label: 'Fulfilled', value: kpi.restocked, icon: 'ri-archive-stack-line', color: 'text-emerald-600', bg: 'bg-emerald-50', click: 'restocked' as FilterTab },
               { label: 'Discarded', value: kpi.discarded, icon: 'ri-delete-bin-line', color: 'text-red-600', bg: 'bg-red-50', click: 'discarded' as FilterTab },
               { label: 'Restocked Value', value: formatAmount(kpi.totalRestockedValue), icon: 'ri-archive-2-line', color: 'text-teal-600', bg: 'bg-teal-50', click: 'restocked' as FilterTab },
             ].map((card) => (

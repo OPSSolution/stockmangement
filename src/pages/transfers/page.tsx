@@ -23,7 +23,7 @@ const tabs: { key: FilterTab; label: string }[] = [
   { key: 'requested', label: 'Requested' },
   { key: 'approved', label: 'Approved' },
   { key: 'in_transit', label: 'In Transit' },
-  { key: 'received', label: 'Complete' },
+  { key: 'received', label: 'Fulfilled' },
   { key: 'cancelled', label: 'Cancelled' },
 ];
 function mapTransfer(row: Record<string, unknown>): StockTransfer {
@@ -298,7 +298,7 @@ export default function TransfersPage() {
               { label: 'Requested', value: kpi.requested, icon: 'ri-time-line', color: 'text-amber-600', bg: 'bg-amber-50', click: 'requested' as FilterTab },
               { label: 'Approved', value: kpi.approved, icon: 'ri-checkbox-circle-line', color: 'text-sky-600', bg: 'bg-sky-50', click: 'approved' as FilterTab },
               { label: 'In Transit', value: kpi.in_transit, icon: 'ri-truck-line', color: 'text-violet-600', bg: 'bg-violet-50', click: 'in_transit' as FilterTab },
-              { label: 'Complete', value: kpi.received, icon: 'ri-check-double-line', color: 'text-emerald-600', bg: 'bg-emerald-50', click: 'received' as FilterTab },
+              { label: 'Fulfilled', value: kpi.received, icon: 'ri-check-double-line', color: 'text-emerald-600', bg: 'bg-emerald-50', click: 'received' as FilterTab },
               { label: 'Total Units Moved', value: kpi.totalUnits, icon: 'ri-archive-line', color: 'text-gray-600', bg: 'bg-gray-100', click: 'all' as FilterTab },
             ].map((card) => (
               <button
