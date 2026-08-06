@@ -9,13 +9,16 @@ import type { ProductStockRow } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { buildOrderInsert, buildOrderUpdate, mapOrderToDraft, mapProductRow, type OrderCreateDraft } from './orderCreateUtils';
+import { buildOrderInsert, buildOrderUpdate, mapOrderToDraft, mapProductRow, nextOrderId, type OrderCreateDraft } from './orderCreateUtils';
 import { getReservedQuantities } from '@/lib/stockReservations';
+import { deductStockForItems } from '@/lib/stockDeduction';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
 import { notifyAdmins } from '@/lib/notifyAdmins';
 
 type FilterStatus = 'all' | OrderStatus;
+
+const ORDER_TERMINAL_STATUSES: OrderStatus[] = ['fulfilled', 'rejected'];
 
 function mapOrder(row: Record<string, unknown>): Order {
   return {
@@ -42,6 +45,8 @@ function mapOrder(row: Record<string, unknown>): Order {
     receivedAt: (row.received_at as string | null) ?? null,
     receivedBy: (row.received_by as string | null) ?? null,
     receiptConfirmed: Boolean(row.receipt_confirmed),
+    paymentCash: Boolean(row.payment_cash),
+    paymentQr: Boolean(row.payment_qr),
   };
 }
 
@@ -140,14 +145,21 @@ export default function OrdersPage() {
   };
 
   const filtered = useMemo(() => {
-    return orders.filter((o) => {
-      const matchStatus = filterStatus === 'all' || o.status === filterStatus;
-      const matchSearch =
-        o.id.toLowerCase().includes(search.toLowerCase()) ||
-        o.customer.toLowerCase().includes(search.toLowerCase()) ||
-        (o.requestedBy || '').toLowerCase().includes(search.toLowerCase());
-      return matchStatus && matchSearch;
-    });
+    return orders
+      .filter((o) => {
+        const matchStatus = filterStatus === 'all' || o.status === filterStatus;
+        const matchSearch =
+          o.id.toLowerCase().includes(search.toLowerCase()) ||
+          o.customer.toLowerCase().includes(search.toLowerCase()) ||
+          (o.requestedBy || '').toLowerCase().includes(search.toLowerCase());
+        return matchStatus && matchSearch;
+      })
+      .sort((a, b) => {
+        const aDone = ORDER_TERMINAL_STATUSES.includes(a.status) ? 1 : 0;
+        const bDone = ORDER_TERMINAL_STATUSES.includes(b.status) ? 1 : 0;
+        if (aDone !== bDone) return aDone - bDone;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
   }, [orders, filterStatus, search]);
 
   const counts = useMemo(() => ({
@@ -198,13 +210,34 @@ export default function OrdersPage() {
     // comes via the toast once the request actually resolves.
     setCreateMode(null);
     try {
-      const payload = buildOrderInsert(draft, products);
+      const id = await nextOrderId();
+      const payload = buildOrderInsert(draft, products, id);
       const { error } = await supabase.from('orders').insert(payload);
 
       if (error) {
         console.error(error);
         showToast('Failed to create order.');
         return;
+      }
+
+      // Quick Order skips accept/reject and shipment confirmation entirely — stock
+      // leaves the warehouse the moment it's submitted, not on some later decision.
+      if (draft.orderType === 'quick') {
+        const deductLines = draft.lines
+          .map((line) => ({ ...line, quantity: Number(line.quantity) || 0 }))
+          .filter((line): line is { productId: string; quantity: number; warehouse: string; binLocation?: string } => Boolean(line.productId) && line.quantity > 0 && Boolean(line.warehouse));
+        const { error: deductError } = await deductStockForItems(deductLines, {
+          reference: payload.id,
+          note: `Quick order ${payload.id}`,
+          userName: draft.requestedBy.trim() || 'Admin',
+          historyType: 'sale',
+        });
+        if (deductError) {
+          console.error(deductError);
+          showToast(`Order created, but stock deduction failed: ${deductError}`);
+          await fetchOrders();
+          return;
+        }
       }
 
       showToast('Order created successfully.');

@@ -15,6 +15,8 @@ import { restockReturnedItems } from '@/lib/stockDeduction';
 
 type FilterTab = 'all' | ReturnStatus;
 
+const RETURN_TERMINAL_STATUSES: ReturnStatus[] = ['restocked', 'discarded'];
+
 const tabs: { key: FilterTab; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'pending', label: 'Pending' },
@@ -157,7 +159,12 @@ export default function ReturnsPage() {
       const existing = latestByRequest.get(r.requestId);
       if (!existing || r.createdAt > existing.createdAt) latestByRequest.set(r.requestId, r);
     });
-    return [...latestByRequest.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return [...latestByRequest.values()].sort((a, b) => {
+      const aDone = RETURN_TERMINAL_STATUSES.includes(a.status) ? 1 : 0;
+      const bDone = RETURN_TERMINAL_STATUSES.includes(b.status) ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
   }, [filtered]);
 
   const handleCreateFollowUp = (requestId: string) => {

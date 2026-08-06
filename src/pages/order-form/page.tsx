@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ProductStockRow } from '@/mocks/inventory';
 import { supabase } from '@/lib/supabase';
-import { buildOrderInsert, mapProductRow, type OrderCreateDraft, type OrderLineDraft } from '../orders/orderCreateUtils';
+import { buildOrderInsert, mapProductRow, nextOrderId, type OrderCreateDraft, type OrderLineDraft } from '../orders/orderCreateUtils';
 import { logAudit } from '@/lib/auditLog';
 import { notifyAdmins } from '@/lib/notifyAdmins';
 import { expirySuffix } from '@/lib/expiry';
@@ -16,6 +16,8 @@ const emptyDraft: OrderCreateDraft = {
   notes: '',
   lines: [{ productId: '', quantity: 1 }],
   orderType: 'regular',
+  paymentCash: false,
+  paymentQr: false,
 };
 
 export default function PublicOrderFormPage() {
@@ -72,7 +74,8 @@ export default function PublicOrderFormPage() {
     }
 
     setSubmitting(true);
-    const payload = buildOrderInsert(draft, products);
+    const id = await nextOrderId();
+    const payload = buildOrderInsert(draft, products, id);
     const { error } = await supabase.from('orders').insert(payload);
     setSubmitting(false);
 

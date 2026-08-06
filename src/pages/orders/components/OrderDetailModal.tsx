@@ -288,6 +288,11 @@ export default function OrderDetailModal({ order, onClose, onUpdateOrder }: Orde
                   <i className="ri-flashlight-line"></i>Quick
                 </span>
               )}
+              {(order.paymentCash || order.paymentQr) && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700">
+                  <i className="ri-bank-card-line"></i>{[order.paymentCash && 'Cash', order.paymentQr && 'QR'].filter(Boolean).join(' + ')}
+                </span>
+              )}
             </div>
             <p className="text-xs text-gray-400 mt-0.5">{order.customer}{order.city ? ` · ${order.city}` : ''} · {order.createdAt}</p>
           </div>

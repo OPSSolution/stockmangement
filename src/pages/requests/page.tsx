@@ -47,6 +47,8 @@ interface RequestItem {
   binLocation?: string;
 }
 
+const REQUEST_TERMINAL_STATUSES: StockRequest['status'][] = ['fulfilled', 'rejected', 'cancelled', 'returned'];
+
 interface StockRequest {
   id: string;
   /** Matches the paper form's "Reference" field. */
@@ -935,9 +937,14 @@ export default function RequestsPage() {
 
   const closeMenu = () => { setOpenMenuId(null); setMenuPosition(null); };
 
-  const filtered = requests.filter(
-    (r) => (activeTab === 'all' || r.status === activeTab) && (!remarkFilter || r.remark === remarkFilter)
-  );
+  const filtered = requests
+    .filter((r) => (activeTab === 'all' || r.status === activeTab) && (!remarkFilter || r.remark === remarkFilter))
+    .sort((a, b) => {
+      const aDone = REQUEST_TERMINAL_STATUSES.includes(a.status) ? 1 : 0;
+      const bDone = REQUEST_TERMINAL_STATUSES.includes(b.status) ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
 
   const stats = {
     total: requests.length,

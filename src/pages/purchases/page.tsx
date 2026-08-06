@@ -14,6 +14,8 @@ import { receivePurchaseOrderItems } from '@/lib/stockDeduction';
 import { uploadShipmentDocument } from '@/lib/uploadShipmentDocument';
 import { nowStamp } from '@/lib/timestamp';
 
+const PURCHASE_TERMINAL_STATUSES: PurchaseStatus[] = ['received', 'rejected', 'cancelled'];
+
 const tabs: { key: 'all' | PurchaseStatus; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'pending', label: 'Pending Approval' },
@@ -111,13 +113,20 @@ export default function PurchasesPage() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return purchases.filter((p) => {
-      const matchTab = activeTab === 'all' || p.status === activeTab;
-      const matchWarehouse = filterWarehouse === 'all' || p.warehouse === filterWarehouse;
-      const matchVendor = filterVendor === 'all' || p.vendor === filterVendor;
-      const matchSearch = !q || p.id.toLowerCase().includes(q) || p.vendor.toLowerCase().includes(q) || (p.items[0]?.productName ?? '').toLowerCase().includes(q);
-      return matchTab && matchWarehouse && matchVendor && matchSearch;
-    });
+    return purchases
+      .filter((p) => {
+        const matchTab = activeTab === 'all' || p.status === activeTab;
+        const matchWarehouse = filterWarehouse === 'all' || p.warehouse === filterWarehouse;
+        const matchVendor = filterVendor === 'all' || p.vendor === filterVendor;
+        const matchSearch = !q || p.id.toLowerCase().includes(q) || p.vendor.toLowerCase().includes(q) || (p.items[0]?.productName ?? '').toLowerCase().includes(q);
+        return matchTab && matchWarehouse && matchVendor && matchSearch;
+      })
+      .sort((a, b) => {
+        const aDone = PURCHASE_TERMINAL_STATUSES.includes(a.status) ? 1 : 0;
+        const bDone = PURCHASE_TERMINAL_STATUSES.includes(b.status) ? 1 : 0;
+        if (aDone !== bDone) return aDone - bDone;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
   }, [purchases, activeTab, filterWarehouse, filterVendor, search]);
 
   const tabCount = (key: 'all' | PurchaseStatus) => key === 'all' ? purchases.length : purchases.filter((p) => p.status === key).length;

@@ -1,6 +1,20 @@
 import type { Order } from '@/mocks/orders';
 import type { ProductStockRow } from '@/mocks/inventory';
 import { nowStamp } from '@/lib/timestamp';
+import { supabase } from '@/lib/supabase';
+
+/** Asks the DB for the next ORD-01, ORD-02… id (see next_order_id() in
+ * supabase/migrations) — a sequence rather than a client-side max-scan so
+ * concurrent creates can't collide and numbering isn't thrown off by the old
+ * ORD-<timestamp> ids already in the table. */
+export async function nextOrderId(): Promise<string> {
+  const { data, error } = await supabase.rpc('next_order_id');
+  if (error || !data) {
+    console.error('next_order_id() failed, falling back to timestamp id:', error);
+    return `ORD-${Date.now()}`;
+  }
+  return data as string;
+}
 
 export interface OrderLineDraft {
   productId: string;
@@ -24,6 +38,9 @@ export interface OrderCreateDraft {
   lines: OrderLineDraft[];
   /** 'quick' = products + note only, no customer contact details required. */
   orderType: 'regular' | 'quick';
+  /** Quick Order payment method — either, both, or neither can be checked. */
+  paymentCash: boolean;
+  paymentQr: boolean;
 }
 
 /** Maps one row of a `product_warehouse_stock` (joined to its `products` master) query
@@ -89,12 +106,25 @@ function buildVendorSplits(draft: OrderCreateDraft, products: ProductStockRow[])
   return { itemCount, total, vendorSplits };
 }
 
-export function buildOrderInsert(draft: OrderCreateDraft, products: ProductStockRow[]) {
+export function buildOrderInsert(draft: OrderCreateDraft, products: ProductStockRow[], id: string) {
   const now = nowStamp();
   const { itemCount, total, vendorSplits } = buildVendorSplits(draft, products);
+  const isQuick = draft.orderType === 'quick';
+  const actor = draft.requestedBy.trim() || 'Admin';
+
+  // Quick Order skips the accept/reject + shipment-confirmation pipeline entirely —
+  // stock is deducted the moment it's submitted (see handleCreateOrder), so the
+  // order is created already fulfilled instead of starting out 'pending'.
+  const splits = isQuick
+    ? vendorSplits.map((split) => ({
+        ...split,
+        status: 'accepted' as const,
+        items: split.items.map((item) => ({ ...item, status: 'accepted' as const })),
+      }))
+    : vendorSplits;
 
   return {
-    id: `ORD-${Date.now()}`,
+    id,
     order_type: draft.orderType,
     requested_by: draft.requestedBy.trim(),
     customer: draft.customer.trim(),
@@ -104,11 +134,20 @@ export function buildOrderInsert(draft: OrderCreateDraft, products: ProductStock
     city: draft.city.trim(),
     created_at: now,
     updated_at: now,
-    status: 'pending',
+    status: isQuick ? 'fulfilled' : 'pending',
     total,
     item_count: itemCount,
-    vendor_splits: vendorSplits,
+    vendor_splits: splits,
     notes: draft.notes.trim() || null,
+    payment_cash: draft.paymentCash,
+    payment_qr: draft.paymentQr,
+    ...(isQuick ? {
+      shipped_at: now,
+      shipped_by: actor,
+      received_at: now,
+      received_by: actor,
+      receipt_confirmed: true,
+    } : {}),
   };
 }
 
@@ -127,6 +166,8 @@ export function mapOrderToDraft(order: Order): OrderCreateDraft {
     notes: order.notes ?? '',
     lines,
     orderType: order.orderType ?? 'regular',
+    paymentCash: order.paymentCash ?? false,
+    paymentQr: order.paymentQr ?? false,
   };
 }
 
@@ -147,5 +188,7 @@ export function buildOrderUpdate(draft: OrderCreateDraft, products: ProductStock
     item_count: itemCount,
     vendor_splits: vendorSplits,
     notes: draft.notes.trim() || null,
+    payment_cash: draft.paymentCash,
+    payment_qr: draft.paymentQr,
   };
 }

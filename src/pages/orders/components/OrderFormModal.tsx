@@ -35,6 +35,8 @@ function makeEmptyDraft(mode: 'regular' | 'quick', requesterName: string): Order
     notes: '',
     lines: [],
     orderType: mode,
+    paymentCash: false,
+    paymentQr: false,
   };
 }
 
@@ -101,6 +103,10 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
       setError('Please add at least one product.');
       return;
     }
+    if (mode === 'quick' && !draft.paymentCash && !draft.paymentQr) {
+      setError('Please select a payment method (Cash and/or QR).');
+      return;
+    }
     const overCommitted = draft.lines.find((line) => {
       if (!line.productId) return false;
       const product = products.find((p) => p.id === line.productId && p.warehouse === line.warehouse);
@@ -134,9 +140,34 @@ export default function OrderFormModal({ products, reserved, initialDraft, title
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           {mode === 'quick' ? (
-            <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-              <i className="ri-user-line mr-1.5 text-gray-400"></i>Submitting as <span className="font-medium text-gray-700">{draft.requestedBy || 'you'}</span>
-            </p>
+            <>
+              <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                <i className="ri-user-line mr-1.5 text-gray-400"></i>Submitting as <span className="font-medium text-gray-700">{draft.requestedBy || 'you'}</span>
+              </p>
+              <div className="space-y-1.5">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Payment Method</p>
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 has-[:checked]:border-emerald-400 has-[:checked]:bg-emerald-50">
+                    <input
+                      type="checkbox"
+                      checked={draft.paymentCash}
+                      onChange={(e) => setDraft({ ...draft, paymentCash: e.target.checked })}
+                      className="cursor-pointer accent-emerald-500"
+                    />
+                    <i className="ri-cash-line text-gray-400"></i>Cash
+                  </label>
+                  <label className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 has-[:checked]:border-emerald-400 has-[:checked]:bg-emerald-50">
+                    <input
+                      type="checkbox"
+                      checked={draft.paymentQr}
+                      onChange={(e) => setDraft({ ...draft, paymentQr: e.target.checked })}
+                      className="cursor-pointer accent-emerald-500"
+                    />
+                    <i className="ri-qr-code-line text-gray-400"></i>QR
+                  </label>
+                </div>
+              </div>
+            </>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <input value={draft.requestedBy} onChange={(e) => setDraft({ ...draft, requestedBy: e.target.value })} placeholder="Created/requested by" className="md:col-span-2 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-200" />

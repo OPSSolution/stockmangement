@@ -16,6 +16,8 @@ import { nowStamp } from '@/lib/timestamp';
 
 type FilterTab = 'all' | TransferStatus;
 
+const TRANSFER_TERMINAL_STATUSES: TransferStatus[] = ['received', 'cancelled'];
+
 const tabs: { key: FilterTab; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'requested', label: 'Requested' },
@@ -98,18 +100,25 @@ export default function TransfersPage() {
   };
 
   const filtered = useMemo(() => {
-    return transfers.filter((t) => {
-      const matchTab = activeTab === 'all' || t.status === activeTab;
-      const q = search.toLowerCase();
-      const matchSearch =
-        !q ||
-        t.id.toLowerCase().includes(q) ||
-        t.fromWarehouse.toLowerCase().includes(q) ||
-        t.toWarehouse.toLowerCase().includes(q) ||
-        t.reason.toLowerCase().includes(q) ||
-        t.items.some((i) => i.productName.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q));
-      return matchTab && matchSearch;
-    });
+    return transfers
+      .filter((t) => {
+        const matchTab = activeTab === 'all' || t.status === activeTab;
+        const q = search.toLowerCase();
+        const matchSearch =
+          !q ||
+          t.id.toLowerCase().includes(q) ||
+          t.fromWarehouse.toLowerCase().includes(q) ||
+          t.toWarehouse.toLowerCase().includes(q) ||
+          t.reason.toLowerCase().includes(q) ||
+          t.items.some((i) => i.productName.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q));
+        return matchTab && matchSearch;
+      })
+      .sort((a, b) => {
+        const aDone = TRANSFER_TERMINAL_STATUSES.includes(a.status) ? 1 : 0;
+        const bDone = TRANSFER_TERMINAL_STATUSES.includes(b.status) ? 1 : 0;
+        if (aDone !== bDone) return aDone - bDone;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
   }, [transfers, activeTab, search]);
 
   const kpi = useMemo(() => ({

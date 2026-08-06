@@ -32,6 +32,9 @@ export interface Order {
    * same approve → confirm shipment pipeline afterwards. Missing/undefined means 'regular'. */
   orderType?: 'regular' | 'quick';
   requestedBy?: string;
+  /** Quick Order payment method — either, both, or neither can be true (e.g. split payment). */
+  paymentCash?: boolean;
+  paymentQr?: boolean;
   customer: string;
   email: string;
   phone: string;

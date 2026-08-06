@@ -25,6 +25,8 @@ const statusConfig = {
 
 type FilterStatus = 'all' | DeliveryStep;
 
+const DELIVERY_TERMINAL_STATUSES: DeliveryStep[] = ['delivered'];
+
 function rowToRecord(row: any): DeliveryRecord {
   const items = parseDeliveryItems(row);
 
@@ -144,16 +146,23 @@ export default function DeliveriesPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
 
-    return deliveries.filter((d) => {
-      const matchStatus = filterStatus === 'all' || d.status === filterStatus;
-      const matchWarehouse = filterWarehouse === 'all' || d.fromWarehouse === filterWarehouse || d.toWarehouse === filterWarehouse;
-      const matchSearch =
-        d.id.toLowerCase().includes(q) ||
-        d.fromWarehouse.toLowerCase().includes(q) ||
-        d.toWarehouse.toLowerCase().includes(q) ||
-        (d.transferId || '').toLowerCase().includes(q);
-      return matchStatus && matchWarehouse && matchSearch;
-    });
+    return deliveries
+      .filter((d) => {
+        const matchStatus = filterStatus === 'all' || d.status === filterStatus;
+        const matchWarehouse = filterWarehouse === 'all' || d.fromWarehouse === filterWarehouse || d.toWarehouse === filterWarehouse;
+        const matchSearch =
+          d.id.toLowerCase().includes(q) ||
+          d.fromWarehouse.toLowerCase().includes(q) ||
+          d.toWarehouse.toLowerCase().includes(q) ||
+          (d.transferId || '').toLowerCase().includes(q);
+        return matchStatus && matchWarehouse && matchSearch;
+      })
+      .sort((a, b) => {
+        const aDone = DELIVERY_TERMINAL_STATUSES.includes(a.status) ? 1 : 0;
+        const bDone = DELIVERY_TERMINAL_STATUSES.includes(b.status) ? 1 : 0;
+        if (aDone !== bDone) return aDone - bDone;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
   }, [deliveries, filterStatus, filterWarehouse, search]);
 
   const counts = useMemo(() => ({
