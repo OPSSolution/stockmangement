@@ -17,8 +17,8 @@ interface ProductDetailModalProps {
   onClose: () => void;
   onEdit: (product: ProductStockRow) => void;
   onViewHistory: (product: ProductStockRow) => void;
-  /** Jump the inventory table to a given warehouse — closes this modal first. */
-  onJumpToWarehouse: (warehouse: string) => void;
+  /** Swap the modal's data to this SKU's row in another warehouse — stays open. */
+  onSwitchWarehouse: (warehouse: string) => void;
 }
 
 const statusConfig = {
@@ -27,7 +27,7 @@ const statusConfig = {
   out_of_stock: { label: 'Out of Stock', cls: 'bg-red-50 text-red-600' },
 };
 
-export default function ProductDetailModal({ product, reserved, binRows, siblings, onClose, onEdit, onViewHistory, onJumpToWarehouse }: ProductDetailModalProps) {
+export default function ProductDetailModal({ product, reserved, binRows, siblings, onClose, onEdit, onViewHistory, onSwitchWarehouse }: ProductDetailModalProps) {
   const [showSiblings, setShowSiblings] = useState(false);
   const { formatAmount } = useCurrency();
   const { canEdit } = useAuth();
@@ -115,7 +115,7 @@ export default function ProductDetailModal({ product, reserved, binRows, sibling
                         <button
                           key={s.id}
                           type="button"
-                          onClick={() => onJumpToWarehouse(s.warehouse)}
+                          onClick={() => { onSwitchWarehouse(s.warehouse); setShowSiblings(false); }}
                           className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 cursor-pointer text-left"
                         >
                           <span className="truncate">{s.warehouse}</span>

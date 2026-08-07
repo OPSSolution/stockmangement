@@ -165,6 +165,25 @@ export default function TransfersPage() {
       }
 
       if (status === 'received' && transfer) {
+        // Claim the transfer atomically before moving any stock: the update only
+        // succeeds if it's still 'in_transit', so a double-click, a duplicate tab,
+        // or a retry after a failed save can't re-run the deduction below for a
+        // transfer that's already been (or is being) received.
+        const { data: claimed, error: claimError } = await supabase
+          .from('transfers')
+          .update({ status: 'received', updated_at: nowStamp() })
+          .eq('id', id)
+          .eq('status', 'in_transit')
+          .select('id');
+        if (claimError) {
+          window.alert(`Failed to confirm receipt: ${friendlyError(claimError)}`);
+          return;
+        }
+        if (!claimed || claimed.length === 0) {
+          window.alert('This transfer was already received (or its status just changed) — refresh to see the latest state.');
+          return;
+        }
+
         const itemsWithToBin = transfer.items.map((item) => ({
           ...item,
           toBinLocation: toBinByProduct?.[item.productId] || item.toBinLocation,
@@ -176,6 +195,9 @@ export default function TransfersPage() {
           userName: 'Admin',
         });
         if (fulfillError) {
+          // Stock never moved — release the claim so the transfer isn't stuck
+          // "received" with nothing actually transferred, and the user can retry.
+          await supabase.from('transfers').update({ status: 'in_transit', updated_at: nowStamp() }).eq('id', id);
           window.alert(fulfillError);
           return;
         }

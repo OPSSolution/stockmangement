@@ -333,6 +333,15 @@ export default function InventoryPage() {
     setSearch('');
   };
 
+  // Sibling switch from inside the detail modal — swaps the modal to that same
+  // SKU's row in the other warehouse in place, rather than closing it.
+  const handleSwitchDetailWarehouse = (warehouse: string) => {
+    setDetailProduct((prev) => {
+      if (!prev) return prev;
+      return products.find((p) => p.id === prev.id && p.warehouse === warehouse) || prev;
+    });
+  };
+
   // Latest reason a product's on-hold units were placed on hold for — sourced from
   // the stock_history row restockReturnedItems writes (src/lib/stockDeduction.ts),
   // which prefixes the note "On hold — " specifically so this can be parsed back out.
@@ -860,7 +869,7 @@ export default function InventoryPage() {
           onClose={() => setDetailProduct(null)}
           onEdit={(p) => { setDetailProduct(null); setEditProduct(p); }}
           onViewHistory={(p) => { setDetailProduct(null); setHistoryProduct(p); }}
-          onJumpToWarehouse={(w) => { setDetailProduct(null); handleJumpToWarehouse(w); }}
+          onSwitchWarehouse={handleSwitchDetailWarehouse}
         />
       )}
       {(showAddModal || editProduct) && (

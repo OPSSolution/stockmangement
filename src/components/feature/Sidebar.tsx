@@ -23,7 +23,7 @@ const mainNavItems: NavItem[] = [
   { label: 'Returns',    icon: 'ri-arrow-go-back-line',   path: '/returns',    permKey: 'returns' },
   // { label: 'Purchases',  icon: 'ri-shopping-cart-2-line', path: '/purchases',  permKey: 'purchases' },
   { label: 'Stock Receives', icon: 'ri-inbox-archive-line', path: '/stock-receives', permKey: 'stock_receives' },
-  { label: 'Promotions', icon: 'ri-price-tag-3-line',     path: '/promotions', permKey: 'promotions' },
+  // { label: 'Promotions', icon: 'ri-price-tag-3-line',     path: '/promotions', permKey: 'promotions' },
 ];
 
 const managementNavItems: NavItem[] = [
