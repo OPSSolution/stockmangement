@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import { fetchWarehousesWithLiveData, type LiveStats, emptyLiveStats } from './warehouseShared';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
+import { friendlyError } from '@/lib/friendlyError';
 
 const emptyForm = {
   name: '', type: 'owned' as Warehouse['type'], address: '', city: '', country: 'Malaysia',
@@ -90,7 +91,7 @@ export default function WarehousesPage() {
 
     setSaving(false);
     if (error) {
-      setFormError(error.message);
+      setFormError(friendlyError(error));
       return;
     }
     setShowCreate(false);
@@ -105,7 +106,7 @@ export default function WarehousesPage() {
     const { error } = await supabase.from('warehouses').delete().eq('id', deleteTarget.id);
     setDeleting(false);
     if (error) {
-      setDeleteError(error.message);
+      setDeleteError(friendlyError(error));
       return;
     }
     logAudit({ action: 'delete', module: 'warehouses', description: `Deleted warehouse "${deleteTarget.name}"`, referenceId: deleteTarget.id });

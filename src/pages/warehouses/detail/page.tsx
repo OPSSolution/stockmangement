@@ -6,6 +6,7 @@ import { useCurrency } from '@/contexts/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/auditLog';
+import { friendlyError } from '@/lib/friendlyError';
 import {
   fetchWarehousesWithLiveData, fetchWarehouseProductsAndActivity,
   type LiveStats, emptyLiveStats, shiftColor,
@@ -170,7 +171,7 @@ export default function WarehouseDetailPage() {
       .eq('id', warehouse.id);
     setSavingInfo(false);
     if (error) {
-      setInfoError(error.message);
+      setInfoError(friendlyError(error));
       return;
     }
     setWarehouse({
@@ -212,7 +213,7 @@ export default function WarehouseDetailPage() {
       .eq('id', warehouse.id);
     setSavingStaff(false);
     if (error) {
-      setStaffError(error.message);
+      setStaffError(friendlyError(error));
       return;
     }
     setWarehouse({ ...warehouse, staff: cleaned });
@@ -241,7 +242,7 @@ export default function WarehouseDetailPage() {
       .eq('id', warehouse.id);
     setSavingVendors(false);
     if (error) {
-      setVendorsError(error.message);
+      setVendorsError(friendlyError(error));
       return;
     }
     setWarehouse({ ...warehouse, vendorNames: vendorsDraft });
@@ -272,7 +273,7 @@ export default function WarehouseDetailPage() {
       .eq('id', warehouse.id);
     setSavingBinLocations(false);
     if (error) {
-      setBinLocationsError(error.message);
+      setBinLocationsError(friendlyError(error));
       return;
     }
     setWarehouse({ ...warehouse, binLocations: cleaned });
@@ -287,7 +288,7 @@ export default function WarehouseDetailPage() {
     const { error } = await supabase.from('warehouses').delete().eq('id', warehouse.id);
     setDeleting(false);
     if (error) {
-      setDeleteError(error.message);
+      setDeleteError(friendlyError(error));
       return;
     }
     logAudit({ action: 'delete', module: 'warehouses', description: `Deleted warehouse "${warehouse.name}"`, referenceId: warehouse.id });

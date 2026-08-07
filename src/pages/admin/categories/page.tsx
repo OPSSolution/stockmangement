@@ -3,6 +3,7 @@ import DashboardLayout from '@/components/feature/DashboardLayout';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { logAudit } from '@/lib/auditLog';
+import { friendlyError } from '@/lib/friendlyError';
 
 interface Category {
   id: string;
@@ -105,14 +106,14 @@ export default function AdminCategoriesPage() {
       const { error } = await supabase.from('categories')
         .update({ name: catForm.name.trim(), icon: catForm.icon, color: catForm.color, description: catForm.description || null })
         .eq('id', editingCat.id);
-      if (error) { showToast(error.message, 'error'); return; }
+      if (error) { showToast(friendlyError(error), 'error'); return; }
       showToast('Category updated');
       logAudit({ action: 'update', module: 'categories', description: `Updated category "${catForm.name.trim()}"`, referenceId: editingCat.id });
     } else {
       const id = genId('CAT', categories.map(c => c.id));
       const { error } = await supabase.from('categories')
         .insert({ id, name: catForm.name.trim(), icon: catForm.icon, color: catForm.color, description: catForm.description || null, sort_order: categories.length + 1 });
-      if (error) { showToast(error.message, 'error'); return; }
+      if (error) { showToast(friendlyError(error), 'error'); return; }
       showToast('Category created');
       logAudit({ action: 'create', module: 'categories', description: `Created category "${catForm.name.trim()}"`, referenceId: id });
     }
@@ -123,7 +124,7 @@ export default function AdminCategoriesPage() {
   const deleteCat = async (cat: Category) => {
     if (!confirm(`Delete "${cat.name}" and all its sub-categories?`)) return;
     const { error } = await supabase.from('categories').delete().eq('id', cat.id);
-    if (error) { showToast(error.message, 'error'); return; }
+    if (error) { showToast(friendlyError(error), 'error'); return; }
     showToast('Category deleted');
     if (selectedCat?.id === cat.id) setSelectedCat(null);
     fetchAll();
@@ -150,14 +151,14 @@ export default function AdminCategoriesPage() {
       const { error } = await supabase.from('sub_categories')
         .update({ name: subForm.name.trim(), description: subForm.description || null })
         .eq('id', editingSub.id);
-      if (error) { showToast(error.message, 'error'); return; }
+      if (error) { showToast(friendlyError(error), 'error'); return; }
       showToast('Sub-category updated');
       logAudit({ action: 'update', module: 'categories', description: `Updated sub-category "${subForm.name.trim()}"`, referenceId: editingSub.id });
     } else {
       const id = genId('SUB', subCategories.map(s => s.id));
       const { error } = await supabase.from('sub_categories')
         .insert({ id, category_id: selectedCat.id, name: subForm.name.trim(), description: subForm.description || null, sort_order: subsForSelected.length + 1 });
-      if (error) { showToast(error.message, 'error'); return; }
+      if (error) { showToast(friendlyError(error), 'error'); return; }
       showToast('Sub-category created');
       logAudit({ action: 'create', module: 'categories', description: `Created sub-category "${subForm.name.trim()}" under "${selectedCat.name}"`, referenceId: id });
     }
@@ -168,7 +169,7 @@ export default function AdminCategoriesPage() {
   const deleteSub = async (sub: SubCategory) => {
     if (!confirm(`Delete sub-category "${sub.name}"?`)) return;
     const { error } = await supabase.from('sub_categories').delete().eq('id', sub.id);
-    if (error) { showToast(error.message, 'error'); return; }
+    if (error) { showToast(friendlyError(error), 'error'); return; }
     showToast('Sub-category deleted');
     fetchAll();
     logAudit({ action: 'delete', module: 'categories', description: `Deleted sub-category "${sub.name}"`, referenceId: sub.id });

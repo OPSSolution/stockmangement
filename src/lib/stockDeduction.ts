@@ -86,7 +86,9 @@ export async function deductStockForItems(
     const { data: row, error: fetchErr } = await fetchStockRow(item.productId, item.warehouse);
     if (fetchErr || !row) return { error: fetchErr?.message || `Product ${item.productId} not stocked at ${item.warehouse}` };
     if (row.stock < item.quantity) {
-      return { error: `Not enough stock for "${row.product?.name ?? item.productId}" — ${row.stock} on hand, ${item.quantity} needed.` };
+      const name = row.product?.name ?? item.productId;
+      const short = item.quantity - row.stock;
+      return { error: `Not enough "${name}" in stock. You need ${item.quantity} but only ${row.stock} ${row.stock === 1 ? 'is' : 'are'} available (short by ${short}). Restock or lower the quantity and try again.` };
     }
 
     const newStock = row.stock - item.quantity;
@@ -427,7 +429,9 @@ export async function moveStockBetweenWarehouses(
     if (srcFetchErr) return { error: srcFetchErr.message };
     if (!sourceRow) return { error: `Product not stocked at ${opts.fromWarehouse}.` };
     if (sourceRow.stock < item.quantity) {
-      return { error: `Not enough stock for "${sourceRow.product?.name ?? item.productId}" — ${sourceRow.stock} on hand, ${item.quantity} needed.` };
+      const name = sourceRow.product?.name ?? item.productId;
+      const short = item.quantity - sourceRow.stock;
+      return { error: `Not enough "${name}" in stock at ${opts.fromWarehouse}. You need ${item.quantity} but only ${sourceRow.stock} ${sourceRow.stock === 1 ? 'is' : 'are'} available (short by ${short}). Restock or lower the quantity and try again.` };
     }
 
     const newSourceStock = sourceRow.stock - item.quantity;

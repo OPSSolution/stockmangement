@@ -6,6 +6,7 @@ import { useNotifications } from '@/contexts/NotificationContext';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { logAudit } from '@/lib/auditLog';
+import { friendlyError } from '@/lib/friendlyError';
 
 const CATEGORIES = ['Electronics', 'Furniture', 'Lighting', 'Smart Home', 'Accessories'] as const;
 const TRIGGER_TYPES = [
@@ -194,7 +195,7 @@ export default function NotificationSettingsPage() {
       .upsert(payload, { onConflict: 'user_id' });
 
     if (error) {
-      showToast('Failed to save settings: ' + error.message, 'error');
+      showToast('Failed to save settings: ' + friendlyError(error), 'error');
     } else {
       showToast('Notification settings saved successfully');
       await refresh();
@@ -217,7 +218,7 @@ export default function NotificationSettingsPage() {
     });
 
     if (error) {
-      showToast('Failed to send test: ' + error.message, 'error');
+      showToast('Failed to send test: ' + friendlyError(error), 'error');
     } else {
       showToast('Test notification sent! Check your bell icon.');
       logAudit({ action: 'create', module: 'notifications', description: 'Sent a test notification' });
@@ -254,7 +255,7 @@ export default function NotificationSettingsPage() {
         logAudit({ action: 'create', module: 'notifications', description: 'Generated new VAPID keys' });
       }
     } catch (err) {
-      showToast('Failed to generate VAPID keys: ' + (err as Error).message, 'error');
+      showToast('Failed to generate VAPID keys: ' + friendlyError(err), 'error');
     }
     setVapidLoading(false);
   };
@@ -340,7 +341,7 @@ export default function NotificationSettingsPage() {
     }
 
     if (error) {
-      showToast('Failed to save rule: ' + error.message, 'error');
+      showToast('Failed to save rule: ' + friendlyError(error), 'error');
     } else {
       showToast(editingRule ? 'Rule updated' : 'Rule created');
       setShowRuleForm(false);
@@ -436,7 +437,7 @@ export default function NotificationSettingsPage() {
     }
 
     if (error) {
-      showToast('Failed to save webhook: ' + error.message, 'error');
+      showToast('Failed to save webhook: ' + friendlyError(error), 'error');
     } else {
       showToast(editingWebhook ? 'Webhook updated' : 'Webhook created');
       setShowWebhookForm(false);
@@ -500,7 +501,7 @@ export default function NotificationSettingsPage() {
         logAudit({ action: 'create', module: 'notifications', description: `Sent test webhook to "${wh.name}"`, referenceId: wh.id });
       }
     } catch (err) {
-      showToast('Webhook test failed: ' + (err as Error).message, 'error');
+      showToast('Webhook test failed: ' + friendlyError(err), 'error');
     }
   };
 

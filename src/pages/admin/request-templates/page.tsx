@@ -3,6 +3,7 @@ import DashboardLayout from '@/components/feature/DashboardLayout';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { logAudit } from '@/lib/auditLog';
+import { friendlyError } from '@/lib/friendlyError';
 
 export type TemplateFieldType = 'text' | 'number' | 'date' | 'textarea' | 'select' | 'checkbox' | 'product';
 
@@ -118,7 +119,7 @@ export default function RequestTemplatesPage() {
 
   const fetchAll = async () => {
     const { data, error } = await supabase.from('request_form_templates').select('*').order('sort_order', { ascending: true });
-    if (error) showToast(error.message, 'error');
+    if (error) showToast(friendlyError(error), 'error');
     else setTemplates((data || []) as RequestFormTemplate[]);
     setLoading(false);
   };
@@ -155,7 +156,7 @@ export default function RequestTemplatesPage() {
     const { error } = await supabase.storage.from('logos').upload(path, file, { cacheControl: '3600', upsert: true });
     setUploadingLogo(false);
 
-    if (error) { showToast(`Failed to upload logo: ${error.message}`, 'error'); return; }
+    if (error) { showToast(`Failed to upload logo: ${friendlyError(error)}`, 'error'); return; }
     const { data } = supabase.storage.from('logos').getPublicUrl(path);
     setTplForm((prev) => ({ ...prev, logoUrl: data.publicUrl }));
   };
@@ -166,14 +167,14 @@ export default function RequestTemplatesPage() {
       const { error } = await supabase.from('request_form_templates')
         .update({ name: tplForm.name.trim(), description: tplForm.description.trim() || null, is_active: tplForm.is_active, logo_url: tplForm.logoUrl.trim() || null, updated_at: new Date().toISOString() })
         .eq('id', editingTpl.id);
-      if (error) { showToast(error.message, 'error'); return; }
+      if (error) { showToast(friendlyError(error), 'error'); return; }
       showToast('Template updated.');
       logAudit({ action: 'update', module: 'request_templates', description: `Updated request template "${tplForm.name.trim()}"`, referenceId: editingTpl.id });
     } else {
       const id = uniqueSlug(slugify(tplForm.name), templates.map((t) => t.id));
       const { error } = await supabase.from('request_form_templates')
         .insert({ id, name: tplForm.name.trim(), description: tplForm.description.trim() || null, is_active: tplForm.is_active, logo_url: tplForm.logoUrl.trim() || null, fields: [], sort_order: templates.length + 1 });
-      if (error) { showToast(error.message, 'error'); return; }
+      if (error) { showToast(friendlyError(error), 'error'); return; }
       showToast('Template created.');
       setSelectedId(id);
       logAudit({ action: 'create', module: 'request_templates', description: `Created request template "${tplForm.name.trim()}"`, referenceId: id });
@@ -185,7 +186,7 @@ export default function RequestTemplatesPage() {
   const deleteTpl = async (tpl: RequestFormTemplate) => {
     if (!confirm(`Delete "${tpl.name}"? Requests already submitted under it keep their saved answers.`)) return;
     const { error } = await supabase.from('request_form_templates').delete().eq('id', tpl.id);
-    if (error) { showToast(error.message, 'error'); return; }
+    if (error) { showToast(friendlyError(error), 'error'); return; }
     showToast('Template deleted.');
     if (selectedId === tpl.id) setSelectedId(null);
     fetchAll();
@@ -215,7 +216,7 @@ export default function RequestTemplatesPage() {
     const { error } = await supabase.from('request_form_templates')
       .update({ fields: nextFields, updated_at: new Date().toISOString() })
       .eq('id', selected.id);
-    if (error) { showToast(error.message, 'error'); return; }
+    if (error) { showToast(friendlyError(error), 'error'); return; }
     showToast(successMsg);
     setShowFieldModal(false);
     fetchAll();
@@ -262,7 +263,7 @@ export default function RequestTemplatesPage() {
     const { error } = await supabase.from('request_form_templates')
       .update({ fields: nextFields, updated_at: new Date().toISOString() })
       .eq('id', selected.id);
-    if (error) { showToast(error.message, 'error'); return; }
+    if (error) { showToast(friendlyError(error), 'error'); return; }
     showToast('Field removed.');
     fetchAll();
     logAudit({ action: 'delete', module: 'request_templates', description: `Removed field "${fieldLabel}" from template "${selected.name}"`, referenceId: selected.id });
@@ -275,7 +276,7 @@ export default function RequestTemplatesPage() {
     const nextFields = [...selected.fields];
     [nextFields[index], nextFields[target]] = [nextFields[target], nextFields[index]];
     const { error } = await supabase.from('request_form_templates').update({ fields: nextFields }).eq('id', selected.id);
-    if (error) { showToast(error.message, 'error'); return; }
+    if (error) { showToast(friendlyError(error), 'error'); return; }
     fetchAll();
   };
 

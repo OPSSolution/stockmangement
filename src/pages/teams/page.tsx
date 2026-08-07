@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
+import { friendlyError } from '@/lib/friendlyError';
 
 // Any role id from the `roles` table — no longer limited to the 3 built-in ones.
 type UserRole = string;
@@ -135,7 +136,7 @@ export default function TeamsPage() {
     }
     const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', memberId);
     if (error) {
-      showToast('Failed to update role: ' + error.message, 'error');
+      showToast('Failed to update role: ' + friendlyError(error), 'error');
     } else {
       setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, role: newRole } : m)));
       showToast('Role updated');
@@ -151,7 +152,7 @@ export default function TeamsPage() {
     }
     const { error } = await supabase.from('profiles').update({ warehouses: newWarehouses }).eq('id', memberId);
     if (error) {
-      showToast('Failed to update warehouses: ' + error.message, 'error');
+      showToast('Failed to update warehouses: ' + friendlyError(error), 'error');
     } else {
       setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, warehouses: newWarehouses } : m)));
       const target = members.find((m) => m.id === memberId);
@@ -197,7 +198,7 @@ export default function TeamsPage() {
       .eq('id', editingMember.id);
 
     if (error) {
-      showToast('Failed to save: ' + error.message, 'error');
+      showToast('Failed to save: ' + friendlyError(error), 'error');
     } else {
       setMembers((prev) =>
         prev.map((m) =>
@@ -238,7 +239,7 @@ export default function TeamsPage() {
       });
 
       if (error || !data?.success) {
-        showToast(error || data?.error || 'Failed to invite user', 'error');
+        showToast(friendlyError(error, data?.error || 'Failed to invite user'), 'error');
       } else {
         showToast('User invited successfully');
         logAudit({ action: 'create', module: 'teams', description: `Invited ${inviteForm.email} as ${inviteForm.role}` });
@@ -247,7 +248,7 @@ export default function TeamsPage() {
         fetchMembers();
       }
     } catch (err) {
-      showToast('Failed to invite: ' + (err as Error).message, 'error');
+      showToast('Failed to invite: ' + friendlyError(err), 'error');
     }
 
     setInviting(false);
@@ -279,7 +280,7 @@ export default function TeamsPage() {
     }
     const { error } = await supabase.from('profiles').update({ deleted_at: new Date().toISOString() }).eq('id', member.id);
     if (error) {
-      showToast('Failed to remove member: ' + error.message, 'error');
+      showToast('Failed to remove member: ' + friendlyError(error), 'error');
     } else {
       showToast(`${member.full_name || member.email} removed from the team`);
       setMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, deleted_at: new Date().toISOString() } : m)));

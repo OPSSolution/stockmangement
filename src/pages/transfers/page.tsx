@@ -13,6 +13,7 @@ import { logAudit } from '@/lib/auditLog';
 import { exportToCsv } from '@/lib/exportCsv';
 import { notifyAdmins } from '@/lib/notifyAdmins';
 import { nowStamp } from '@/lib/timestamp';
+import { friendlyError } from '@/lib/friendlyError';
 
 type FilterTab = 'all' | TransferStatus;
 
@@ -175,7 +176,7 @@ export default function TransfersPage() {
           userName: 'Admin',
         });
         if (fulfillError) {
-          window.alert(`Failed to update inventory: ${fulfillError}`);
+          window.alert(fulfillError);
           return;
         }
       }
@@ -192,7 +193,7 @@ export default function TransfersPage() {
       const { error } = await supabase.from('transfers').update(updateData).eq('id', id);
       if (error) {
         console.error(error);
-        window.alert(`Failed to update status: ${error.message}`);
+        window.alert(`Failed to update status: ${friendlyError(error)}`);
       } else {
         const label: Record<string, string> = { approved: 'Transfer approved!', in_transit: 'Marked as In Transit', received: 'Stock received successfully!', cancelled: 'Transfer cancelled.' };
         setSuccessMsg(label[status] ?? 'Status updated.');

@@ -11,6 +11,7 @@ import { exportToCsv } from '@/lib/exportCsv';
 import { exportRequestAsForm } from '@/lib/exportRequestForm';
 import { downloadPdf, type PdfNote } from '@/lib/exportPdf';
 import { logAudit } from '@/lib/auditLog';
+import { friendlyError } from '@/lib/friendlyError';
 import { getClaimedReturnQuantities } from '@/lib/returnProgress';
 import { notifyAdmins } from '@/lib/notifyAdmins';
 import { asArray } from '@/pages/warehouses/warehouseShared';
@@ -597,7 +598,7 @@ export default function RequestsPage() {
 
     setSaving(false);
     if (error) {
-      setFormError(error.message);
+      setFormError(friendlyError(error));
       return;
     }
     setShowForm(false);
@@ -649,7 +650,7 @@ export default function RequestsPage() {
   const handleDelete = async (req: StockRequest) => {
     if (!window.confirm(`Permanently delete request ${req.id}? This cannot be undone.`)) return;
     const { error } = await supabase.from('stock_requests').delete().eq('id', req.id);
-    if (error) showToast('Failed to delete: ' + error.message, 'error');
+    if (error) showToast('Failed to delete: ' + friendlyError(error), 'error');
     else {
       showToast('Request deleted.');
       setRequests((prev) => prev.filter((r) => r.id !== req.id));
@@ -682,7 +683,7 @@ export default function RequestsPage() {
     const update = { status, return_reason: returnReason, review_note: reviewNote, updated_at: now };
     const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
     if (error) {
-      showToast('Failed to update status: ' + error.message, 'error');
+      showToast('Failed to update status: ' + friendlyError(error), 'error');
       return;
     }
     showToast(`Status updated to ${STATUS_META[status].label}.`);
@@ -707,7 +708,7 @@ export default function RequestsPage() {
     };
     const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
     if (error) {
-      showToast('Failed to approve: ' + error.message, 'error');
+      showToast('Failed to approve: ' + friendlyError(error), 'error');
       return;
     }
     setApproveNote('');
@@ -770,7 +771,7 @@ export default function RequestsPage() {
     const { error } = await supabase.from('stock_requests').update(update).eq('id', req.id);
     setUploadingApproval(false);
     if (error) {
-      showToast('Failed to confirm receipt: ' + error.message, 'error');
+      showToast('Failed to confirm receipt: ' + friendlyError(error), 'error');
       return;
     }
     showToast(alreadyDispatched ? 'Receipt confirmed — request fulfilled.' : 'Receipt confirmed — stock deducted.');

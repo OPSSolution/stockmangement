@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { friendlyError } from '@/lib/friendlyError';
 
 type UserRole = 'admin' | 'staff' | 'viewer';
 
@@ -22,7 +23,7 @@ export default function SignupPage() {
     const { error } = await signUp(email, password, fullName, role, phone || undefined);
     setLoading(false);
     if (error) {
-      setError(error.message);
+      setError(friendlyError(error));
     } else {
       navigate('/');
     }

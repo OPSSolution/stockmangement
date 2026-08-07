@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/feature/DashboardLayout';
 import { exportToCsv } from '@/lib/exportCsv';
 import { logAudit } from '@/lib/auditLog';
+import { friendlyError } from '@/lib/friendlyError';
 
 interface Requirement {
   id: string;
@@ -127,7 +128,7 @@ export default function RequirementsPage() {
     }
 
     if (error) {
-      showToast('Failed to save: ' + error.message, 'error');
+      showToast('Failed to save: ' + friendlyError(error), 'error');
     } else {
       showToast(editingReq ? 'Requirement updated' : 'Requirement created');
       setShowForm(false);
